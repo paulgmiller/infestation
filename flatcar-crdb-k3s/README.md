@@ -2,6 +2,10 @@
 
 This is a **starter profile**, not a tested production deployment. It generates **three separate Ignition v3.3 JSON files** for Flatcar Linux. There is **no Tailscale** and **no CNI** installed yet; K3s is configured for later Cilium installation.
 
+For a disposable **single-node QEMU lab**, see [QEMU-LAB.md](QEMU-LAB.md).
+That profile uses the same generator and TLS configuration, with a separate
+ignored state directory and CockroachDB's `start-single-node` mode.
+
 ## Resulting layout
 
 On each node:
@@ -77,7 +81,8 @@ Nodes should be registered, but likely **NotReady until you install Cilium**. Us
 - **Reboot discipline:** At RF=3, a three-node CockroachDB cluster can normally lose one replica-host; don't reboot two hosts together. Independently assess the OS update/reboot process.
 - **Disk:** `/var/lib/cockroach` is on the host persistent filesystem, not a dedicated disk. Mount a dedicated persistent filesystem there before a real deployment, and set up backups.
 - **No stable Kubernetes API address:** Additional servers join via the external SQL datastore; agents and external users should eventually use a stable HA API address/LB. `tls-san` currently includes only the node IP.
-- **Verification:** Generated JSON is syntax-checked by the generator, but hasn't been validated with a live Flatcar first boot or Cockroach/K3s integration test in this environment. Test on disposable nodes before using real data.
+- **Verification:** The single-node QEMU profile has passed live Flatcar first boot, Kubernetes API readiness, Cilium startup, and a pod DNS/ClusterIP HTTP smoke test. See [QEMU-LAB.md](QEMU-LAB.md) for versions and limitations. The three-node deployment has **not** been exercised.
+- **CockroachDB compatibility:** Bootstrap SQL sets the Kine user's `serial_normalization=sql_sequence` before Kine creates its table. Existing tables created with `unique_rowid()` are not repaired by that setting. Kine also issues a PostgreSQL `pg_total_relation_size()` query that CockroachDB does not implement; the lab logs datastore-size/status warnings even while API readiness passes. CockroachDB is not among K3s's officially supported external datastores.
 
 ## References
 

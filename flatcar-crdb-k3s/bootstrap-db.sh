@@ -13,10 +13,5 @@ CRDB=(docker run --rm --network host --user "$(id -u):$(id -g)" \
 echo "Initializing brand-new CockroachDB cluster at $FIRST_IP:26257 (ONLY run once)..."
 "${CRDB[@]}" init --certs-dir=/certs --host="$FIRST_IP:26257"
 echo "Creating database and certificate-authenticated kine user..."
-"${CRDB[@]}" sql --certs-dir=/certs --host="$FIRST_IP:26257" --execute="
-CREATE DATABASE IF NOT EXISTS kubernetes;
-CREATE USER IF NOT EXISTS kine;
-GRANT ALL ON DATABASE kubernetes TO kine;
-GRANT ALL ON SCHEMA kubernetes.public TO kine;
-"
+"${CRDB[@]}" sql --certs-dir=/certs --host="$FIRST_IP:26257" --execute="$(cat bootstrap.sql)"
 echo 'Bootstrap complete. K3s services should now be able to access the datastore.'

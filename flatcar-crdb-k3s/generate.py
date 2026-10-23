@@ -5,15 +5,15 @@ Run: python3 generate.py pki       # requires local Docker
      python3 generate.py ignition  # needs certificates in ./pki/
 """
 
+import argparse
 import base64
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import subprocess
-import sys
-from urllib.parse import quote
 
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE / 'cluster.json'
@@ -24,11 +24,12 @@ OUT = HERE / 'output'
 def config():
     data = json.loads(CONFIG.read_text())
     nodes = data['nodes']
-    if len(nodes) != 3 or len({x['name'] for x in nodes}) != 3 or len({x['ip'] for x in nodes}) != 3:
-        raise ValueError('Exactly three distinct nodes are expected')
+    count = 1 if data.get('single_node_lab', False) else 3
+    if len(nodes) != count or len({x['name'] for x in nodes}) != count or len({x['ip'] for x in nodes}) != count:
+        raise ValueError(f'Exactly {count} distinct nodes are expected')
     for n in nodes:
         ipaddress.ip_address(n['ip'])
-        if not n['name'].replace('-', '').isalnum():
+        if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', n['name']):
             raise ValueError('Node names must be DNS-label-compatible')
     if not data['ssh_authorized_key'].startswith(('ssh-ed25519 AAAA', 'ssh-rsa AAAA', 'ecdsa-sha2-nistp256 AAAA')):
         raise ValueError('Replace ssh_authorized_key with your real SSH public key')
@@ -84,26 +85,28 @@ def contents(value):
 
 def ignite_file(path, content=None, mode=0o644, *, url=None):
     assert (content is None) != (url is None)
-    return {'path': path, 'mode': mode,
+    return {'path': path, 'mode': mode, 'overwrite': True,
             'contents': {'source': url} if url else contents(content)}
 
 
-def cockroach_unit(node, seeds, image):
+def cockroach_unit(node, seeds, image, single_node=False):
     ip = node['ip']
+    command = 'start-single-node' if single_node else 'start'
+    join = '' if single_node else f' --join={seeds}'
     return f'''[Unit]
 Description=CockroachDB host datastore
 Wants=network-online.target
 After=network-online.target docker.service
 Requires=docker.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 TimeoutStartSec=0
 TimeoutStopSec=120
-StartLimitIntervalSec=0
 ExecStartPre=/usr/bin/install -d -o 1000 -g 1000 -m 0700 /var/lib/cockroach
 ExecStartPre=-/usr/bin/docker rm -f cockroachdb
-ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=/var/lib/cockroach,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --entrypoint=/cockroach/cockroach {image} start --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr={ip}:26257 --http-addr=127.0.0.1:8080 --join={seeds} --cache=512MiB --max-sql-memory=512MiB --logtostderr=INFO
+ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=/var/lib/cockroach,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --entrypoint=/cockroach/cockroach {image} {command} --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr={ip}:26257 --http-addr=127.0.0.1:8080{join} --cache=512MiB --max-sql-memory=512MiB --logtostderr=INFO
 ExecStop=/usr/bin/docker stop --time 90 cockroachdb
 Restart=always
 RestartSec=10
@@ -176,7 +179,7 @@ disable:
             },
             'systemd': {'units': [
                 {'name': 'cockroachdb.service', 'enabled': True,
-                 'contents': cockroach_unit(node, seeds, data['cockroach_image'])},
+                 'contents': cockroach_unit(node, seeds, data['cockroach_image'], data.get('single_node_lab', False))},
                 {'name': 'k3s.service', 'dropins': [
                     {'name': '10-cockroach-dependency.conf', 'contents':
                      '[Unit]\nAfter=cockroachdb.service\nWants=cockroachdb.service\n'
@@ -188,15 +191,22 @@ disable:
         outpath.write_text(json.dumps(doc, indent=2) + '\n')
         outpath.chmod(0o600)
         assert json.loads(outpath.read_text())['ignition']['version'] == '3.3.0'
-        print(f'Wrote {outpath.relative_to(HERE)}')
+        print(f'Wrote {outpath}')
     print('These Ignition files contain sensitive private keys + K3s token. Keep private.')
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ('pki', 'ignition'):
-        raise SystemExit('Usage: python3 generate.py {pki|ignition}')
+    global CONFIG, PKI, OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=('pki', 'ignition'))
+    parser.add_argument('--config', type=Path, default=CONFIG)
+    parser.add_argument('--state-dir', type=Path, default=HERE)
+    args = parser.parse_args()
+    CONFIG = args.config.resolve()
+    PKI = args.state_dir.resolve() / 'pki'
+    OUT = args.state_dir.resolve() / 'output'
     data = config()
-    {'pki': make_pki, 'ignition': ignition}[sys.argv[1]](data)
+    {'pki': make_pki, 'ignition': ignition}[args.command](data)
 
 if __name__ == '__main__':
     main()
