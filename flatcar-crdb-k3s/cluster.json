@@ -1,0 +1,11 @@
+{
+  "ssh_authorized_key": "ssh-ed25519 REPLACE_WITH_YOUR_REAL_PUBLIC_KEY",
+  "cockroach_image": "cockroachdb/cockroach:v26.2.7",
+  "k3s_extension_version": "v1.35.8+k3s1",
+  "architecture": "x86-64",
+  "nodes": [
+    {"name": "kube1", "ip": "192.168.1.101"},
+    {"name": "kube2", "ip": "192.168.1.102"},
+    {"name": "kube3", "ip": "192.168.1.103"}
+  ]
+}
