@@ -42,6 +42,55 @@ The `pki` command runs the CockroachDB CLI from the pinned Docker image to creat
 
 The `ignition` command creates a random 256-bit K3s server token on first use (`pki/k3s-token`), then writes `output/kube1.ign`, `output/kube2.ign`, `output/kube3.ign` according to `cluster.json` names. **These files contain secrets** (K3s token, node private key, Kine private key). Store them securely, pass them over a trusted provisioning path, do not commit them to Git, and keep the `pki/ca.key` and root admin certificates on your admin machine only.
 
+## Worker mode
+
+Add worker entries to `nodes` in `cluster.json` alongside the three servers:
+
+```json
+{"name": "worker1", "ip": "192.168.1.104", "role": "worker"}
+```
+
+An omitted `role` still means `server`. Workers are additional nodes and do not
+count toward the three-server requirement (one server with `single_node_lab`).
+Include workers before running `python3 generate.py pki`, then run
+`python3 generate.py ignition` to emit `output/worker1.ign`. When adding workers
+to an existing cluster, provision their CockroachDB node certificates signed by
+the existing CA before generating Ignition; `pki` refuses to overwrite existing PKI.
+This generates first-boot profiles; it does not convert an existing running server.
+
+A worker enables the sysext's `k3s-agent.service`, which runs the K3s agent
+including kubelet, containerd, and kube-proxy, without running an API server or
+other control-plane components. The K3s agent has no SQL connection or Kine credentials.
+CockroachDB defaults to on for both servers and workers, as a separate host
+database process with its own node certificates. Set `cockroachdb: false` on
+a worker to omit that process and its certificates. Database-enabled workers
+participate in the same CockroachDB join list as database-enabled servers.
+See the [Flatcar agent service configuration](https://flatcar.github.io/sysext-bakery/k3s/)
+and [K3s agent options](https://docs.k3s.io/cli/agent).
+
+By default, a worker joins `https://<first-server-ip>:6443` using the token in
+`pki/k3s-token`. Set `server_url` to override the join endpoint:
+
+```json
+{"name": "worker1", "ip": "192.168.1.104", "role": "worker", "server_url": "https://192.168.1.101:6443"}
+```
+
+For workers with `cockroachdb: false`, you can also use a configuration containing
+only workers, each with an explicit `server_url`. Keep database-enabled workers
+in the full cluster configuration so their SQL join list includes existing hosts.
+Before generating worker-only Ignition, create a private `pki/` directory and
+put the existing cluster's join token in `pki/k3s-token` with mode `0600`.
+The generator refuses to invent a new token for a workers-only configuration.
+Use an HTTPS endpoint reachable from the worker and covered by the server's TLS
+certificate. Workers inherit the server's CNI settings; the existing cluster
+must use the intended Cilium configuration.
+
+After provisioning a fresh worker, inspect `sudo systemctl status k3s-agent`
+and `sudo journalctl -u k3s-agent` on it. From a server or admin workstation,
+check `kubectl get nodes -o wide` and wait for the worker to become Ready after
+Cilium starts on it. Worker generation is unit-tested; a worker VM join has
+not yet been verified.
+
 ## Install and boot
 
 Deliver each `.ign` file as the first-boot Ignition configuration for the corresponding Flatcar machine. The installer command/path depends on your boot/install mechanism; for example the Flatcar installer accepts `-i` to refer to the local Ignition config. Select your disks carefully and consult the [Flatcar bare-metal documentation](https://www.flatcar.org/docs/latest/installing/bare-metal/).

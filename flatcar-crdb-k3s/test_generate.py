@@ -14,6 +14,122 @@ class GeneratorTests(unittest.TestCase):
         data['ssh_authorized_key'] = 'ssh-ed25519 AAAATEST'
         return data
 
+    def test_worker_config_validation(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(generate, 'CONFIG', Path(tmp) / 'cluster.json'):
+            data = self.data()
+            worker = {'name': 'worker1', 'ip': '192.168.1.104', 'role': 'worker'}
+            data['nodes'].append(worker)
+            generate.CONFIG.write_text(json.dumps(data))
+            self.assertEqual(len(generate.config()['nodes']), 4)
+            data['nodes'] = [worker]
+            generate.CONFIG.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, 'require server_url'):
+                generate.config()
+            for url in ('http://192.168.1.101:6443', 'https://', 'https://host:bad',
+                        'https://user:password@host:6443', 'https://host/path'):
+                worker['server_url'] = url
+                generate.CONFIG.write_text(json.dumps(data))
+                with self.assertRaises(ValueError):
+                    generate.config()
+            worker['server_url'] = 'https://192.168.1.101:6443'
+            generate.CONFIG.write_text(json.dumps(data))
+            self.assertEqual(generate.config()['nodes'], [worker])
+            worker['role'] = 'workre'
+            data['nodes'] = self.data()['nodes'] + [worker]
+            generate.CONFIG.write_text(json.dumps(data))
+            with self.assertRaises(ValueError):
+                generate.config()
+
+    def test_worker_cockroach_default_and_opt_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pki = root / 'pki'
+            pki.mkdir()
+            data = self.data()
+            for node in data['nodes']:
+                dst = pki / node['name']
+                dst.mkdir()
+                for name in ('ca.crt', 'node.crt', 'node.key', 'client.kine.crt', 'client.kine.key'):
+                    (dst / name).write_text(name)
+            worker = {'name': 'worker1', 'ip': '192.168.1.104', 'role': 'worker'}
+            data['nodes'].insert(0, worker)
+            worker_pki = pki / worker['name']
+            worker_pki.mkdir()
+            for name in ('ca.crt', 'node.crt', 'node.key'):
+                (worker_pki / name).write_text(name)
+            with patch.object(generate, 'PKI', pki), patch.object(generate, 'OUT', root / 'output'):
+                generate.ignition(data)
+                doc = json.loads((root / 'output/worker1.ign').read_text())
+                files = {f['path']: f for f in doc['storage']['files']}
+                conf_file = files['/etc/rancher/k3s/config.yaml']
+                conf = base64.b64decode(conf_file['contents']['source'].split(',')[1]).decode()
+                self.assertIn('server: "https://192.168.1.101:6443"', conf)
+                self.assertIn(f'token: {json.dumps((pki / "k3s-token").read_text().strip())}', conf)
+                self.assertEqual(conf_file['mode'], 0o600)
+                for server_option in ('datastore-', 'advertise-address:', 'tls-san:',
+                                      'flannel-backend:', 'disable-network-policy:', 'disable:'):
+                    self.assertNotIn(server_option, conf)
+                self.assertIn('/etc/cockroach/certs/node.crt', files)
+                self.assertEqual(files['/etc/cockroach/certs/node.key']['mode'], 0o400)
+                self.assertEqual(files['/etc/cockroach/certs/node.key']['user']['id'], 1000)
+                self.assertNotIn('/etc/cockroach/certs/client.kine.key', files)
+                self.assertNotIn('/etc/cockroach/certs/client.kine.crt', files)
+                self.assertEqual([u['name'] for u in doc['systemd']['units']],
+                                 ['cockroachdb.service', 'k3s-agent.service'])
+                db = doc['systemd']['units'][0]
+                self.assertTrue(db['enabled'])
+                self.assertIn(' start --certs-dir', db['contents'])
+                self.assertIn('192.168.1.101:26257', db['contents'])
+                self.assertEqual(doc['storage']['links'], [{
+                    'path': '/etc/systemd/system/multi-user.target.wants/k3s-agent.service',
+                    'target': '/usr/local/lib/systemd/system/k3s-agent.service', 'overwrite': True,
+                }])
+                server = json.loads((root / 'output/kube1.ign').read_text())
+                db_unit = server['systemd']['units'][0]['contents']
+                self.assertIn('192.168.1.104:26257', db_unit)
+                self.assertIn('192.168.1.101:26257', db_unit)
+                worker['cockroachdb'] = False
+                generate.ignition(data)
+                doc = json.loads((root / 'output/worker1.ign').read_text())
+                self.assertFalse(any(f['path'].startswith('/etc/cockroach/') for f in doc['storage']['files']))
+                self.assertEqual([u['name'] for u in doc['systemd']['units']], ['k3s-agent.service'])
+                self.assertNotIn('cockroachdb.service', json.dumps(doc['systemd']))
+                server = json.loads((root / 'output/kube1.ign').read_text())
+                self.assertNotIn('192.168.1.104:26257', server['systemd']['units'][0]['contents'])
+                worker['server_url'] = 'https://api.example.test:6443'
+                data['nodes'] = [worker]
+                generate.ignition(data)
+                doc = json.loads((root / 'output/worker1.ign').read_text())
+                conf = next(f for f in doc['storage']['files'] if f['path'].endswith('config.yaml'))
+                self.assertIn('https://api.example.test:6443', base64.b64decode(
+                    conf['contents']['source'].split(',')[1]).decode())
+                (pki / 'k3s-token').unlink()
+                with self.assertRaisesRegex(ValueError, 'existing cluster token'):
+                    generate.ignition(data)
+                self.assertFalse((pki / 'k3s-token').exists())
+
+    def test_workers_receive_node_pki_by_default_with_opt_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pki = Path(tmp) / 'pki'
+            data = self.data()
+            data['nodes'].append({'name': 'worker1', 'ip': '192.168.1.104', 'role': 'worker'})
+            data['nodes'].append({'name': 'worker2', 'ip': '192.168.1.105',
+                                  'role': 'worker', 'cockroachdb': False})
+
+            def fake_docker(command, **kwargs):
+                if 'create-ca' in command:
+                    (pki / 'ca.crt').write_text('test-ca')
+
+            with patch.object(generate, 'PKI', pki), patch.object(generate.subprocess, 'run', side_effect=fake_docker) as run:
+                generate.make_pki(data)
+                self.assertEqual((pki / 'worker1/ca.crt').read_text(), 'test-ca')
+                worker_commands = [call.args[0] for call in run.call_args_list
+                                   if '--certs-dir=/pki/worker1' in call.args[0]]
+                self.assertEqual(len(worker_commands), 1)
+                self.assertIn('create-node', worker_commands[0])
+                self.assertFalse((pki / 'worker2').exists())
+                self.assertFalse(any('/pki/worker2' in str(call) for call in run.call_args_list))
+
     def test_single_node_requires_explicit_lab_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'cluster.json'

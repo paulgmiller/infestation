@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 import secrets
 import subprocess
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE / 'cluster.json'
@@ -21,18 +22,42 @@ PKI = HERE / 'pki'
 OUT = HERE / 'output'
 
 
+def is_worker(node):
+    return node.get('role', 'server') == 'worker'
+
+
+def runs_cockroach(node):
+    return node.get('cockroachdb', True)
+
+
 def config():
     data = json.loads(CONFIG.read_text())
     nodes = data['nodes']
+    if any(n.get('role', 'server') not in ('server', 'worker') for n in nodes):
+        raise ValueError('role must be server or worker')
     count = 1 if data.get('single_node_lab', False) else 3
-    if len(nodes) != count or len({x['name'] for x in nodes}) != count or len({x['ip'] for x in nodes}) != count:
-        raise ValueError(f'Exactly {count} distinct nodes are expected')
+    servers = [n for n in nodes if not is_worker(n)]
+    if not nodes or len(servers) not in (0, count):
+        raise ValueError(f'Exactly {count} server nodes are expected (or workers only)')
+    if len({x['name'] for x in nodes}) != len(nodes) or len({x['ip'] for x in nodes}) != len(nodes):
+        raise ValueError('Node names and IP addresses must be distinct')
     for n in nodes:
         ipaddress.ip_address(n['ip'])
         if 'datastore_host' in n:
             ipaddress.ip_address(n['datastore_host'])
-        if not n.get('cockroachdb', True) and 'datastore_host' not in n:
+        if not is_worker(n) and not runs_cockroach(n) and 'datastore_host' not in n:
             raise ValueError('Nodes without CockroachDB require datastore_host')
+        if is_worker(n):
+            if 'datastore_host' in n:
+                raise ValueError('Workers connect to a K3s server, not datastore_host')
+            if not servers and 'server_url' not in n:
+                raise ValueError('Workers-only configurations require server_url on each worker')
+            if 'server_url' in n:
+                url = urlsplit(n['server_url'])
+                if (url.scheme != 'https' or not url.hostname or url.username or url.password
+                        or url.path not in ('', '/') or url.query or url.fragment):
+                    raise ValueError('server_url must be an HTTPS K3s server URL')
+                _ = url.port  # Reject malformed ports.
         if 'cluster_mac' in n and not re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', n['cluster_mac']):
             raise ValueError('Invalid cluster_mac')
         if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', n['name']):
@@ -58,19 +83,25 @@ def make_pki(data):
     os.chmod(PKI, 0o700)
     (PKI / 'admin').mkdir(mode=0o700)
     for n in data['nodes']:
+        if is_worker(n) and not runs_cockroach(n):
+            continue
         (PKI / n['name']).mkdir(mode=0o700)
 
     subprocess.run(docker_cmd(data, 'cert', 'create-ca', '--certs-dir=/pki',
                               '--ca-key=/pki/ca.key'), check=True)
     ca_cert = (PKI / 'ca.crt').read_bytes()
     for n in data['nodes']:
+        if is_worker(n) and not runs_cockroach(n):
+            continue
         dst = PKI / n['name']
         (dst / 'ca.crt').write_bytes(ca_cert)
-        subprocess.run(docker_cmd(data, 'cert', 'create-node',
+        if runs_cockroach(n):
+            subprocess.run(docker_cmd(data, 'cert', 'create-node',
                                   n['ip'], n['name'], 'localhost', '127.0.0.1',
                                   f'--certs-dir=/pki/{n["name"]}',
                                   '--ca-key=/pki/ca.key'), check=True)
-        subprocess.run(docker_cmd(data, 'cert', 'create-client', 'kine',
+        if not is_worker(n):
+            subprocess.run(docker_cmd(data, 'cert', 'create-client', 'kine',
                                   f'--certs-dir=/pki/{n["name"]}',
                                   '--ca-key=/pki/ca.key'), check=True)
     (PKI / 'admin' / 'ca.crt').write_bytes(ca_cert)
@@ -127,12 +158,15 @@ def ignition(data):
     OUT.chmod(0o700)
     token_file = PKI / 'k3s-token'
     if not token_file.exists():
+        if all(is_worker(n) for n in data['nodes']):
+            raise ValueError('Workers-only configurations require the existing cluster token in pki/k3s-token')
         token_file.write_text(secrets.token_hex(32) + '\n')
         token_file.chmod(0o600)
     token = token_file.read_text().strip()
     if len(token) < 16:
         raise ValueError('K3s token looks too short')
-    seeds = ','.join(f"{n['ip']}:26257" for n in data['nodes'])
+    seeds = ','.join(f"{n['ip']}:26257" for n in data['nodes'] if runs_cockroach(n))
+    servers = [n for n in data['nodes'] if not is_worker(n)]
     ext_version = data['k3s_extension_version']
     ext_path = f'https://extensions.flatcar.org/extensions/k3s-{ext_version}-{data["architecture"]}.raw'
     for node in data['nodes']:
@@ -145,9 +179,14 @@ def ignition(data):
             'client.kine.crt': (0o600, 0),
             'client.kine.key': (0o600, 0),
         }
-        if not node.get('cockroachdb', True):
+        if not runs_cockroach(node):
             certs.pop('node.crt')
             certs.pop('node.key')
+        if is_worker(node):
+            certs.pop('client.kine.crt')
+            certs.pop('client.kine.key')
+            if not runs_cockroach(node):
+                certs.pop('ca.crt')
         files = [
             ignite_file('/etc/hostname', f'{name}\n'),
             ignite_file('/etc/flatcar/update.conf', 'REBOOT_STRATEGY=off\n'),
@@ -162,10 +201,19 @@ def ignition(data):
                 f['user'] = {'id': uid}
             files.append(f)
         # Using certificates instead of SQL passwords for Kine's PostgreSQL client.
-        k3s_conf = f'''token: "{token}"
+        k3s_conf = f'''token: {json.dumps(token)}
 node-name: "{name}"
 node-ip: "{ip}"
-advertise-address: "{ip}"
+'''
+        if is_worker(node):
+            server_url = node.get('server_url')
+            if server_url is None:
+                server_ip = ipaddress.ip_address(servers[0]['ip'])
+                host = f'[{server_ip}]' if server_ip.version == 6 else str(server_ip)
+                server_url = f'https://{host}:6443'
+            k3s_conf += f'server: {json.dumps(server_url)}\n'
+        else:
+            k3s_conf += f'''advertise-address: "{ip}"
 tls-san:
   - "{ip}"
 datastore-endpoint: "postgres://kine@{node.get('datastore_host', '127.0.0.1')}:26257/kubernetes?sslmode=verify-full"
@@ -179,29 +227,30 @@ disable:
   - servicelb
 '''
         files.append(ignite_file('/etc/rancher/k3s/config.yaml', k3s_conf, 0o600))
+        service = 'k3s-agent.service' if is_worker(node) else 'k3s.service'
         doc = {
             'ignition': {'version': '3.3.0'},
             'passwd': {'users': [{'name': 'core', 'sshAuthorizedKeys': [data['ssh_authorized_key']]}]},
             'storage': {
                 'files': files,
                 'links': [
-                    {'path': '/etc/systemd/system/multi-user.target.wants/k3s.service',
-                     'target': '/usr/local/lib/systemd/system/k3s.service', 'overwrite': True},
+                    {'path': f'/etc/systemd/system/multi-user.target.wants/{service}',
+                     'target': f'/usr/local/lib/systemd/system/{service}', 'overwrite': True},
                 ],
             },
             'systemd': {'units': [
                 {'name': 'cockroachdb.service', 'enabled': True,
                  'contents': cockroach_unit(node, seeds, data['cockroach_image'], data.get('single_node_lab', False),
                                             data.get('cockroach_cache', '512MiB'), data.get('cockroach_sql_memory', '512MiB'))},
-                {'name': 'k3s.service', 'dropins': [
+                {'name': service, 'dropins': [
                     {'name': '10-cockroach-dependency.conf', 'contents':
                      '[Unit]\nAfter=cockroachdb.service\nWants=cockroachdb.service\n'
                      '[Service]\nRestart=always\nRestartSec=15s\n'},
                 ]},
             ]},
         }
-        if not node.get('cockroachdb', True):
-            doc['systemd']['units'] = [{'name': 'k3s.service', 'dropins': [{
+        if not runs_cockroach(node):
+            doc['systemd']['units'] = [{'name': service, 'dropins': [{
                 'name': '10-restart.conf',
                 'contents': '[Service]\nRestart=always\nRestartSec=15s\n',
             }]}]

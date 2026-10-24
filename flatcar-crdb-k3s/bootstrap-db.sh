@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 IMAGE="$(python3 -c 'import json; print(json.load(open("cluster.json"))["cockroach_image"])')"
-FIRST_IP="$(python3 -c 'import json; print(json.load(open("cluster.json"))["nodes"][0]["ip"])')"
+FIRST_IP="$(python3 -c 'import generate; print(next(n["ip"] for n in generate.config()["nodes"] if generate.runs_cockroach(n)))')"
 if [[ ! -f pki/admin/client.root.key ]]; then
   echo 'Missing pki/admin/client.root.key; run python3 generate.py pki first.' >&2
   exit 1
