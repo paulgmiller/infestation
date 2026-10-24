@@ -59,6 +59,17 @@ class GeneratorTests(unittest.TestCase):
                 unit = json.loads((root / 'output/kube1.ign').read_text())['systemd']['units'][0]['contents']
                 self.assertIn(' start-single-node --certs-dir', unit)
                 self.assertNotIn('--join=', unit)
+                data['nodes'][0].update(cockroachdb=False, datastore_host='192.168.100.11',
+                                        cluster_mac='52:54:00:ca:00:02', ip='192.168.100.12')
+                generate.ignition(data)
+                doc = json.loads((root / 'output/kube1.ign').read_text())
+                files = {f['path']: f for f in doc['storage']['files']}
+                self.assertNotIn('/etc/cockroach/certs/node.key', files)
+                self.assertIn('/etc/cockroach/certs/client.kine.key', files)
+                self.assertNotIn('cockroachdb.service', json.dumps(doc['systemd']))
+                decode = lambda path: base64.b64decode(files[path]['contents']['source'].split(',')[1]).decode()
+                self.assertIn('postgres://kine@192.168.100.11:26257/', decode('/etc/rancher/k3s/config.yaml'))
+                self.assertIn('Address=192.168.100.12/24', decode('/etc/systemd/network/10-lab-cluster.network'))
 
 
 if __name__ == '__main__':

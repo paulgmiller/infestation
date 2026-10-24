@@ -29,6 +29,12 @@ def config():
         raise ValueError(f'Exactly {count} distinct nodes are expected')
     for n in nodes:
         ipaddress.ip_address(n['ip'])
+        if 'datastore_host' in n:
+            ipaddress.ip_address(n['datastore_host'])
+        if not n.get('cockroachdb', True) and 'datastore_host' not in n:
+            raise ValueError('Nodes without CockroachDB require datastore_host')
+        if 'cluster_mac' in n and not re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', n['cluster_mac']):
+            raise ValueError('Invalid cluster_mac')
         if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', n['name']):
             raise ValueError('Node names must be DNS-label-compatible')
     if not data['ssh_authorized_key'].startswith(('ssh-ed25519 AAAA', 'ssh-rsa AAAA', 'ecdsa-sha2-nistp256 AAAA')):
@@ -89,7 +95,7 @@ def ignite_file(path, content=None, mode=0o644, *, url=None):
             'contents': {'source': url} if url else contents(content)}
 
 
-def cockroach_unit(node, seeds, image, single_node=False):
+def cockroach_unit(node, seeds, image, single_node=False, cache='512MiB', sql_memory='512MiB'):
     ip = node['ip']
     command = 'start-single-node' if single_node else 'start'
     join = '' if single_node else f' --join={seeds}'
@@ -106,7 +112,7 @@ TimeoutStartSec=0
 TimeoutStopSec=120
 ExecStartPre=/usr/bin/install -d -o 1000 -g 1000 -m 0700 /var/lib/cockroach
 ExecStartPre=-/usr/bin/docker rm -f cockroachdb
-ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=/var/lib/cockroach,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --entrypoint=/cockroach/cockroach {image} {command} --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr={ip}:26257 --http-addr=127.0.0.1:8080{join} --cache=512MiB --max-sql-memory=512MiB --logtostderr=INFO
+ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=/var/lib/cockroach,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --entrypoint=/cockroach/cockroach {image} {command} --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr={ip}:26257 --http-addr=127.0.0.1:8080{join} --cache={cache} --max-sql-memory={sql_memory} --logtostderr=INFO
 ExecStop=/usr/bin/docker stop --time 90 cockroachdb
 Restart=always
 RestartSec=10
@@ -139,11 +145,17 @@ def ignition(data):
             'client.kine.crt': (0o600, 0),
             'client.kine.key': (0o600, 0),
         }
+        if not node.get('cockroachdb', True):
+            certs.pop('node.crt')
+            certs.pop('node.key')
         files = [
             ignite_file('/etc/hostname', f'{name}\n'),
             ignite_file('/etc/flatcar/update.conf', 'REBOOT_STRATEGY=off\n'),
             ignite_file('/etc/extensions/k3s.raw', mode=0o644, url=ext_path),
         ]
+        if 'cluster_mac' in node:
+            files.append(ignite_file('/etc/systemd/network/10-lab-cluster.network',
+                                     cluster_network(node)))
         for certname, (mode, uid) in certs.items():
             f = ignite_file(f'/etc/cockroach/certs/{certname}', (nodepki / certname).read_bytes(), mode)
             if uid:
@@ -156,7 +168,7 @@ node-ip: "{ip}"
 advertise-address: "{ip}"
 tls-san:
   - "{ip}"
-datastore-endpoint: "postgres://kine@127.0.0.1:26257/kubernetes?sslmode=verify-full"
+datastore-endpoint: "postgres://kine@{node.get('datastore_host', '127.0.0.1')}:26257/kubernetes?sslmode=verify-full"
 datastore-cafile: /etc/cockroach/certs/ca.crt
 datastore-certfile: /etc/cockroach/certs/client.kine.crt
 datastore-keyfile: /etc/cockroach/certs/client.kine.key
@@ -179,7 +191,8 @@ disable:
             },
             'systemd': {'units': [
                 {'name': 'cockroachdb.service', 'enabled': True,
-                 'contents': cockroach_unit(node, seeds, data['cockroach_image'], data.get('single_node_lab', False))},
+                 'contents': cockroach_unit(node, seeds, data['cockroach_image'], data.get('single_node_lab', False),
+                                            data.get('cockroach_cache', '512MiB'), data.get('cockroach_sql_memory', '512MiB'))},
                 {'name': 'k3s.service', 'dropins': [
                     {'name': '10-cockroach-dependency.conf', 'contents':
                      '[Unit]\nAfter=cockroachdb.service\nWants=cockroachdb.service\n'
@@ -187,12 +200,22 @@ disable:
                 ]},
             ]},
         }
+        if not node.get('cockroachdb', True):
+            doc['systemd']['units'] = [{'name': 'k3s.service', 'dropins': [{
+                'name': '10-restart.conf',
+                'contents': '[Service]\nRestart=always\nRestartSec=15s\n',
+            }]}]
         outpath = OUT / f'{name}.ign'
         outpath.write_text(json.dumps(doc, indent=2) + '\n')
         outpath.chmod(0o600)
         assert json.loads(outpath.read_text())['ignition']['version'] == '3.3.0'
         print(f'Wrote {outpath}')
     print('These Ignition files contain sensitive private keys + K3s token. Keep private.')
+
+
+def cluster_network(node):
+    return (f"[Match]\nMACAddress={node['cluster_mac']}\n\n[Network]\n"
+            f"Address={node['ip']}/24\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n")
 
 
 def main():
