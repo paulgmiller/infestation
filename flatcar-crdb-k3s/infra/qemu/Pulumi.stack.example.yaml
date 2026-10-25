@@ -1,0 +1,16 @@
+# Merge into Pulumi.local.yaml after `pulumi stack init local`.
+config:
+  flatcar-k3s-qemu:name: flatcar-local
+  flatcar-k3s-qemu:clusterPath: cluster.local.json
+  flatcar-k3s-qemu:ignitionDir: state/output
+  flatcar-k3s-qemu:baseImagePath: state/flatcar-4757.2.2.qcow2
+  flatcar-k3s-qemu:networkCIDR: 192.168.124.0/24
+  flatcar-k3s-qemu:poolDir: /var/lib/libvirt/images/flatcar-local
+  # Replace with the numeric UID/GID of the account that runs QEMU on your host.
+  flatcar-k3s-qemu:qemuUserID: REPLACE_WITH_QEMU_UID
+  flatcar-k3s-qemu:qemuGroupID: REPLACE_WITH_QEMU_GID
+  flatcar-k3s-qemu:memoryMiB: 3072
+  flatcar-k3s-qemu:vcpus: 2
+  flatcar-k3s-qemu:diskGiB: 40
+  flatcar-k3s-qemu:running: true
+  flatcar-k3s-qemu:autostart: false

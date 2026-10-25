@@ -8,6 +8,15 @@ That profile uses the same generator and TLS configuration, with a separate
 ignored state directory. It starts in CockroachDB's `start-single-node` mode,
 then migrates the existing store into a three-node replicated cluster.
 
+For cloud infrastructure, see the [cross-cloud approach](infra/README.md) and
+[Azure Flexible VMSS deployment](infra/azure/README.md). The Azure definition
+uses the same Ignition generator and is locally validated; Azure first boot
+has not yet been tested.
+
+For local VMs managed through the same Pulumi workflow, see
+[QEMU/KVM with libvirt](infra/qemu/README.md). This is a separate, fresh-cluster
+target; the existing direct-QEMU lab remains available.
+
 ## Resulting layout
 
 On each node:

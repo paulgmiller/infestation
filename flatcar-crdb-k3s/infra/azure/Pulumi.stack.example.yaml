@@ -1,0 +1,21 @@
+# Copy to Pulumi.dev.yaml and replace the subscription, SSH sources, and image version.
+config:
+  azure-native:subscriptionId: 00000000-0000-0000-0000-000000000000
+  flatcar-k3s-azure:name: flatcar-k3s-dev
+  flatcar-k3s-azure:location: westus2
+  flatcar-k3s-azure:flatcarVersion: REPLACE_WITH_VERIFIED_VERSION
+  flatcar-k3s-azure:clusterPath: cluster.local.json
+  flatcar-k3s-azure:ignitionDir: state/output
+  flatcar-k3s-azure:vnetCIDR: 192.168.0.0/16
+  flatcar-k3s-azure:subnetCIDR: 192.168.1.0/24
+  flatcar-k3s-azure:vmSize: Standard_D4s_v5
+  flatcar-k3s-azure:osDiskSizeGB: 128
+  flatcar-k3s-azure:nodeZones:
+    kube1: "1"
+    kube2: "2"
+    kube3: "3"
+    # worker1: "1"
+  flatcar-k3s-azure:publicNodeIPs: false
+  flatcar-k3s-azure:adminCIDRs: []
+  # For workstation SSH, enable publicNodeIPs and set your actual public IP/32:
+  # flatcar-k3s-azure:adminCIDRs: ["203.0.113.10/32"]
