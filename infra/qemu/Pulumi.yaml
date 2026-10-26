@@ -1,0 +1,3 @@
+name: flatcar-k3s-qemu
+runtime: go
+description: Infestation on local libvirt QEMU/KVM VMs (stable legacy project ID)

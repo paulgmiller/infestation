@@ -1,0 +1,28 @@
+# Architecture
+
+Infestation shares a typed Go inventory, native PKI, and validated Ignition across
+providers. The inventory describes roles, addresses, datastore participation,
+locality, and TLS SANs. Provider settings describe VM sizes, storage, networks,
+firewall rules, and placement. Credentials are per-node, not VMSS-wide secrets.
+
+CockroachDB is a systemd-managed host Docker container. Each K3s server connects
+through Kine to its configured TLS SQL endpoint. Workers run agents and host the
+database by default. Cilium is installed after the Kubernetes API becomes ready;
+kube-proxy handles the Kubernetes Service VIP used for Cilium bootstrap.
+
+Go packages under `internal/provider` own Pulumi resource lifecycle. Planning
+resolves prices, quota and zones once and saves the result; subsequent previews
+do not choose a different VM or move a database node because prices changed.
+The deployment CLI invokes Pulumi and then uses the bootstrap package. Node
+provisioning and bootstrap are separate operations with explicit recovery guards.
+
+Azure uses individually configured Flatcar VMs in a Flexible VMSS. A Standard
+Load Balancer has separate API and all-node egress pools, sharing one frontend.
+QEMU uses the parameterized libvirt provider, with a private NAT bridge, stable
+DHCP reservations and protected copy-on-write disks. Its small in-tree Pulumi
+adapter registers the same provider parameters/resource tokens as the generated
+SDK, without making generated SDK source a build prerequisite.
+
+AWS EC2 and Google Compute Engine need their own infrastructure packages around
+the same portable node preparation. Managed EKS/GKE/AKS would be a different
+architecture because they own their Kubernetes control planes.

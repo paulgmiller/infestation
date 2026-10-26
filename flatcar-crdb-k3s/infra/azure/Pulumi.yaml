@@ -1,3 +1,0 @@
-name: flatcar-k3s-azure
-runtime: go
-description: Flatcar, host-level CockroachDB, and K3s on an Azure Flexible VM Scale Set
