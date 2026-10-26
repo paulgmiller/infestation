@@ -34,6 +34,7 @@ not provision anything. Runtime prerequisites depend on the command:
 | --- | --- |
 | Validate, PKI, Ignition, image preparation | None |
 | Azure price/quota planning | Azure CLI, authenticated subscription |
+| Fetch Azure kubeconfig from Blob Storage | Azure CLI, authenticated identity with blob read access |
 | Pulumi preview/apply | Pulumi CLI 3.272.0; Azure credentials or local libvirt access |
 | Database/Kubernetes bootstrap | Docker (Cockroach CLI), kubectl, Cilium CLI 0.20.1 |
 | Connectivity smoke test | kubectl and a reachable cluster |
@@ -113,6 +114,22 @@ The automatic bootstrap stores initialization intent before its one init RPC,
 then records and verifies the cluster ID. It refuses to initialize a different
 database after an ambiguous init or loss of quorum. Kine SQL is idempotent;
 Cilium setup and kubeconfig retrieval can be resumed without replacing PKI.
+
+Azure deployments now declare private, read-access geo-zone-redundant artifact
+storage in the cluster resource group. Bootstrap publishes the admin kubeconfig;
+fetch it without SSH or the original PKI directory:
+
+```sh
+az login
+bin/infestation azure kubeconfig --outputs state/dev/outputs.json \
+  --out state/dev/downloaded-kubeconfig
+```
+
+The command uses Azure identity authentication, keeps TLS verification and writes
+mode `0600`. Existing files require `--force`. See the [Azure guide](infra/azure/README.md#retrieve-the-kubeconfig)
+for portal-based discovery and access roles. Node-local self-bootstrap and
+automatic republishing on certificate renewal remain to be implemented; this
+change connects publication to the existing bootstrap workflow.
 
 To run the directed DNS/service check after bootstrap:
 

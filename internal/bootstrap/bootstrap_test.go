@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"infestation/internal/blobstore"
 	"infestation/internal/executil"
 	"infestation/internal/fsutil"
 	"infestation/internal/testutil"
@@ -21,6 +22,89 @@ type fakeRemote struct{}
 
 func (fakeRemote) Run(context.Context, string, string) executil.Result {
 	return executil.Result{Stdout: "active\n"}
+}
+
+type kubeRemote struct{}
+
+func (kubeRemote) Run(context.Context, string, string) executil.Result {
+	return executil.Result{Stdout: `apiVersion: v1
+kind: Config
+clusters:
+- name: default
+  cluster:
+    server: https://127.0.0.1:6443
+    certificate-authority-data: dGVzdC1jYQ==
+users:
+- name: default
+  user:
+    client-certificate-data: dGVzdC1jZXJ0
+    client-key-data: dGVzdC1rZXk=
+`}
+}
+func (kubeRemote) Tunnel(context.Context, string, string, int) (int, func(), error) {
+	panic("Kubernetes bootstrap must not open SQL tunnels")
+}
+
+type kubeRunner struct{ apiReady, ciliumInspected bool }
+
+func (r *kubeRunner) Run(_ context.Context, _ string, args ...string) executil.Result {
+	cmd := strings.Join(args, " ")
+	if strings.Contains(cmd, "/readyz") {
+		r.apiReady = true
+	}
+	if strings.Contains(cmd, "get daemonset cilium") {
+		r.ciliumInspected = true
+		return executil.Result{Stdout: "daemonset.apps/cilium"}
+	}
+	if strings.Contains(cmd, "get configmap cilium-config") {
+		return executil.Result{Stdout: "false"}
+	}
+	return executil.Result{}
+}
+
+type artifactWriter struct {
+	runner *kubeRunner
+	t      *testing.T
+	fail   bool
+	calls  int
+}
+
+func (w *artifactWriter) Put(_ context.Context, l blobstore.Location, data []byte) error {
+	w.calls++
+	if !w.runner.apiReady || w.runner.ciliumInspected {
+		w.t.Fatal("publish after API verification and before Cilium")
+	}
+	if l.Account != "testaccount" || !strings.Contains(string(data), "https://api.example.test:6443") {
+		w.t.Fatal("wrong publication location or API endpoint")
+	}
+	if w.fail {
+		return fmt.Errorf("publication failed")
+	}
+	return nil
+}
+func TestKubeconfigPublishedBeforeNetworkingAndRequiredForCompletion(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		state := t.TempDir()
+		if err := fsutil.WriteJSON(filepath.Join(state, "bootstrap.json"), Marker{ClusterID: testID}); err != nil {
+			t.Fatal(err)
+		}
+		runner := &kubeRunner{}
+		writer := &artifactWriter{runner: runner, t: t, fail: fail}
+		worker := New(Options{StateDir: state, Cluster: testutil.Config(), Outputs: Outputs{
+			APIEndpoint: "https://api.example.test:6443", KubeconfigBlob: &blobstore.Location{Account: "testaccount", Container: "access", Blob: "kubeconfig.json"},
+		}, Remote: kubeRemote{}, Runner: runner, Artifacts: writer, Log: io.Discard, Timeout: time.Millisecond})
+		err := worker.Kubernetes(context.Background())
+		if (err != nil) != fail || writer.calls != 1 {
+			t.Fatalf("publication failure handling: %v", err)
+		}
+		var marker Marker
+		if err := fsutil.ReadJSON(filepath.Join(state, "bootstrap.json"), &marker); err != nil {
+			t.Fatal(err)
+		}
+		if marker.KubernetesReady == fail {
+			t.Fatal("bootstrap marked complete despite failed publication")
+		}
+	}
 }
 func (fakeRemote) Tunnel(context.Context, string, string, int) (int, func(), error) {
 	return 12345, func() {}, nil

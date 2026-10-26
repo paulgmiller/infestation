@@ -158,7 +158,12 @@ func (m *mockAzure) NewResource(args pulumi.MockResourceArgs) (string, resource.
 	return "/mock/" + args.Name, outputs, nil
 }
 
-func (*mockAzure) Call(args pulumi.MockCallArgs) (resource.PropertyMap, error) { return args.Args, nil }
+func (*mockAzure) Call(args pulumi.MockCallArgs) (resource.PropertyMap, error) {
+	if args.Token == "azure-native:authorization:getClientConfig" {
+		return resource.NewPropertyMapFromMap(map[string]any{"objectId": "11111111-1111-1111-1111-111111111111", "subscriptionId": "22222222-2222-2222-2222-222222222222"}), nil
+	}
+	return args.Args, nil
+}
 
 func plain(value resource.PropertyValue) resource.PropertyValue {
 	if value.IsSecret() {
@@ -274,6 +279,48 @@ func TestWorkerDatabaseOptOut(t *testing.T) {
 	}
 	if strings.Contains(string(d.Ignition["worker1"]), "cockroachdb.service") {
 		t.Error("explicit CockroachDB opt-out must survive cloud provisioning")
+	}
+}
+
+func TestPrivateCrossRegionArtifactStorage(t *testing.T) {
+	d, err := loadDeployment(fixture(t, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mocks := &mockAzure{}
+	if err := pulumi.RunErr(func(ctx *pulumi.Context) error { return deploy(ctx, d) }, pulumi.WithMocks("test", "test", mocks)); err != nil {
+		t.Fatal(err)
+	}
+	account, container, lock, role := 0, 0, 0, 0
+	for _, r := range mocks.resources {
+		switch r.TypeToken {
+		case "azure-native:storage:StorageAccount":
+			account++
+			if r.Inputs["resourceGroupName"].StringValue() != "cluster" || r.Inputs["sku"].ObjectValue()["name"].StringValue() != "Standard_RAGZRS" {
+				t.Error("artifact account must share the resource group and support secondary-region reads")
+			}
+			if r.Inputs["allowBlobPublicAccess"].BoolValue() || r.Inputs["allowSharedKeyAccess"].BoolValue() || !r.Inputs["enableHttpsTrafficOnly"].BoolValue() || r.Inputs["minimumTlsVersion"].StringValue() != "TLS1_2" || !r.RegisterRPC.GetProtect() {
+				t.Error("artifact account must require authenticated HTTPS and be protected")
+			}
+		case "azure-native:storage:BlobContainer":
+			container++
+			if r.Inputs["publicAccess"].StringValue() != "None" {
+				t.Error("kubeconfigs must not be publicly readable")
+			}
+		case "azure-native:authorization:ManagementLockAtResourceLevel":
+			lock++
+			if r.Inputs["level"].StringValue() != "CanNotDelete" || !r.RegisterRPC.GetProtect() {
+				t.Error("retain recovery artifacts until explicitly unlocked")
+			}
+		case "azure-native:authorization:RoleAssignment":
+			role++
+			if r.Inputs["scope"].StringValue() != "/mock/access-artifacts" || r.Inputs["principalId"].StringValue() != "11111111-1111-1111-1111-111111111111" || !strings.HasSuffix(r.Inputs["roleDefinitionId"].StringValue(), "/ba92f5b4-2d11-453d-a403-e96b0029c9fe") {
+				t.Error("grant the deployment identity access only to the artifact container")
+			}
+		}
+	}
+	if account != 1 || container != 1 || lock != 1 || role != 1 {
+		t.Fatalf("account=%d container=%d lock=%d role=%d", account, container, lock, role)
 	}
 }
 

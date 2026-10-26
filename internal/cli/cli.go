@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"infestation/internal/azureplan"
+	"infestation/internal/blobstore"
 	"infestation/internal/bootstrap"
 	"infestation/internal/cluster"
 	"infestation/internal/deploy"
@@ -19,6 +20,7 @@ import (
 	"infestation/internal/fsutil"
 	"infestation/internal/ignition"
 	"infestation/internal/image"
+	"infestation/internal/kubeconfigstore"
 	"infestation/internal/pki"
 	"infestation/internal/smoke"
 )
@@ -29,14 +31,14 @@ func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *list) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: validate, pki, ignition, image, azure plan, azure deploy, bootstrap, kubeconfig, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, bootstrap, kubeconfig, smoke\nRun a command with --help for its flags.")
 		return nil
 	}
 	command := args[0]
 	args = args[1:]
 	if command == "azure" {
 		if len(args) == 0 {
-			return fmt.Errorf("expected azure plan or azure deploy")
+			return fmt.Errorf("expected azure plan, azure deploy or azure kubeconfig")
 		}
 		command += " " + args[0]
 		args = args[1:]
@@ -49,6 +51,40 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		flags.StringVar(&state, "state-dir", state, "private local state directory")
 	}
 	switch command {
+	case "azure kubeconfig":
+		outputs := flags.String("outputs", "", "deployment outputs JSON containing kubeconfigBlob and apiEndpoint")
+		account := flags.String("account", "", "storage account from Azure portal (alternative to --outputs)")
+		endpoint := flags.String("endpoint", "", "regional HTTPS API endpoint (required with --account)")
+		subscription := flags.String("subscription", "", "Azure subscription for --account (defaults to az account selection)")
+		destination := flags.String("out", "", "destination kubeconfig file (mode 0600)")
+		overwrite := flags.Bool("force", false, "replace an existing destination kubeconfig")
+		if err := parse(flags, args); err != nil {
+			return help(err)
+		}
+		if *destination == "" {
+			return fmt.Errorf("--out is required")
+		}
+		var result bootstrap.Outputs
+		if *outputs != "" {
+			if *account != "" || *endpoint != "" || *subscription != "" {
+				return fmt.Errorf("use --outputs or --account/--endpoint/--subscription, not both")
+			}
+			var err error
+			result, err = bootstrap.LoadOutputs(*outputs)
+			if err != nil {
+				return err
+			}
+		} else {
+			if *account == "" || *endpoint == "" {
+				return fmt.Errorf("provide --outputs, or both --account and --endpoint")
+			}
+			result = bootstrap.Outputs{APIEndpoint: *endpoint, KubeconfigBlob: &blobstore.Location{Account: *account, Container: "access", Blob: "kubeconfig.json", SubscriptionID: *subscription}}
+		}
+		if err := kubeconfigstore.Fetch(ctx, blobstore.Client{}, result, *destination, *overwrite); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, *destination)
+		return nil
 	case "validate", "pki", "ignition":
 		portable()
 		if err := parse(flags, args); err != nil {
@@ -188,10 +224,16 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		path := filepath.Join(abs, "kubeconfig")
-		if err = fsutil.WriteJSON(path, cfg); err == nil {
-			fmt.Fprintln(out, path)
+		if err = fsutil.WriteJSON(path, cfg); err != nil {
+			return err
 		}
-		return err
+		if result.KubeconfigBlob != nil {
+			if err = w.PublishKubeconfig(ctx); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintln(out, path)
+		return nil
 	case "smoke":
 		portable()
 		kube := flags.String("kubeconfig", "", "admin kubeconfig path")

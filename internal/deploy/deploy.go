@@ -101,7 +101,7 @@ func Azure(ctx context.Context, o Options) error {
 	}
 	tools := []string{"pulumi"}
 	if !o.PreviewOnly {
-		tools = append(tools, "docker", "kubectl", o.Cilium)
+		tools = append(tools, "az", "docker", "kubectl", o.Cilium)
 	}
 	for _, tool := range tools {
 		if _, err = exec.LookPath(tool); err != nil {

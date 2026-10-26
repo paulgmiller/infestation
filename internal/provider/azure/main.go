@@ -63,6 +63,9 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 	if err != nil {
 		return err
 	}
+	if err := artifactStorage(ctx, rg.Name, location); err != nil {
+		return err
+	}
 	vnet, err := network.NewVirtualNetwork(ctx, "cluster", &network.VirtualNetworkArgs{
 		VirtualNetworkName: pulumi.String(s.Name + "-vnet"), ResourceGroupName: rg.Name, Location: location,
 		AddressSpace: &network.AddressSpaceArgs{AddressPrefixes: pulumi.ToStringArray([]string{s.VNetCIDR})},

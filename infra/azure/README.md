@@ -101,6 +101,66 @@ Standard Load Balancer passes TCP 6443 through to K3s; its DNS name is included
 in every server certificate. Cilium keeps kube-proxy enabled and uses the
 Kubernetes Service VIP for bootstrap rather than one fixed private server IP.
 
+## Retrieve the kubeconfig
+
+The Azure stack creates a StorageV2 account in the cluster resource group using
+`Standard_RAGZRS`: zone redundancy plus a readable copy in Azure's paired region.
+The `access` container is private, anonymous blob access and Shared Key auth are
+disabled, and HTTPS/TLS 1.2 are required. The public HTTPS storage endpoint is
+reachable with Azure identity authentication; this is not a private endpoint.
+Creation requires permission to assign Azure RBAC roles. The deployment identity
+receives Storage Blob Data Contributor scoped to this container. Additional
+operators need Storage Blob Data Reader on the container or an enclosing scope;
+subscription/resource ownership alone does not grant blob data access.
+
+Bootstrap publishes `access/kubeconfig.json` after the API passes its TLS and
+readiness check, before Cilium/node checks. This lets you fetch credentials to
+debug an incomplete networking bootstrap. Deployment outputs contain the
+non-secret `kubeconfigBlob` location and `apiEndpoint`; no kubeconfig credentials
+are exported into Pulumi outputs.
+
+```sh
+az login
+bin/infestation azure kubeconfig --outputs state/dev/outputs.json \
+  --out state/dev/downloaded-kubeconfig
+KUBECONFIG="$PWD/state/dev/downloaded-kubeconfig" kubectl get nodes
+```
+
+The command requires Azure CLI authentication and blob read permission. It does
+not use SSH, Docker, kubectl, the original SSH key or the PKI directory. Files are
+written with mode `0600`. Existing files require `--force`; failed downloads or
+invalid kubeconfigs leave existing files unchanged. Executable authentication,
+external credential files, proxies and disabled TLS verification are rejected.
+Neither tokens nor kubeconfig contents are printed.
+
+On a fresh workstation, obtain the account name and regional API hostname from
+the Azure portal and fetch without any local deployment state:
+
+```sh
+bin/infestation azure kubeconfig --account ACCOUNT_NAME \
+  --subscription SUBSCRIPTION_ID \
+  --endpoint https://REGIONAL_API_HOSTNAME:6443 --out state/recovered-kubeconfig
+```
+
+Publication currently uses the existing workstation bootstrap and Azure login.
+The legacy `kubeconfig` SSH command also republishes when given outputs containing
+`kubeconfigBlob`. Ignition-driven node-local bootstrap, managed-identity uploading
+and automatic republishing after K3s certificate renewal are still pending.
+Fetching repeatedly downloads the latest published copy; it cannot renew an
+expired certificate itself. The agreed operations design is recorded in
+[operations plan](../../docs/operations-plan.md).
+
+The account and its `CanNotDelete` lock are Pulumi-protected. Deleting the resource
+group is blocked until the Azure lock is explicitly removed. Deleting these
+resources through Pulumi also requires deliberately removing Pulumi protection.
+The lock does not prevent deletion of individual blobs. Access credentials are
+not subject to the planned one-day **database backup** retention; database backup
+jobs, retention and regional restore are not implemented by this change.
+
+References: [Azure identity authorization](https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-azure-active-directory),
+[Azure redundancy](https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy),
+[Azure resource locks](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources).
+
 ## Networking and storage
 
 One Standard public frontend supports an API server pool plus an all-node egress
@@ -117,7 +177,9 @@ Missing/undersized temporary storage cannot fall back onto the OS disk.
 Three-zone locality and RF=3 tolerate one replica loss while a store rejoins
 surviving peers. They do not replace backups or ensure recovery after multiple
 stores lose quorum. OS disks are retained with `Detach`; VMs are protected from
-Pulumi replacement. Resource-group deletion still removes all resources.
+Pulumi replacement. The artifact account's delete lock blocks resource-group
+deletion until explicitly removed; after removal, deleting the group removes
+the storage account and its replicated artifacts too.
 The bootstrap package does not automatically decommission old Cockroach IDs or
 remove K3s registration secrets when replacing an entire VM; those operations
 need a deliberate replacement procedure and tests.

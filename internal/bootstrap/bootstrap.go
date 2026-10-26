@@ -15,14 +15,16 @@ import (
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
+	"infestation/internal/blobstore"
 	"infestation/internal/cluster"
 	"infestation/internal/executil"
 	"infestation/internal/fsutil"
 )
 
 type Outputs struct {
-	PublicIPs   map[string]string `json:"publicIPs"`
-	APIEndpoint string            `json:"apiEndpoint"`
+	PublicIPs      map[string]string   `json:"publicIPs"`
+	APIEndpoint    string              `json:"apiEndpoint"`
+	KubeconfigBlob *blobstore.Location `json:"kubeconfigBlob,omitempty"`
 }
 type Marker struct {
 	ClusterID               string `json:"clusterID,omitempty"`
@@ -61,6 +63,9 @@ type Remote interface {
 	Run(context.Context, string, string) executil.Result
 	Tunnel(context.Context, string, string, int) (int, func(), error)
 }
+type ArtifactWriter interface {
+	Put(context.Context, blobstore.Location, []byte) error
+}
 type Options struct {
 	StateDir, PrivateKey, Cilium string
 	AllowInitialize              bool
@@ -68,6 +73,7 @@ type Options struct {
 	Outputs                      Outputs
 	Runner                       executil.Runner
 	Remote                       Remote
+	Artifacts                    ArtifactWriter
 	Log                          io.Writer
 	Timeout                      time.Duration
 }
@@ -323,6 +329,19 @@ func (w *Worker) Kubernetes(ctx context.Context) error {
 	if _, err = w.wait(ctx, "API TLS and readiness", func(ctx context.Context) executil.Result { return w.kubectl(ctx, "get", "--raw=/readyz") }); err != nil {
 		return err
 	}
+	// Publish before Cilium/node checks so operators can fetch credentials to
+	// inspect an incomplete networking bootstrap through the working API.
+	if w.Outputs.KubeconfigBlob != nil {
+		// Container RBAC can take time to propagate immediately after creation.
+		if _, err = w.wait(ctx, "private kubeconfig publication", func(ctx context.Context) executil.Result {
+			if err := w.PublishKubeconfig(ctx); err != nil {
+				return executil.Result{Code: 1, Stderr: err.Error()}
+			}
+			return executil.Result{}
+		}); err != nil {
+			return err
+		}
+	}
 	existing := w.kubectl(ctx, "-n", "kube-system", "get", "daemonset", "cilium", "--ignore-not-found", "-o", "name")
 	if err = existing.Err("inspect Cilium"); err != nil {
 		return err
@@ -363,6 +382,27 @@ func (w *Worker) Kubernetes(ctx context.Context) error {
 		return err
 	}
 	fmt.Fprintln(w.Log, "Bootstrap complete. Kubeconfig:", filepath.Join(w.StateDir, "kubeconfig"))
+	return nil
+}
+
+// PublishKubeconfig updates the protected artifact after API readiness checks.
+// The node-local bootstrap can reuse this transfer path when it replaces SSH.
+func (w *Worker) PublishKubeconfig(ctx context.Context) error {
+	if w.Outputs.KubeconfigBlob == nil {
+		return fmt.Errorf("deployment has no kubeconfig blob location")
+	}
+	data, err := os.ReadFile(filepath.Join(w.StateDir, "kubeconfig"))
+	if err != nil {
+		return err
+	}
+	store := w.Artifacts
+	if store == nil {
+		store = blobstore.Client{Runner: w.Runner}
+	}
+	if err = store.Put(ctx, *w.Outputs.KubeconfigBlob, data); err != nil {
+		return err
+	}
+	fmt.Fprintln(w.Log, "Admin kubeconfig published to private Blob Storage")
 	return nil
 }
 func (w *Worker) Complete(ctx context.Context) error {
