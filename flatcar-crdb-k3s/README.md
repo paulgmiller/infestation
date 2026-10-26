@@ -10,12 +10,20 @@ then migrates the existing store into a three-node replicated cluster.
 
 For cloud infrastructure, see the [cross-cloud approach](infra/README.md) and
 [Azure Flexible VMSS deployment](infra/azure/README.md). The Azure definition
-uses the same Ignition generator and is locally validated; Azure first boot
-has not yet been tested.
+uses the same Ignition generator. A three-zone Azure smoke deployment passed
+on 2026-10-25, including Cilium, all six directed DNS/service checks, and a
+public API load balancer with verified TLS. See its [runbook](infra/azure/RUNBOOK.md).
+That resource group was deleted after testing. The revised [Azure workflow](infra/azure/README.md)
+selects compatible low-cost VMs/zones, uses local temporary Cockroach storage and
+SLB egress, and automates bootstrap. Its new profile has preview and unit/mock
+validation; it has not yet passed a new VM integration test.
 
 For local VMs managed through the same Pulumi workflow, see
 [QEMU/KVM with libvirt](infra/qemu/README.md). This is a separate, fresh-cluster
 target; the existing direct-QEMU lab remains available.
+The Pulumi target passed a fresh three-node smoke deployment on 2026-10-25,
+including database initialization, all nodes Ready, and all six directed
+cross-node DNS/service HTTP checks.
 
 ## Resulting layout
 
@@ -141,7 +149,7 @@ Nodes should be registered, but likely **NotReady until you install Cilium**. Us
 - **Reboot discipline:** At RF=3, a three-node CockroachDB cluster can normally lose one replica-host; don't reboot two hosts together. Independently assess the OS update/reboot process.
 - **Disk:** `/var/lib/cockroach` is on the host persistent filesystem, not a dedicated disk. Mount a dedicated persistent filesystem there before a real deployment, and set up backups.
 - **No stable Kubernetes API address:** Additional servers join via the external SQL datastore; agents and external users should eventually use a stable HA API address/LB. `tls-san` currently includes only the node IP.
-- **Verification:** The QEMU lab grew to three hosts, each running CockroachDB and K3s with local TLS SQL. All three nodes reached Ready, all APIs passed readiness, all six directed DNS/service HTTP tests passed, and CockroachDB reported three live nodes with RF=3 and no under-replicated ranges. A Kubernetes write/read passed through the surviving nodes while kube1's SQL process was stopped, then that service was restored. Single-node reboot recovery also passed earlier. See [QEMU-LAB.md](QEMU-LAB.md) for versions and limits. Direct fresh-three-node initialization remains untested.
+- **Verification:** The original QEMU lab grew to three hosts, each running CockroachDB and K3s with local TLS SQL. All three nodes reached Ready, all APIs passed readiness, all six directed DNS/service HTTP tests passed, and CockroachDB reported three live nodes with RF=3 and no under-replicated ranges. A Kubernetes write/read passed through the surviving nodes while kube1's SQL process was stopped, then that service was restored. Single-node reboot recovery also passed earlier. See [QEMU-LAB.md](QEMU-LAB.md) for those versions and limits. A separate [Pulumi/libvirt smoke test](infra/qemu/README.md#verification) passed fresh three-node initialization on 2026-10-25, with all APIs ready, all nodes Ready, and all six directed DNS/service HTTP checks passing. Fault recovery has not been tested on that new stack.
 - **CockroachDB compatibility:** Bootstrap SQL sets the Kine user's `serial_normalization=sql_sequence` before Kine creates its table. Existing tables created with `unique_rowid()` are not repaired by that setting. Kine also issues a PostgreSQL `pg_total_relation_size()` query that CockroachDB does not implement; the lab logs datastore-size/status warnings even while API readiness passes. CockroachDB is not among K3s's officially supported external datastores.
 
 ## References

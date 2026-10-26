@@ -1,7 +1,9 @@
 import base64
 import json
+import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +11,18 @@ import generate
 
 
 class GeneratorTests(unittest.TestCase):
+    def test_tls_san_validation(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(generate, 'CONFIG', Path(tmp) / 'cluster.json'):
+            data = self.data()
+            for invalid in ('api.example.test', [None], ['https://api.example.test'], ['host:6443'], ['bad..name']):
+                data['tls_sans'] = invalid
+                generate.CONFIG.write_text(json.dumps(data))
+                with self.assertRaises(ValueError):
+                    generate.config()
+            data['tls_sans'] = ['api.example.test', '192.0.2.10', '2001:db8::1']
+            generate.CONFIG.write_text(json.dumps(data))
+            self.assertEqual(generate.config()['tls_sans'], data['tls_sans'])
+
     def data(self):
         data = json.loads((generate.HERE / 'cluster.json').read_text())
         data['ssh_authorized_key'] = 'ssh-ed25519 AAAATEST'
@@ -46,6 +60,7 @@ class GeneratorTests(unittest.TestCase):
             pki = root / 'pki'
             pki.mkdir()
             data = self.data()
+            data['tls_sans'] = ['api.example.test']
             for node in data['nodes']:
                 dst = pki / node['name']
                 dst.mkdir()
@@ -85,6 +100,8 @@ class GeneratorTests(unittest.TestCase):
                     'target': '/usr/local/lib/systemd/system/k3s-agent.service', 'overwrite': True,
                 }])
                 server = json.loads((root / 'output/kube1.ign').read_text())
+                server_conf = next(f for f in server['storage']['files'] if f['path'] == '/etc/rancher/k3s/config.yaml')
+                self.assertIn('  - "api.example.test"\n', base64.b64decode(server_conf['contents']['source'].split(',')[1]).decode())
                 db_unit = server['systemd']['units'][0]['contents']
                 self.assertIn('192.168.1.104:26257', db_unit)
                 self.assertIn('192.168.1.101:26257', db_unit)
@@ -170,6 +187,35 @@ class GeneratorTests(unittest.TestCase):
                 self.assertIn(' start --certs-dir', unit)
                 self.assertIn('--join=', unit)
                 self.assertNotIn('--insecure', unit)
+                data['cockroach_storage'] = 'azure-temporary'
+                data['nodes'][0]['locality'] = 'cloud=azure,region=westus2,zone=1'
+                generate.ignition(data)
+                temp = json.loads((root / 'output/kube1.ign').read_text())
+                unit = temp['systemd']['units'][0]['contents']
+                self.assertIn('src=/mnt/resource/cockroach', unit)
+                self.assertNotIn('src=/var/lib/cockroach', unit)
+                self.assertIn('Requires=docker.service waagent.service', unit)
+                self.assertIn('--locality=cloud=azure,region=westus2,zone=1', unit)
+                checker = next(f for f in temp['storage']['files'] if f['path'].endswith('/check-cockroach-storage'))
+                script = base64.b64decode(checker['contents']['source'].split(',')[1]).decode()
+                self.assertIn('findmnt -rn -M /mnt/resource -o FSTYPE', script)
+                self.assertIn(str(64 * 1024 ** 3), script)
+                self.assertNotIn('mkfs', script)
+                # Exercise fail-closed mount checks without mounting or formatting disks.
+                checker_path = root / 'check-storage'
+                checker_path.write_text(script)
+                finder = root / 'findmnt'
+                finder.write_text('#!/bin/sh\ncase "$*" in *FSTYPE*) echo "$TEST_FS";; *) echo "$TEST_SIZE";; esac\n')
+                finder.chmod(0o755)
+                for filesystem, size, expected in [('ext4', 75 * 1024**3, 0),
+                                                    ('ntfs', 75 * 1024**3, 1),
+                                                    ('ext4', 32 * 1024**3, 1),
+                                                    ('', '', 1)]:
+                    env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                               TEST_FS=filesystem, TEST_SIZE=str(size))
+                    checked = subprocess.run(['/bin/sh', str(checker_path)], env=env, capture_output=True)
+                    self.assertEqual(checked.returncode, expected)
+                data.pop('cockroach_storage')
                 data.update(single_node_lab=True, nodes=data['nodes'][:1])
                 generate.ignition(data)
                 unit = json.loads((root / 'output/kube1.ign').read_text())['systemd']['units'][0]['contents']

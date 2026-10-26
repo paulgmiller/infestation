@@ -13,10 +13,12 @@ import (
 
 // Cluster and Node mirror the shared generator inputs; cloud settings stay separate.
 type Cluster struct {
-	Architecture     string `json:"architecture"`
-	SingleNodeLab    bool   `json:"single_node_lab"`
-	SSHAuthorizedKey string `json:"ssh_authorized_key"`
-	Nodes            []Node `json:"nodes"`
+	Architecture     string   `json:"architecture"`
+	SingleNodeLab    bool     `json:"single_node_lab"`
+	SSHAuthorizedKey string   `json:"ssh_authorized_key"`
+	TLSSANs          []string `json:"tls_sans"`
+	CockroachStorage string   `json:"cockroach_storage"`
+	Nodes            []Node   `json:"nodes"`
 }
 
 type Node struct {
@@ -25,6 +27,7 @@ type Node struct {
 	Role        string `json:"role"`
 	CockroachDB *bool  `json:"cockroachdb"`
 	ClusterMAC  string `json:"cluster_mac"`
+	Locality    string `json:"locality"`
 }
 
 func (n Node) worker() bool   { return n.Role == "worker" }
@@ -38,6 +41,15 @@ type Settings struct {
 	PublicNodeIPs                          bool
 	AdminCIDRs                             []string
 	OSDiskSizeGB                           int
+	OSDiskStorageAccountType               string
+	APILoadBalancer                        bool
+	APIDNSLabel                            string
+	APIAdminCIDRs                          []string
+	OutboundPortsPerNode                   int
+}
+
+func (s Settings) apiHostname() string {
+	return s.APIDNSLabel + "." + s.Location + ".cloudapp.azure.com"
 }
 
 type Deployment struct {
@@ -71,13 +83,26 @@ type ignitionDocument struct {
 	} `json:"storage"`
 	Systemd struct {
 		Units []struct {
-			Name    string `json:"name"`
-			Enabled bool   `json:"enabled"`
+			Name     string `json:"name"`
+			Enabled  bool   `json:"enabled"`
+			Contents string `json:"contents"`
 		} `json:"units"`
 	} `json:"systemd"`
 }
 
 func loadDeployment(s Settings) (*Deployment, error) {
+	if s.OSDiskStorageAccountType == "" {
+		s.OSDiskStorageAccountType = "StandardSSD_LRS"
+	}
+	if s.OSDiskStorageAccountType != "StandardSSD_LRS" && s.OSDiskStorageAccountType != "Premium_LRS" {
+		return nil, fmt.Errorf("osDiskStorageAccountType must be StandardSSD_LRS or Premium_LRS")
+	}
+	if s.OutboundPortsPerNode == 0 {
+		s.OutboundPortsPerNode = 1024
+	}
+	if s.OutboundPortsPerNode < 8 || s.OutboundPortsPerNode > 63992 || s.OutboundPortsPerNode%8 != 0 {
+		return nil, fmt.Errorf("outboundPortsPerNode must be a multiple of 8 between 8 and 63992")
+	}
 	if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,29}$`).MatchString(s.Name) {
 		return nil, fmt.Errorf("name must start with a lowercase letter and contain at most 30 lowercase letters, digits or hyphens")
 	}
@@ -104,10 +129,19 @@ func loadDeployment(s Settings) (*Deployment, error) {
 	if s.PublicNodeIPs && len(s.AdminCIDRs) == 0 {
 		return nil, fmt.Errorf("publicNodeIPs requires explicit adminCIDRs")
 	}
+	if s.APILoadBalancer && (len(s.APIAdminCIDRs) == 0 || !regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`).MatchString(s.APIDNSLabel)) {
+		return nil, fmt.Errorf("apiLoadBalancer requires explicit apiAdminCIDRs and an Azure-compatible apiDNSLabel")
+	}
 	for _, cidr := range s.AdminCIDRs {
 		p, err := netip.ParsePrefix(cidr)
 		if err != nil || !p.Addr().Is4() || p.Bits() == 0 {
 			return nil, fmt.Errorf("adminCIDRs must contain explicit IPv4 CIDRs, not 0.0.0.0/0")
+		}
+	}
+	for _, cidr := range s.APIAdminCIDRs {
+		p, err := netip.ParsePrefix(cidr)
+		if err != nil || !p.Addr().Is4() {
+			return nil, fmt.Errorf("apiAdminCIDRs must contain IPv4 CIDRs")
 		}
 	}
 	data, err := os.ReadFile(s.ClusterPath)
@@ -118,9 +152,25 @@ func loadDeployment(s Settings) (*Deployment, error) {
 	if err := json.Unmarshal(data, &d.Cluster); err != nil {
 		return nil, fmt.Errorf("decode cluster configuration: %w", err)
 	}
+	if len(d.Cluster.Nodes) > 63992/s.OutboundPortsPerNode {
+		return nil, fmt.Errorf("outboundPortsPerNode exceeds the single frontend IP SNAT budget for this node count")
+	}
+	if s.APILoadBalancer {
+		found := false
+		for _, san := range d.Cluster.TLSSANs {
+			found = found || san == s.apiHostname()
+		}
+		if !found {
+			return nil, fmt.Errorf("add %s to cluster.json tls_sans before enabling the API load balancer", s.apiHostname())
+		}
+	}
 	if d.Cluster.Architecture != "x86-64" || d.Cluster.SingleNodeLab {
 		return nil, fmt.Errorf("Azure requires x86-64 and multi-node database mode")
 	}
+	if storage := d.Cluster.CockroachStorage; storage != "" && storage != "persistent" && storage != "azure-temporary" {
+		return nil, fmt.Errorf("unsupported CockroachDB storage profile")
+	}
+	databaseZones := map[string]bool{}
 	if !strings.HasPrefix(d.Cluster.SSHAuthorizedKey, "ssh-ed25519 AAAA") && !strings.HasPrefix(d.Cluster.SSHAuthorizedKey, "ssh-rsa AAAA") {
 		return nil, fmt.Errorf("set a real Azure-compatible SSH public key in cluster.json")
 	}
@@ -149,6 +199,12 @@ func loadDeployment(s Settings) (*Deployment, error) {
 		if zone := s.NodeZones[node.Name]; zone != "1" && zone != "2" && zone != "3" {
 			return nil, fmt.Errorf("nodeZones must assign zone 1, 2, or 3 to %s", node.Name)
 		}
+		if d.Cluster.CockroachStorage == "azure-temporary" && node.database() && node.Locality != "cloud=azure,region="+s.Location+",zone="+s.NodeZones[node.Name] {
+			return nil, fmt.Errorf("temporary-disk database node %s locality must match its Azure zone", node.Name)
+		}
+		if node.database() {
+			databaseZones[s.NodeZones[node.Name]] = true
+		}
 		data, err := os.ReadFile(filepath.Join(s.IgnitionDir, node.Name+".ign"))
 		if err != nil {
 			return nil, fmt.Errorf("read Ignition for %s: %w", node.Name, err)
@@ -156,13 +212,35 @@ func loadDeployment(s Settings) (*Deployment, error) {
 		if len(data) > 65535 {
 			return nil, fmt.Errorf("Ignition for %s exceeds Azure's 65535-byte custom-data limit", node.Name)
 		}
-		if err := validateIgnition(data, node, d.Cluster.SSHAuthorizedKey); err != nil {
+		if err := validateIgnition(data, node, d.Cluster.SSHAuthorizedKey, d.Cluster.TLSSANs); err != nil {
 			return nil, fmt.Errorf("Ignition for %s is stale or mismatched: %w; regenerate with the same cluster.json", node.Name, err)
+		}
+		if d.Cluster.CockroachStorage == "azure-temporary" && node.database() {
+			var doc ignitionDocument
+			_ = json.Unmarshal(data, &doc)
+			found := false
+			unitMatches := false
+			for _, f := range doc.Storage.Files {
+				found = found || f.Path == "/usr/local/sbin/check-cockroach-storage"
+			}
+			for _, unit := range doc.Systemd.Units {
+				if unit.Name == "cockroachdb.service" {
+					unitMatches = strings.Contains(unit.Contents, "src=/mnt/resource/cockroach,") &&
+						strings.Contains(unit.Contents, "ExecStartPre=/usr/local/sbin/check-cockroach-storage\n") &&
+						strings.Contains(unit.Contents, "--locality="+node.Locality+" ")
+				}
+			}
+			if !found || !unitMatches {
+				return nil, fmt.Errorf("temporary disk profile missing for %s; regenerate Ignition", node.Name)
+			}
 		}
 		d.Ignition[node.Name] = data
 	}
 	if servers != 3 {
 		return nil, fmt.Errorf("include exactly three K3s servers plus all workers")
+	}
+	if d.Cluster.CockroachStorage == "azure-temporary" && len(databaseZones) < 3 {
+		return nil, fmt.Errorf("temporary-disk databases must span three zones")
 	}
 	if len(s.NodeZones) != len(names) {
 		return nil, fmt.Errorf("nodeZones must contain exactly the configured nodes")
@@ -186,7 +264,7 @@ func reservedAzureIP(prefix netip.Prefix, ip netip.Addr) bool {
 	return ip == netip.AddrFrom4(last)
 }
 
-func validateIgnition(data []byte, node Node, sshKey string) error {
+func validateIgnition(data []byte, node Node, sshKey string, sans []string) error {
 	var doc ignitionDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("invalid JSON")
@@ -208,6 +286,14 @@ func validateIgnition(data []byte, node Node, sshKey string) error {
 		return fmt.Errorf("hostname differs")
 	}
 	conf := files["/etc/rancher/k3s/config.yaml"]
+	if !node.worker() {
+		for _, san := range sans {
+			encoded, _ := json.Marshal(san)
+			if !strings.Contains(conf, "  - "+string(encoded)+"\n") {
+				return fmt.Errorf("TLS SAN missing; regenerate Ignition")
+			}
+		}
+	}
 	if !strings.Contains(conf, "node-ip: \""+node.IP+"\"") {
 		return fmt.Errorf("node IP differs")
 	}

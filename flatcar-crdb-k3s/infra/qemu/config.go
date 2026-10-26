@@ -25,6 +25,7 @@ type Node struct {
 func (n Node) database() bool { return n.CockroachDB == nil || *n.CockroachDB }
 
 type Cluster struct {
+	CockroachStorage string `json:"cockroach_storage"`
 	Architecture     string `json:"architecture"`
 	SSHAuthorizedKey string `json:"ssh_authorized_key"`
 	SingleNodeLab    bool   `json:"single_node_lab"`
@@ -95,6 +96,9 @@ func loadDeployment(s Settings) (*Deployment, error) {
 	broadcast := netip.AddrFrom4(last)
 	if err := json.Unmarshal(data, &d.Cluster); err != nil {
 		return nil, err
+	}
+	if d.Cluster.CockroachStorage == "azure-temporary" {
+		return nil, fmt.Errorf("Azure temporary-disk storage is not available on the QEMU target")
 	}
 	if d.Cluster.Architecture != "x86-64" {
 		return nil, fmt.Errorf("this local QEMU target requires x86-64")

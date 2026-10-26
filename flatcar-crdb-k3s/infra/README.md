@@ -13,8 +13,16 @@ it does not reimplement certificate generation or host-service configuration.
 The [local QEMU/KVM target](qemu/README.md) uses Pulumi Go with the current
 libvirt provider, a NAT network, fixed DHCP reservations, and persistent qcow2
 disks. It consumes the same generator outputs and keeps its resources separate
-from the older direct-QEMU lab. Both targets are locally tested with mocks;
-neither has been boot-tested through Pulumi yet.
+from the older direct-QEMU lab. Both targets are locally tested with mocks.
+The local target also passed a fresh three-node Pulumi deployment on 2026-10-25:
+three Ready nodes, healthy Cilium, all APIs ready, and all six cross-node
+DNS/service HTTP checks passed. A three-zone Azure deployment also passed on
+that date, including the same connectivity checks and a public API load
+balancer with verified TLS; see the [Azure runbook](azure/RUNBOOK.md).
+That tested Azure group has been deleted. The revised Azure profile uses SLB
+egress, automatically selected/pinned sizes and zones, temporary Cockroach disks,
+and an automated bootstrap wrapper. It has mock/unit and Azure preview validation;
+its new first-boot and recovery paths have not yet been tested on VMs.
 
 For Google Cloud, the equivalent target is **Compute Engine VMs**, and for AWS
 it is **EC2**. These would get separate cloud definitions around the same node

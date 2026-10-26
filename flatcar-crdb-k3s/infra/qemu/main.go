@@ -138,15 +138,18 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 					Source: &libvirt.DomainDevicesInterfaceSourceArgs{Network: &libvirt.DomainDevicesInterfaceSourceNetworkArgs{Network: network.Name}},
 				}},
 				Serials: libvirt.DomainDevicesSerialArray{&libvirt.DomainDevicesSerialArgs{
-					Source: &libvirt.DomainDevicesSerialSourceArgs{Pty: &libvirt.DomainDevicesSerialSourcePtyArgs{}},
+					Source: &libvirt.DomainDevicesSerialSourceArgs{Pty: &libvirt.DomainDevicesSerialSourcePtyArgs{Path: pulumi.String("")}},
 					Target: &libvirt.DomainDevicesSerialTargetArgs{Port: pulumi.Float64(0)},
 				}},
 				Consoles: libvirt.DomainDevicesConsoleArray{&libvirt.DomainDevicesConsoleArgs{
-					Source: &libvirt.DomainDevicesConsoleSourceArgs{Pty: &libvirt.DomainDevicesConsoleSourcePtyArgs{}},
+					Source: &libvirt.DomainDevicesConsoleSourceArgs{Pty: &libvirt.DomainDevicesConsoleSourcePtyArgs{Path: pulumi.String("")}},
 					Target: &libvirt.DomainDevicesConsoleTargetArgs{Type: pulumi.String("serial"), Port: pulumi.Float64(0)},
 				}},
 			},
-		}, providerOpt, pulumi.Protect(true))
+		}, providerOpt, pulumi.Protect(true), pulumi.IgnoreChanges([]string{
+			"devices.serials[0].source.pty.path",
+			"devices.consoles[0].source.pty.path",
+		}))
 		if err != nil {
 			return err
 		}

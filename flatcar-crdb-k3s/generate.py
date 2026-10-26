@@ -32,7 +32,22 @@ def runs_cockroach(node):
 
 def config():
     data = json.loads(CONFIG.read_text())
+    sans = data.get('tls_sans', [])
+    if not isinstance(sans, list) or any(not isinstance(s, str) or not s or len(s) > 253
+                                       or not re.fullmatch(r'[A-Za-z0-9.:-]+', s) for s in sans):
+        raise ValueError('tls_sans must be a list of DNS names or IP addresses without ports or URLs')
+    for san in sans:
+        try:
+            ipaddress.ip_address(san)
+        except ValueError:
+            if not all(re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label)
+                       for label in san.split('.')):
+                raise ValueError('tls_sans must contain valid DNS names or IP addresses')
     nodes = data['nodes']
+    if data.get('cockroach_storage', 'persistent') not in ('persistent', 'azure-temporary'):
+        raise ValueError('cockroach_storage must be persistent or azure-temporary')
+    if not isinstance(data.get('cockroach_min_disk_gib', 64), int) or data.get('cockroach_min_disk_gib', 64) < 1:
+        raise ValueError('cockroach_min_disk_gib must be a positive integer')
     if any(n.get('role', 'server') not in ('server', 'worker') for n in nodes):
         raise ValueError('role must be server or worker')
     count = 1 if data.get('single_node_lab', False) else 3
@@ -42,6 +57,8 @@ def config():
     if len({x['name'] for x in nodes}) != len(nodes) or len({x['ip'] for x in nodes}) != len(nodes):
         raise ValueError('Node names and IP addresses must be distinct')
     for n in nodes:
+        if 'locality' in n and not re.fullmatch(r'[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+)*', n['locality']):
+            raise ValueError('locality must be comma-separated key=value tiers')
         ipaddress.ip_address(n['ip'])
         if 'datastore_host' in n:
             ipaddress.ip_address(n['datastore_host'])
@@ -126,24 +143,28 @@ def ignite_file(path, content=None, mode=0o644, *, url=None):
             'contents': {'source': url} if url else contents(content)}
 
 
-def cockroach_unit(node, seeds, image, single_node=False, cache='512MiB', sql_memory='512MiB'):
+def cockroach_unit(node, seeds, image, single_node=False, cache='512MiB', sql_memory='512MiB', storage='persistent'):
     ip = node['ip']
     command = 'start-single-node' if single_node else 'start'
     join = '' if single_node else f' --join={seeds}'
+    locality = f' --locality={node["locality"]}' if node.get('locality') else ''
+    store = '/mnt/resource/cockroach' if storage == 'azure-temporary' else '/var/lib/cockroach'
+    disk_dependency = ' waagent.service' if storage == 'azure-temporary' else ''
+    disk_check = 'ExecStartPre=/usr/local/sbin/check-cockroach-storage\n' if storage == 'azure-temporary' else ''
     return f'''[Unit]
 Description=CockroachDB host datastore
 Wants=network-online.target
-After=network-online.target docker.service
-Requires=docker.service
+After=network-online.target docker.service{disk_dependency}
+Requires=docker.service{disk_dependency}
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 TimeoutStartSec=0
 TimeoutStopSec=120
-ExecStartPre=/usr/bin/install -d -o 1000 -g 1000 -m 0700 /var/lib/cockroach
+{disk_check}ExecStartPre=/usr/bin/install -d -o 1000 -g 1000 -m 0700 {store}
 ExecStartPre=-/usr/bin/docker rm -f cockroachdb
-ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=/var/lib/cockroach,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --entrypoint=/cockroach/cockroach {image} {command} --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr={ip}:26257 --http-addr=127.0.0.1:8080{join} --cache={cache} --max-sql-memory={sql_memory} --logtostderr=INFO
+ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src={store},dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --entrypoint=/cockroach/cockroach {image} {command} --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr={ip}:26257 --http-addr=127.0.0.1:8080{join}{locality} --cache={cache} --max-sql-memory={sql_memory} --logtostderr=INFO
 ExecStop=/usr/bin/docker stop --time 90 cockroachdb
 Restart=always
 RestartSec=10
@@ -192,6 +213,15 @@ def ignition(data):
             ignite_file('/etc/flatcar/update.conf', 'REBOOT_STRATEGY=off\n'),
             ignite_file('/etc/extensions/k3s.raw', mode=0o644, url=ext_path),
         ]
+        if runs_cockroach(node) and data.get('cockroach_storage') == 'azure-temporary':
+            # Flatcar's Azure WAAgent defaults format the SCSI resource disk as
+            # ext4 and mount it here on every boot. Never fall back to the OS disk.
+            minimum = data.get('cockroach_min_disk_gib', 64) * 1024 ** 3
+            files.append(ignite_file('/usr/local/sbin/check-cockroach-storage', f'''#!/bin/sh
+set -eu
+test "$(findmnt -rn -M /mnt/resource -o FSTYPE)" = ext4
+test "$(findmnt -brn -M /mnt/resource -o SIZE)" -ge {minimum}
+''', 0o755))
         if 'cluster_mac' in node:
             files.append(ignite_file('/etc/systemd/network/10-lab-cluster.network',
                                      cluster_network(node)))
@@ -213,10 +243,11 @@ node-ip: "{ip}"
                 server_url = f'https://{host}:6443'
             k3s_conf += f'server: {json.dumps(server_url)}\n'
         else:
+            sans = list(dict.fromkeys([ip, *data.get('tls_sans', [])]))
+            san_yaml = ''.join(f'  - {json.dumps(san)}\n' for san in sans)
             k3s_conf += f'''advertise-address: "{ip}"
 tls-san:
-  - "{ip}"
-datastore-endpoint: "postgres://kine@{node.get('datastore_host', '127.0.0.1')}:26257/kubernetes?sslmode=verify-full"
+{san_yaml}datastore-endpoint: "postgres://kine@{node.get('datastore_host', '127.0.0.1')}:26257/kubernetes?sslmode=verify-full"
 datastore-cafile: /etc/cockroach/certs/ca.crt
 datastore-certfile: /etc/cockroach/certs/client.kine.crt
 datastore-keyfile: /etc/cockroach/certs/client.kine.key
@@ -241,7 +272,8 @@ disable:
             'systemd': {'units': [
                 {'name': 'cockroachdb.service', 'enabled': True,
                  'contents': cockroach_unit(node, seeds, data['cockroach_image'], data.get('single_node_lab', False),
-                                            data.get('cockroach_cache', '512MiB'), data.get('cockroach_sql_memory', '512MiB'))},
+                                            data.get('cockroach_cache', '512MiB'), data.get('cockroach_sql_memory', '512MiB'),
+                                            data.get('cockroach_storage', 'persistent'))},
                 {'name': service, 'dropins': [
                     {'name': '10-cockroach-dependency.conf', 'contents':
                      '[Unit]\nAfter=cockroachdb.service\nWants=cockroachdb.service\n'

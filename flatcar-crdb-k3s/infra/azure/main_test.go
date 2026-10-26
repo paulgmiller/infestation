@@ -40,6 +40,7 @@ func fixture(t *testing.T, workerDB bool) Settings {
 	nodes = append(nodes, worker)
 	cluster["nodes"] = nodes
 	cluster["architecture"] = "x86-64"
+	cluster["tls_sans"] = []string{"test-api.westus2.cloudapp.azure.com"}
 	delete(cluster, "single_node_lab")
 	configPath := filepath.Join(root, "cluster.json")
 	writeJSON(t, configPath, cluster)
@@ -89,7 +90,20 @@ func TestRejectInvalidDeployment(t *testing.T) {
 		{"no-ssh-source", "adminCIDRs", func(s *Settings) { s.PublicNodeIPs = true }},
 		{"worldwide-ssh", "not 0.0.0.0/0", func(s *Settings) { s.AdminCIDRs = []string{"0.0.0.0/0"} }},
 		{"missing-zone", "nodeZones", func(s *Settings) { delete(s.NodeZones, "worker1") }},
+		{"invalid-snat-port-block", "multiple of 8", func(s *Settings) { s.OutboundPortsPerNode = 1025 }},
+		{"snat-budget", "SNAT budget", func(s *Settings) { s.OutboundPortsPerNode = 32000 }},
 		{"extra-zone", "exactly", func(s *Settings) { s.NodeZones["unknown"] = "1" }},
+		{"api-needs-sources", "apiAdminCIDRs", func(s *Settings) { s.APILoadBalancer = true; s.APIDNSLabel = "test-api" }},
+		{"api-invalid-source", "IPv4 CIDRs", func(s *Settings) {
+			s.APILoadBalancer = true
+			s.APIDNSLabel = "test-api"
+			s.APIAdminCIDRs = []string{"invalid"}
+		}},
+		{"api-missing-san", "tls_sans", func(s *Settings) {
+			s.APILoadBalancer = true
+			s.APIDNSLabel = "other-api"
+			s.APIAdminCIDRs = []string{"203.0.113.10/32"}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -168,8 +182,19 @@ func TestAzureResources(t *testing.T) {
 			vms, publicIPs, sshRules := 0, 0, 0
 			for _, res := range mocks.resources {
 				switch res.TypeToken {
+				case "azure-native:network:NatGateway":
+					t.Error("NAT Gateway must not be provisioned")
+				case "azure-native:network:LoadBalancer":
+					outbound := res.Inputs["outboundRules"].ArrayValue()[0].ObjectValue()
+					if outbound["protocol"].StringValue() != "All" || outbound["allocatedOutboundPorts"].NumberValue() != 1024 {
+						t.Error("SLB must provide explicit TCP/UDP egress with per-node SNAT allocation")
+					}
 				case "azure-native:compute:VirtualMachine":
 					vms++
+					image := plain(res.Inputs["storageProfile"]).ObjectValue()["imageReference"].ObjectValue()
+					if image["offer"].StringValue() != "flatcar-container-linux-corevm-amd64" || !res.Inputs["plan"].IsNull() {
+						t.Error("use the CoreVM image without a Marketplace purchase plan")
+					}
 					if !res.RegisterRPC.GetProtect() || !slices.Contains(res.RegisterRPC.GetIgnoreChanges(), "osProfile.customData") {
 						t.Error("VMs must be protected and keep their first-boot custom data")
 					}
@@ -201,10 +226,14 @@ func TestAzureResources(t *testing.T) {
 					if res.Inputs["defaultOutboundAccess"].BoolValue() {
 						t.Error("use explicit egress")
 					}
-					if _, ok := res.Inputs["natGateway"]; !ok {
-						t.Error("private nodes need NAT for first boot")
+					if value := res.Inputs["natGateway"]; !value.IsNull() {
+						t.Error("subnet must use SLB egress")
 					}
 				case "azure-native:network:NetworkInterface":
+					pools := res.Inputs["ipConfigurations"].ArrayValue()[0].ObjectValue()["loadBalancerBackendAddressPools"].ArrayValue()
+					if len(pools) != 1 || !strings.HasSuffix(pools[0].ObjectValue()["id"].StringValue(), "/backendAddressPools/egress") {
+						t.Error("every node must join the egress pool")
+					}
 					if res.Name == "node-worker1" {
 						ip := res.Inputs["ipConfigurations"].ArrayValue()[0].ObjectValue()["privateIPAddress"].StringValue()
 						if ip != "192.168.1.104" {
@@ -223,7 +252,7 @@ func TestAzureResources(t *testing.T) {
 					}
 				}
 			}
-			wantIPs, wantSSH := 1, 0 // One NAT public IP even when the nodes are private.
+			wantIPs, wantSSH := 1, 0 // One SLB public IP even when the nodes are private.
 			if public {
 				wantIPs, wantSSH = 5, 1
 			}
@@ -241,5 +270,111 @@ func TestWorkerDatabaseOptOut(t *testing.T) {
 	}
 	if strings.Contains(string(d.Ignition["worker1"]), "cockroachdb.service") {
 		t.Error("explicit CockroachDB opt-out must survive cloud provisioning")
+	}
+}
+
+func TestAPILoadBalancer(t *testing.T) {
+	s := fixture(t, true)
+	s.APILoadBalancer = true
+	s.APIDNSLabel = "test-api"
+	s.APIAdminCIDRs = []string{"0.0.0.0/0"}
+	d, err := loadDeployment(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mocks := &mockAzure{}
+	if err := pulumi.RunErr(func(ctx *pulumi.Context) error { return deploy(ctx, d) }, pulumi.WithMocks("test", "test", mocks)); err != nil {
+		t.Fatal(err)
+	}
+	lbCount, backends, apiRules, probeRules := 0, 0, 0, 0
+	for _, res := range mocks.resources {
+		switch res.TypeToken {
+		case "azure-native:network:LoadBalancer":
+			lbCount++
+			rule := res.Inputs["loadBalancingRules"].ArrayValue()[0].ObjectValue()
+			if rule["protocol"].StringValue() != "Tcp" || rule["frontendPort"].NumberValue() != 6443 || rule["backendPort"].NumberValue() != 6443 || !rule["disableOutboundSnat"].BoolValue() {
+				t.Error("API must use TCP passthrough on 6443, with separate explicit egress")
+			}
+			probe := res.Inputs["probes"].ArrayValue()[0].ObjectValue()
+			if probe["protocol"].StringValue() != "Tcp" || probe["port"].NumberValue() != 6443 {
+				t.Error("probe must check API listener")
+			}
+		case "azure-native:network:NetworkInterface":
+			cfg := res.Inputs["ipConfigurations"].ArrayValue()[0].ObjectValue()
+			pool := cfg["loadBalancerBackendAddressPools"]
+			for _, entry := range pool.ArrayValue() {
+				if strings.HasSuffix(entry.ObjectValue()["id"].StringValue(), "/backendAddressPools/servers") {
+					backends++
+					if res.Name == "node-worker1" {
+						t.Error("workers must not be API backends")
+					}
+				}
+			}
+		case "azure-native:network:NetworkSecurityGroup":
+			for _, item := range res.Inputs["securityRules"].ArrayValue() {
+				rule := item.ObjectValue()
+				switch rule["name"].StringValue() {
+				case "management-api":
+					apiRules++
+					if rule["destinationPortRange"].StringValue() != "6443" || rule["sourceAddressPrefixes"].ArrayValue()[0].StringValue() != "0.0.0.0/0" {
+						t.Error("only the API port should use the explicitly configured public source range")
+					}
+				case "api-health-probe":
+					probeRules++
+					if rule["sourceAddressPrefix"].StringValue() != "AzureLoadBalancer" || rule["destinationPortRange"].StringValue() != "6443" {
+						t.Error("allow only Azure API health probes")
+					}
+				}
+			}
+		}
+	}
+	if lbCount != 1 || backends != 3 || apiRules != 1 || probeRules != 1 {
+		t.Fatalf("load balancer=%d backends=%d api rules=%d probe rules=%d", lbCount, backends, apiRules, probeRules)
+	}
+}
+
+func TestTemporaryDatabaseStorage(t *testing.T) {
+	s := fixture(t, true)
+	data, err := os.ReadFile(s.ClusterPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cluster map[string]any
+	if err := json.Unmarshal(data, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster["cockroach_storage"] = "azure-temporary"
+	for _, raw := range cluster["nodes"].([]any) {
+		node := raw.(map[string]any)
+		node["locality"] = "cloud=azure,region=westus2,zone=" + s.NodeZones[node["name"].(string)]
+	}
+	writeJSON(t, s.ClusterPath, cluster)
+	cmd := exec.Command("python3", "../../generate.py", "ignition", "--config", s.ClusterPath, "--state-dir", filepath.Dir(s.ClusterPath))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate: %v: %s", err, output)
+	}
+	if _, err := loadDeployment(s); err != nil {
+		t.Fatal(err)
+	}
+	s.NodeZones["kube1"] = "2"
+	if _, err := loadDeployment(s); err == nil || !strings.Contains(err.Error(), "locality must match") {
+		t.Fatalf("expected locality mismatch, got %v", err)
+	}
+	s.NodeZones["kube1"] = "1"
+	doc := ignitionDocument{}
+	path := filepath.Join(s.IgnitionDir, "kube1.ign")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for i := range doc.Systemd.Units {
+		doc.Systemd.Units[i].Contents = strings.ReplaceAll(doc.Systemd.Units[i].Contents, "src=/mnt/resource/cockroach,", "src=/var/lib/cockroach,")
+	}
+	writeJSON(t, path, doc)
+	if _, err := loadDeployment(s); err == nil || !strings.Contains(err.Error(), "temporary disk profile missing") {
+		t.Fatalf("expected OS-disk fallback rejection, got %v", err)
 	}
 }

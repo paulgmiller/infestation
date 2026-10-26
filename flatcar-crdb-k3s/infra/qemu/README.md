@@ -1,5 +1,8 @@
 # Local QEMU/KVM with Pulumi Go and libvirt
 
+For the tested host setup, existing-stack commands, and troubleshooting lessons,
+see the [smoke deployment runbook](RUNBOOK.md).
+
 This target creates a fresh local cluster through `qemu:///system`: a directory
 storage pool, an IPv4 NAT network, fixed DHCP reservations, a read-only base image,
 one persistent qcow2 overlay per node, and a private Ignition volume per node.
@@ -21,9 +24,9 @@ modify, stop, or delete that lab's VMs, disks, or credentials.
 Check existing host resources without changing them:
 
 ```bash
-virsh -c qemu:///system list --all
-virsh -c qemu:///system net-list --all
-virsh -c qemu:///system pool-list --all
+virsh --readonly -c qemu:///system list --all
+virsh --readonly -c qemu:///system net-list --all
+virsh --readonly -c qemu:///system pool-list --all
 ```
 
 Identify the numeric UID/GID of the account that actually runs QEMU. Common
@@ -31,6 +34,19 @@ account names are `qemu` and `libvirt-qemu`; consult your host's libvirt setup.
 For example, inspect `getent passwd qemu` and `getent group qemu`. Do not use your
 own UID merely because you invoke Pulumi. The pool uses mode `0700` and volumes
 use `0600`, owned by the configured QEMU account.
+
+On Omarchy, the packaged polkit rule grants members of the `libvirt` group
+management access without repeated admin dialogs. Have an administrator add
+your user to that group, then start a new login session or use
+`newgrp libvirt -c 'pulumi preview --diff'` to pick up the new group immediately.
+Read-only virsh commands above do not require management authorization.
+
+If the host firewall defaults to dropping incoming and forwarded traffic,
+allow DHCP requests on the test bridge (UDP 67), DNS from the test subnet to
+its gateway (TCP/UDP 53), and forwarded traffic for subnet egress and peers.
+Scope rules to the actual bridge/subnet, found with `virsh net-info` and
+`virsh net-dumpxml`; keep the host firewall enabled. Without these rules,
+the domains can be running while first-boot DHCP or downloads are blocked.
 
 ## Prepare the project
 
@@ -204,9 +220,38 @@ worker database defaults, stale profiles, subnet validation, and the single-node
 database guard. The image helper's checksum and overwrite behavior is also tested.
 
 The provider SDK has been generated and the Go program compiled and tested.
-**No libvirt network, disk, or VM has been created, and first boot has not been
-verified.** This environment lacks libvirt/QEMU executables, so VM integration
-testing must run on a host with those prerequisites.
+
+On 2026-10-25, a native Omarchy smoke deployment used Pulumi 3.272.0, libvirt
+12.8.0, QEMU 11.1.2, and Flatcar 4757.2.2. Preview and apply succeeded, creating
+14 resources including three running VMs, each with 4 GiB RAM, two vCPUs, and a
+40 GiB overlay, on the `192.168.124.0/24` NAT network. Real provider validation
+required explicit empty PTY paths for libvirt to allocate the serial consoles;
+the program now supplies those values and ignores subsequent runtime PTY-path
+changes. A final preview with refresh reported **14 unchanged resources**.
+
+The fresh three-node integration smoke test passed:
+
+- All three DHCP reservations were leased; SSH and outbound HTTPS worked.
+- CockroachDB 26.2.7 was initialized once with TLS, then the Kine bootstrap SQL
+  was applied. All three database nodes reported live, with no unavailable or
+  under-replicated ranges at the end of bootstrap.
+- All three K3s 1.35.8+k3s1 APIs passed `/readyz`, and all nodes became Ready.
+- Cilium 1.20.4 and Envoy were ready on 3/3 nodes; both operator replicas were
+  ready. The effective `kube-proxy-replacement` setting remained `false`.
+- All six directed node-pair jobs passed Kubernetes DNS and cross-node service
+  HTTP checks. CoreDNS, metrics-server, and local-path provisioner were healthy.
+- The Go mock tests and image-helper tests passed after the console fixes.
+
+Host UFW initially blocked first-boot networking. Rules scoped to `virbr1` and
+`192.168.124.0/24` enabled DHCP, DNS, peer forwarding, and egress via `enp9s0`.
+The firewall stayed enabled. Two VMs were rebooted during this early bootstrap;
+post-bootstrap reboot recovery, failover, replacement recovery, and durability
+under faults were not exercised in this test.
+
+For the running smoke stack, the private admin kubeconfig is
+`state/kubeconfig` (mode `0600`). Its endpoint is `https://192.168.124.11:6443`.
+The fresh VM SSH key is `state/id_ed25519`. The helper `state/run.py` selects
+the private local Pulumi backend and uses the libvirt group for management.
 
 References: [current Pulumi libvirt package](https://www.pulumi.com/registry/packages/libvirt/),
 [pinned libvirt provider](https://github.com/dmacvicar/terraform-provider-libvirt/tree/v0.9.9),

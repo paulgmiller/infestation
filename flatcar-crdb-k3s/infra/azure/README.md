@@ -1,232 +1,201 @@
-# Azure Flexible VMSS
+# Flatcar + CockroachDB + K3s on Azure Flexible VMSS
 
-This provisions a new resource group, VNet/subnet, NAT Gateway, network security
-group, and a **Flexible VM Scale Set** containing individually declared Flatcar
-VMs. Each VM gets the matching Ignition, static private IP, and explicitly chosen
-availability zone. Both roles run CockroachDB by default; workers run the K3s
-agent without an API server.
+Pulumi Go provisions an explicit node inventory in a Flexible VM Scale Set. The
+shared Python generator supplies Flatcar Ignition, TLS, CockroachDB, and K3s
+server/worker configuration. Workers run CockroachDB by default and run the K3s
+agent. Three servers provide the Kubernetes API.
 
-This is an explicit node inventory, not a capacity-based autoscaling profile.
-Flexible VMSS supports this arrangement with different configurations per VM.
-There is no shared node certificate, CA signing key on instances, automatic
-database initialization, Cilium installation, or remote shell provisioning.
-The [cross-cloud design](../README.md) describes the choice of tooling.
+The current cost-focused profile uses one Standard Load Balancer for API ingress
+and TCP/UDP egress, a small persistent OS disk, and local temporary storage for
+CockroachDB. There is **no NAT Gateway**. A deployment wrapper automates database
+initialization, Kine SQL setup, Cilium installation, readiness checks, and private
+kubeconfig retrieval.
 
-## Prepare locally
+The earlier Azure smoke deployment was verified and then deleted; its historical
+inventory and lessons are in [RUNBOOK.md](RUNBOOK.md). The new temporary-storage
+and automatic-bootstrap workflow has unit/mock coverage and a real Azure preview;
+its VM first boot and recovery still need an integration test.
 
-You need Python 3, Docker for certificate generation, Go >= 1.26.6, the Pulumi
-CLI, Azure CLI, and access to an Azure subscription. The Go SDK dependencies
-and checksums are pinned in `go.mod` and `go.sum`; Azure Native uses Azure's APIs
-directly. No Terraform or OpenTofu installation is required.
+## Prerequisites
 
-From this directory:
+- Azure CLI authenticated to the intended subscription.
+- Pulumi CLI 3.272.0, Go >=1.26.6, Python 3, Docker, kubectl, and Cilium CLI 0.20.1.
+- Workstation SSH access to the nodes, either through source-restricted public
+  node IPs (the automated profile) or existing private connectivity.
+- A fresh SSH key and separate local state for each new database cluster.
+
+The Azure Native SDK dependencies are pinned in `go.mod` and `go.sum`. No
+Terraform or OpenTofu CLI is needed. Run from `flatcar-crdb-k3s/infra/azure`.
+
+## Choose the cheapest compatible size and assign zones
+
+Edit the node inventory in a copy of `../../cluster.json` if you need workers.
+Use private addresses in `192.168.1.0/24`, excluding Azure's reserved addresses.
+The defaults include three servers. Then prepare a plan:
 
 ```bash
-cp ../../cluster.json cluster.local.json
-mkdir -m 700 state
-go mod download
-pulumi login --local
-pulumi stack init dev
+mkdir -p state
+chmod 700 state
+ssh-keygen -t ed25519 -f state/dev-key -N ''
+python3 plan.py --cluster ../../cluster.json --name flatcar-dev \
+  --ssh-public-key state/dev-key.pub --admin-cidr YOUR_PUBLIC_IP/32 \
+  --output-dir state/dev
 ```
 
-Choose a strong state-encryption passphrase when prompted. Then merge the
-settings from `Pulumi.stack.example.yaml` into the created `Pulumi.dev.yaml`,
-preserving Pulumi's generated `encryptionsalt` field. Local stack files and
-state are ignored by Git. For a team backend you can instead use Pulumi Cloud
-or an existing, access-controlled Azure Blob container:
+Use fresh paths; do not overwrite an existing deployment's key or state. The
+planner queries regional Linux on-demand retail prices, SKU capabilities, zones,
+and subscription quota. It chooses the lowest-priced compatible SKU with:
+
+- At least 2 vCPUs and 8 GiB RAM; Spot pricing is excluded.
+- At least 64 GiB of Cockroach filesystem capacity, with 10% raw-disk headroom.
+- x64/Generation 2 support, a SCSI resource disk, and three available zones.
+- Enough VM-family and total vCPU quota for the entire configured inventory.
+- Burstable sizes included if they meet the other constraints; use
+  `--exclude-burstable` to exclude them.
+
+`--min-vcpus`, `--min-memory-gib`, and `--min-disk-gib` override the minimums.
+NVMe-only local disks currently require a separate tested provisioning profile
+and are excluded. The program does not claim to choose the cheapest unsupported
+VM in Azure. SKU availability does not guarantee allocation capacity at apply.
+
+The planner assigns the three servers to distinct discovered zones and adds
+matching Cockroach locality tiers (`cloud`, `region`, `zone`). Workers are spread
+across those zones too. It writes `state/dev/plan.json` and `cluster.json`,
+including the API DNS SAN, and refuses to overwrite the output directory. Sizes
+and placements stay pinned rather than being recalculated during each preview.
+Changing the inventory or hardware of a live cluster needs a deliberate update
+procedure; choosing another cheapest SKU must not silently replace database VMs.
+
+On 2026-10-25, with the current West US 2 subscription quota, the selected SKU
+was `Standard_D2d_v4`: 2 vCPUs, 8 GiB RAM, a 75 GiB resource disk, and $0.113 USD
+per node-hour. Three nodes are about $247/month at 730 hours, excluding OS disks,
+public IPs, SLB, bandwidth, taxes, and subscription discounts. Rerun discovery
+into a fresh plan for current prices. The private example plan is `state/next`.
+
+API access defaults to `--admin-cidr`. Add `--api-cidr 0.0.0.0/0` to explicitly
+allow public IPv4 API access. SSH remains restricted to the admin source range.
+The API still requires Kubernetes credentials and uses verified TLS.
+
+## Preview or deploy with automatic bootstrap
+
+Pin a Flatcar Marketplace version available in the region, for example:
 
 ```bash
-pulumi login 'azblob://YOUR_CONTAINER?storage_account=YOUR_STORAGE_ACCOUNT'
-```
-
-Edit `cluster.local.json`: set your SSH public key and node names/private IPs,
-and add any worker entries with `role: "worker"`. Include all three servers and
-all workers; do not set `single_node_lab` or `cluster_mac`. Azure reserves each
-static IP on the NIC and delivers it through DHCP. No host network override is
-needed. Use addresses inside `subnetCIDR`, excluding its first four and final
-addresses. Avoid overlap with K3s pod `10.42.0.0/16` and service `10.43.0.0/16`
-networks, including any peered networks.
-
-Edit `Pulumi.dev.yaml` with your subscription, region, network ranges, and a
-zone assignment for **every** node. Keep assignments stable when adding nodes.
-Spread the three database/server hosts across three zones if those zones support
-your selected SKU. Verify VM quota and SKU availability in your subscription.
-
-Find and pin a Marketplace Flatcar version in that region:
-
-```bash
-az login
-az account set --subscription YOUR_SUBSCRIPTION_ID
 az vm image list --location westus2 --publisher kinvolk \
-  --offer flatcar-container-linux-free --sku stable-gen2 --all \
+  --offer flatcar-container-linux-corevm-amd64 --sku stable-gen2 --all \
   --query '[].{version:version,urn:urn}' --output table
 ```
 
-Replace the region above if needed and set `flatcarVersion` to an exact version
-returned by Azure. If Azure requires accepting Marketplace terms, review them
-and then run:
+The CoreVM offer has the same contents as Flatcar's other Azure offers and
+requires no image purchase plan or terms acceptance. The old smoke deployment
+used `4757.2.1`.
+
+A preview creates private local PKI and a separate local Pulumi backend, but no
+Azure resources:
 
 ```bash
-az vm image terms show --publisher kinvolk --offer flatcar-container-linux-free --plan stable-gen2
-az vm image terms accept --publisher kinvolk --offer flatcar-container-linux-free --plan stable-gen2
+python3 deploy.py --plan-dir state/dev --stack dev \
+  --ssh-private-key state/dev-key --flatcar-version 4757.2.1 --preview-only
 ```
 
-Generate fresh credentials and Ignition for this deployment:
+To create the cluster and complete bootstrap:
 
 ```bash
-python3 ../../generate.py pki --config cluster.local.json --state-dir state
-python3 ../../generate.py ignition --config cluster.local.json --state-dir state
+python3 deploy.py --plan-dir state/dev --stack dev \
+  --ssh-private-key state/dev-key --flatcar-version 4757.2.1 \
+  --initialize-new-cluster
 ```
 
-An existing PKI directory is never overwritten. When expanding an existing
-cluster, use its original CA/token and issue node certificates for new database
-hosts; do not create a replacement CA or initialize a second cluster.
+Review the Pulumi plan when prompted; `--yes` is available for unattended runs.
+The wrapper creates per-node credentials, generates Ignition, saves a refreshed
+preview, applies that plan with refresh, and then completes the post-VM work.
+No manual `cockroach init`, SQL grants, CNI installation, or kubeconfig copying
+is required. CA private keys and admin SQL credentials remain on the workstation.
 
-## Review the plan and deploy
+`--initialize-new-cluster` permits a first initialization attempt. Before that
+RPC, the workflow writes an intent marker. It never automatically repeats that
+attempt after an interruption. Successful connections record and subsequently
+verify the database's cluster ID. An established cluster becoming unavailable
+must recover or be restored, rather than being initialized as a different cluster.
+The Kine SQL batch is idempotent. Repeated bootstrap skips an existing Cilium
+installation, checks its readiness and effective kube-proxy setting, and refreshes
+the private admin kubeconfig.
 
-```bash
-go test ./...
-pulumi preview --diff --save-plan=state/deployment-plan.json
-```
+Cilium keeps kube-proxy enabled, uses pod CIDR `10.42.0.0/16`, CNI binaries
+`/opt/cni/bin`, and configuration `/etc/cni/net.d`. Its bootstrap API address is
+the Kubernetes Service VIP (`10.43.0.1:443`) through kube-proxy, avoiding a fixed
+single-server IP. This revised bootstrap path still needs a VM integration test.
 
-Review the resource count, zones, addresses, costs, and disk settings before
-applying. The NAT Gateway, its public IP, VM disks, and VMs incur Azure charges.
-Creating these local files and validating them does not deploy anything.
-
-The following command actually provisions machines:
-
-```bash
-pulumi up --plan=state/deployment-plan.json
-```
-
-Private node IPs are the default. Manage them from a host with connectivity to
-the subnet. For an initial workstation-accessible deployment, set
-`publicNodeIPs: true` and `adminCIDRs: ["YOUR_PUBLIC_IP/32"]` before previewing.
-Only SSH is permitted from those sources; SQL, kubelet, and the Kubernetes API
-are not publicly exposed. NAT provides explicit outbound connectivity for
-Ignition's sysext download and container pulls, including when all nodes are
-private. Node-to-node traffic is allowed within the node subnet for CockroachDB,
-K3s, and Cilium. Workload ingress is a separate future configuration.
+Once deployment completes:
 
 ```bash
-pulumi stack output privateIPs
-pulumi stack output publicIPs
-ssh core@REACHABLE_NODE_IP 'sudo systemctl status cockroachdb k3s'
-# On workers, use k3s-agent instead of k3s.
-```
-
-## Initialize a brand-new cluster
-
-Wait until all database processes are running. Keep the root client credentials
-on your workstation. From this directory, forward SQL through the first server
-in a separate terminal (replace both addresses for your configuration):
-
-```bash
-ssh -N -L 127.0.0.1:26257:192.168.1.101:26257 core@REACHABLE_SERVER_IP
-```
-
-**Only for a brand-new, uninitialized database cluster**, run this once:
-
-```bash
-CRDB_IMAGE=$(python3 -c 'import json; print(json.load(open("cluster.local.json"))["cockroach_image"])')
-docker run --rm --network host --user "$(id -u):$(id -g)" \
-  -v "$PWD/state/pki/admin:/certs:ro" --entrypoint=/cockroach/cockroach \
-  "$CRDB_IMAGE" init --certs-dir=/certs --host=127.0.0.1:26257
-docker run --rm --network host --user "$(id -u):$(id -g)" \
-  -v "$PWD/state/pki/admin:/certs:ro" -v "$PWD/../../bootstrap.sql:/bootstrap.sql:ro" \
-  --entrypoint=/cockroach/cockroach "$CRDB_IMAGE" sql \
-  --certs-dir=/certs --host=127.0.0.1:26257 --file=/bootstrap.sql
-```
-
-This preserves TLS verification: the generated SQL node certificates include
-`127.0.0.1`. If initialization succeeds but SQL setup fails, retry only the SQL
-command. Never rerun `init` against an initialized cluster.
-
-K3s servers retry until SQL is ready. Forward the API through a server in a
-separate terminal:
-
-```bash
-ssh -N -L 127.0.0.1:6443:127.0.0.1:6443 core@REACHABLE_SERVER_IP
-```
-
-Then fetch an admin kubeconfig privately:
-
-```bash
-umask 077
-ssh core@REACHABLE_SERVER_IP 'sudo cat /etc/rancher/k3s/k3s.yaml' > state/kubeconfig
-export KUBECONFIG="$PWD/state/kubeconfig"
-kubectl get --raw=/readyz
+export KUBECONFIG="$PWD/state/dev/kubeconfig"
 kubectl get nodes -o wide
+kubectl get --raw=/readyz
 ```
 
-Install Cilium using the [K3s-specific instructions](https://docs.cilium.io/en/stable/installation/k3s/)
-and the configuration already tested in [the QEMU lab](../../QEMU-LAB.md): keep
-kube-proxy enabled, pod CIDR `10.42.0.0/16`, CNI binaries `/opt/cni/bin`, and CNI
-configuration `/etc/cni/net.d`. The API tunnel lets your workstation reach the
-API; Cilium agents must use an API endpoint reachable from the nodes. Wait for
-all nodes to become Ready, then run the repository's pod/DNS/service smoke tests.
+Retain the plan directory, backend, passphrase, PKI, and SSH key in private
+backups. The passphrase file and all generated credentials are mode `0600` in a
+private directory. Local stack configs, state, plans, Ignition, and kubeconfigs
+are ignored by Git. The backend is local to this plan; team deployments should
+use an access-controlled shared backend. Do not use the old deleted smoke stack
+as though it still refers to a running cluster.
 
-## Persistence and changes
+## Networking and disks
 
-Each VM uses a persistent Premium SSD managed OS disk. CockroachDB's
-`/var/lib/cockroach` currently lives there, as in the existing generator.
-There is no ephemeral database disk and no automatic disk formatting. A separate
-database data disk with a tested attachment/recovery procedure remains future
-work; this is not yet a production storage profile.
+One Standard public frontend supports an API backend pool containing servers
+only, plus an egress pool containing **all nodes**. The explicit outbound rule
+handles TCP and UDP with 1,024 SNAT ports per node by default. Inbound API SNAT
+stays disabled. `outboundPortsPerNode` is configurable; validation checks its
+allocation block and the single-public-IP port budget. NAT Gateway can be added
+in a future change without altering the VM image.
 
-VMs have Pulumi resource protection enabled; changes that require replacement
-are blocked. Their managed OS disks use Azure's `deleteOption: Detach`.
-These settings do not protect against deletion through Azure itself or resource
-group deletion outside this state. Keep backups independent of these machines.
+The default OS disk is a persistent 32 GiB Standard SSD managed disk, containing
+Flatcar state, certificates, K3s state, logs, and container images. CockroachDB
+uses `/mnt/resource/cockroach` on the separate local temporary disk. Flatcar's
+Azure WAAgent formats the SCSI resource disk as ext4 and mounts `/mnt/resource`
+on boot. The Cockroach unit requires WAAgent and checks the exact mount,
+filesystem, and capacity before starting. It never falls back to the OS disk
+when the temporary disk is absent or too small. The generator does not add a
+blanket disk-formatting command.
 
-Ignition is applied only on first boot. Changes to `osProfile.customData` are ignored on
-existing VMs, so adding a node does not replace every existing VM when the join
-list changes. Existing CockroachDB nodes discover peers through the cluster.
-Changing role, tokens, certificates, or service settings on running hosts needs
-an explicit update procedure; regenerating Ignition does not update them.
-Autoscaling, automatic repairs, OS upgrades, and coordinated Flatcar/database
-maintenance are not configured here.
+The three-zone database uses Cockroach's default replication factor of three.
+A lost store rejoins surviving peers using the existing CA and join addresses;
+bootstrap does not initialize it as a new cluster. Three replicas can retain
+quorum through one replica loss; they do not guarantee recovery after multiple
+local stores are lost before repair. Testing re-replication after one disk loss,
+and scheduling backups independently of these disks, remain necessary.
 
-Ignition includes private keys and the join token. The Go program wraps custom
-data in a Pulumi secret, so Pulumi encrypts it in state and redacts normal output.
-The original `.ign` files still contain plaintext credentials; keep the state
-passphrase and all generated files private. Local stack settings, saved plans,
-state, generated credentials, and kubeconfig are ignored by Git. Use an
-access-controlled backend before collaborating on deployments. Do not upload
-CA private keys or root client credentials to Azure VMs.
+Managed OS disks use `deleteOption: Detach`, and VMs have Pulumi protection.
+Resource-group deletion still removes the group and its resources. No ephemeral
+OS disk is configured. New VM replacement also needs a procedure for stale
+Cockroach identities, K3s node registration, and application storage; that is
+separate from restarting with an empty resource disk and intact OS state.
 
-## Validation status
-
-Go tests cover configuration validation and mocked Azure resource registration:
-three servers plus one worker, private/public SSH modes, bad subnet/zone inventory,
-pod-network overlap, missing SSH source restrictions, unpinned images, stale or
-oversized Ignition, worker database defaults/opt-out, secret custom data, disk
-retention, and VM protection. They invoke the actual Python generator using
-temporary fake credentials. No generated Ignition fixtures or live secrets are
-committed, and mocks do not create resources or authenticate to Azure.
-
-From this directory:
+## Validation
 
 ```bash
 go test ./...
-```
-
-For the generator and QEMU helper tests, from the project root:
-
-```bash
+python3 -m unittest discover -v
+# From the project root for shared generator tests:
 python3 -m unittest discover -v
 ```
 
-Go mock tests require Python 3 but do not require the Pulumi CLI. These checks do not prove Azure image
-availability, subscription quota, actual first boot, database initialization,
-Cilium networking, or VM replacement recovery. **No Azure deployment has been
-performed or verified.**
+Go mocks cover server/worker identity, TLS secrets, VM protection, retained OS
+disks, SLB ingress/egress pools, public/private SSH modes, source ranges, SNAT
+budgets, locality/zone matching, and rejection of stale temporary-storage profiles.
+Python tests cover price/quota filtering, zone assignment, and initialization
+identity/intent guards, including retries after interrupted initialization and
+loss of quorum. Shared tests cover generated credential ownership, role defaults,
+SANs, and temporary-storage mount guards. QEMU rejects the Azure storage profile.
 
-## Vendor references
+The historical manual smoke test passed actual Flatcar first boot, database
+initialization, three Ready nodes, Cilium, six directed DNS/service checks, and
+public API TLS. It used NAT Gateway and persistent database storage. Those results
+do **not** establish that the revised SLB-egress, temporary-disk, and automatic
+bootstrap profile has passed a real deployment or a fault-recovery test.
 
-- [Flatcar on Azure, Marketplace images, and Terraform custom data](https://www.flatcar.org/docs/latest/deploy/cloud/azure/)
-- [Azure Flexible VMSS and individually configured VMs](https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-attach-detach-vm)
-- [Explicit outbound connectivity with NAT Gateway](https://learn.microsoft.com/en-us/azure/nat-gateway/nat-gateway-design)
-- [Pulumi Go SDK](https://www.pulumi.com/docs/iac/languages-sdks/go/)
-- [Pulumi mock tests and their limits](https://www.pulumi.com/docs/iac/guides/testing/unit/)
-- [Pulumi Azure Native provider](https://www.pulumi.com/registry/packages/azure-native/)
+References: [Azure outbound rules](https://learn.microsoft.com/en-us/azure/load-balancer/outbound-rules),
+[Flatcar Azure integration](https://www.flatcar.org/docs/latest/deploy/cloud/azure/),
+[Flatcar WAAgent defaults](https://github.com/flatcar/scripts/blob/main/sdk_container/src/third_party/coreos-overlay/app-emulation/wa-linux-agent/files/0001-flatcar-changes.patch),
+[Cockroach production guidance](https://www.cockroachlabs.com/docs/stable/recommended-production-settings).
