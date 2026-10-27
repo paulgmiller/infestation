@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 	"infestation/internal/azureplan"
 	"infestation/internal/bootstrap"
@@ -26,9 +25,9 @@ import (
 )
 
 type Options struct {
-	RepoRoot, PlanDir, Stack, PrivateKey, FlatcarVersion, Cilium string
-	InitializeNew, PreviewOnly, Yes                              bool
-	Log                                                          io.Writer
+	RepoRoot, PlanDir, Stack, FlatcarVersion, NodeBinary string
+	PreviewOnly, Yes                                     bool
+	Log                                                  io.Writer
 }
 type owner struct {
 	Stack          string `json:"stack"`
@@ -67,53 +66,23 @@ func Azure(ctx context.Context, o Options) error {
 	if _, err = os.Stat(filepath.Join(project, "Pulumi.yaml")); err != nil {
 		return fmt.Errorf("--repo must locate the infestation checkout: %w", err)
 	}
-	keyPath, err := filepath.Abs(o.PrivateKey)
-	if err != nil {
-		return err
-	}
-	keyData, err := os.ReadFile(keyPath)
-	if err != nil {
-		return err
-	}
-	key, err := ssh.ParsePrivateKey(keyData)
-	if err != nil {
-		return err
-	}
 	clusterPath := filepath.Join(state, "cluster.json")
 	c, err := cluster.Load(clusterPath)
 	if err != nil {
 		return err
-	}
-	public, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.SSHAuthorizedKey))
-	if err != nil {
-		return err
-	}
-	if string(public.Marshal()) != string(key.PublicKey().Marshal()) {
-		return fmt.Errorf("private SSH key does not match pinned plan")
 	}
 	planPath := filepath.Join(state, "plan.json")
 	var plan azureplan.Plan
 	if err = fsutil.ReadJSON(planPath, &plan); err != nil {
 		return err
 	}
-	if o.Cilium == "" {
-		o.Cilium = "cilium"
-	}
-	tools := []string{"pulumi"}
-	if !o.PreviewOnly {
-		tools = append(tools, "az", "docker", "kubectl", o.Cilium)
-	}
-	for _, tool := range tools {
-		if _, err = exec.LookPath(tool); err != nil {
+	for _, tool := range []string{"pulumi", "go"} {
+		if o.NodeBinary != "" && tool == "go" {
+			continue
+		}
+		if _, err := exec.LookPath(tool); err != nil {
 			return err
 		}
-	}
-	if !o.PreviewOnly {
-		o.Cilium, err = exec.LookPath(o.Cilium)
-		if err != nil {
-			return err
-		}
-		o.Cilium, _ = filepath.Abs(o.Cilium)
 	}
 	if o.Log == nil {
 		o.Log = os.Stdout
@@ -196,7 +165,11 @@ func Azure(ctx context.Context, o Options) error {
 	} else if err != nil {
 		return err
 	}
-	if err = ignition.Generate(c, state); err != nil {
+	assets, err := prepareNode(ctx, repo, state, o.NodeBinary, plan, c)
+	if err != nil {
+		return err
+	}
+	if err = ignition.Generate(c, state, assets.Profile); err != nil {
 		return err
 	}
 	saved := filepath.Join(state, "deployment-plan.json")
@@ -225,6 +198,5 @@ func Azure(ctx context.Context, o Options) error {
 	if err = fsutil.WriteFile(filepath.Join(state, "outputs.json"), []byte(outputs.Stdout), 0600); err != nil {
 		return err
 	}
-	worker := bootstrap.New(bootstrap.Options{StateDir: state, PrivateKey: keyPath, Cilium: o.Cilium, AllowInitialize: o.InitializeNew, Cluster: c, Outputs: parsed, Log: o.Log})
-	return worker.Complete(ctx)
+	return finishNodeBootstrap(ctx, assets, parsed, state, o.Log)
 }

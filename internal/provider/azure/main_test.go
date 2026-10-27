@@ -6,6 +6,9 @@ import (
 	"fmt"
 	clusterconfig "infestation/internal/cluster"
 	"infestation/internal/ignition"
+	"infestation/internal/nodebootstrap"
+	"infestation/internal/pki"
+	"infestation/internal/testutil"
 	"os"
 	"path/filepath"
 	"slices"
@@ -29,7 +32,6 @@ func fixture(t *testing.T, workerDB bool) Settings {
 	if err := json.Unmarshal(data, &cluster); err != nil {
 		t.Fatal(err)
 	}
-	cluster["ssh_authorized_key"] = "ssh-ed25519 " + base64.StdEncoding.EncodeToString(append([]byte("\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"), make([]byte, 32)...))
 	nodes := []map[string]any{}
 	for i := 1; i <= 3; i++ {
 		nodes = append(nodes, map[string]any{"name": fmt.Sprintf("kube%d", i), "ip": fmt.Sprintf("192.168.1.%d", 100+i)})
@@ -91,8 +93,6 @@ func TestRejectInvalidDeployment(t *testing.T) {
 		{"wrong-subnet", "usable private IP", func(s *Settings) { s.SubnetCIDR = "192.168.2.0/24" }},
 		{"outside-vnet", "inside vnetCIDR", func(s *Settings) { s.SubnetCIDR = "192.169.1.0/24" }},
 		{"pod-network-overlap", "overlaps", func(s *Settings) { s.VNetCIDR = "10.0.0.0/8"; s.SubnetCIDR = "10.1.0.0/24" }},
-		{"no-ssh-source", "adminCIDRs", func(s *Settings) { s.PublicNodeIPs = true }},
-		{"worldwide-ssh", "not 0.0.0.0/0", func(s *Settings) { s.AdminCIDRs = []string{"0.0.0.0/0"} }},
 		{"missing-zone", "nodeZones", func(s *Settings) { delete(s.NodeZones, "worker1") }},
 		{"invalid-snat-port-block", "multiple of 8", func(s *Settings) { s.OutboundPortsPerNode = 1025 }},
 		{"snat-budget", "SNAT budget", func(s *Settings) { s.OutboundPortsPerNode = 32000 }},
@@ -154,6 +154,8 @@ func (m *mockAzure) NewResource(args pulumi.MockResourceArgs) (string, resource.
 	m.mu.Unlock()
 	outputs := args.Inputs.Copy()
 	outputs["name"] = resource.NewStringProperty(args.Name)
+	outputs["identity"] = resource.NewObjectProperty(resource.PropertyMap{"type": resource.NewStringProperty("SystemAssigned"), "principalId": resource.NewStringProperty("33333333-3333-3333-3333-333333333333")})
+	outputs["principalId"] = resource.NewStringProperty("33333333-3333-3333-3333-333333333333")
 	outputs["ipAddress"] = resource.NewStringProperty("203.0.113.20")
 	return "/mock/" + args.Name, outputs, nil
 }
@@ -176,9 +178,7 @@ func TestAzureResources(t *testing.T) {
 	for _, public := range []bool{false, true} {
 		t.Run(fmt.Sprintf("public=%t", public), func(t *testing.T) {
 			s := fixture(t, true)
-			s.PublicNodeIPs = public
 			if public {
-				s.AdminCIDRs = []string{"203.0.113.10/32"}
 			}
 			d, err := loadDeployment(s)
 			if err != nil {
@@ -263,7 +263,7 @@ func TestAzureResources(t *testing.T) {
 			}
 			wantIPs, wantSSH := 1, 0 // One SLB public IP even when the nodes are private.
 			if public {
-				wantIPs, wantSSH = 5, 1
+				wantIPs, wantSSH = 1, 0
 			}
 			if vms != 4 || publicIPs != wantIPs || sshRules != wantSSH {
 				t.Fatalf("got %d VMs, %d public IPs, %d SSH rules", vms, publicIPs, sshRules)
@@ -313,13 +313,16 @@ func TestPrivateCrossRegionArtifactStorage(t *testing.T) {
 				t.Error("retain recovery artifacts until explicitly unlocked")
 			}
 		case "azure-native:authorization:RoleAssignment":
+			if r.Name != "artifact-publisher" {
+				continue
+			}
 			role++
 			if r.Inputs["scope"].StringValue() != "/mock/access-artifacts" || r.Inputs["principalId"].StringValue() != "11111111-1111-1111-1111-111111111111" || !strings.HasSuffix(r.Inputs["roleDefinitionId"].StringValue(), "/ba92f5b4-2d11-453d-a403-e96b0029c9fe") {
 				t.Error("grant the deployment identity access only to the artifact container")
 			}
 		}
 	}
-	if account != 1 || container != 1 || lock != 1 || role != 1 {
+	if account != 1 || container != 2 || lock != 1 || role != 1 {
 		t.Fatalf("account=%d container=%d lock=%d role=%d", account, container, lock, role)
 	}
 }
@@ -430,5 +433,93 @@ func TestTemporaryDatabaseStorage(t *testing.T) {
 	writeJSON(t, path, doc)
 	if _, err := loadDeployment(s); err == nil || !strings.Contains(err.Error(), "temporary disk profile missing") {
 		t.Fatalf("expected OS-disk fallback rejection, got %v", err)
+	}
+}
+
+func TestUniformPools(t *testing.T) {
+	root := t.TempDir()
+	c := testutil.Config()
+	c.TLSSANs = []string{"test-api.westus2.cloudapp.azure.com", "192.168.1.4"}
+	for i := range c.Nodes {
+		c.Nodes[i].Name = fmt.Sprintf("api-%d", i)
+	}
+	if err := pki.Create(c, root); err != nil {
+		t.Fatal(err)
+	}
+	credential, err := pki.BootstrapCredential(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &nodebootstrap.AzurePool{Name: "test", Role: "api", Zone: "test.westus2.internal", Location: "westus2", Subnet: "192.168.1.0/24", APICount: 3, WorkerDatabase: true}
+	if err := ignition.Generate(c, root, ignition.Bootstrap{Account: "inf0123456789", HelperSHA256: strings.Repeat("a", 64), Credential: credential, Pool: pool}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "cluster.json")
+	writeJSON(t, path, c)
+	s := Settings{Name: "test", Location: "westus2", VMSize: "Standard_D2d_v4", FlatcarVersion: "4757.2.1", ClusterPath: path, IgnitionDir: filepath.Join(root, "output"), VNetCIDR: "192.168.0.0/16", SubnetCIDR: "192.168.1.0/24", OSDiskSizeGB: 32, APILoadBalancer: true, APIDNSLabel: "test-api", APIAdminCIDRs: []string{"0.0.0.0/0"}, Uniform: true, PrivateDNSZone: pool.Zone, APICount: 3}
+	d, err := loadDeployment(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mocks := &mockAzure{}
+	if err := pulumi.RunErr(func(ctx *pulumi.Context) error { return deploy(ctx, d) }, pulumi.WithMocks("test", "uniform", mocks)); err != nil {
+		t.Fatal(err)
+	}
+	pools, ips := 0, 0
+	for _, res := range mocks.resources {
+		if res.TypeToken == "azure-native:network:NetworkSecurityGroup" {
+			deny, internal := 0, 0
+			for _, r := range res.Inputs["securityRules"].ArrayValue() {
+				rule := r.ObjectValue()
+				priority := int(rule["priority"].NumberValue())
+				if priority < 100 || priority > 4096 {
+					t.Error("invalid Azure rule priority")
+				}
+				if rule["name"].StringValue() == "deny-ssh" {
+					deny = priority
+				}
+				if rule["name"].StringValue() == "cluster-internal" {
+					internal = priority
+				}
+			}
+			if deny == 0 || deny >= internal {
+				t.Error("SSH deny must precede internal allow")
+			}
+		}
+		switch res.TypeToken {
+		case "azure-native:compute:VirtualMachine", "azure-native:network:NetworkInterface":
+			t.Error("individual VM/NIC in Uniform deployment")
+		case "azure-native:network:PublicIPAddress":
+			ips++
+		case "azure-native:compute/v20260301:VirtualMachineScaleSet":
+			pools++
+			if res.Inputs["orchestrationMode"].StringValue() != "Uniform" || res.Inputs["overprovision"].BoolValue() || !res.Inputs["zones"].IsNull() {
+				t.Error("wrong orchestration/placement")
+			}
+			if res.Inputs["placement"].ObjectValue()["zonePlacementPolicy"].StringValue() != "auto" {
+				t.Error("missing automatic zone placement")
+			}
+			profile := plain(res.Inputs["virtualMachineProfile"]).ObjectValue()
+			osProfile := plain(profile["osProfile"]).ObjectValue()
+			if !osProfile["customData"].IsSecret() && !profile["osProfile"].IsSecret() && !res.Inputs["virtualMachineProfile"].IsSecret() {
+				t.Error("Ignition must be secret")
+			}
+			nic := profile["networkProfile"].ObjectValue()["networkInterfaceConfigurations"].ArrayValue()[0].ObjectValue()
+			ip := nic["ipConfigurations"].ArrayValue()[0].ObjectValue()
+			if !ip["privateIPAddress"].IsNull() || !ip["publicIPAddressConfiguration"].IsNull() {
+				t.Error("must use DHCP and private NICs")
+			}
+			backends := len(ip["loadBalancerBackendAddressPools"].ArrayValue())
+			want := 1
+			if res.Name == "api-pool" {
+				want = 2
+			}
+			if backends != want {
+				t.Error("wrong backend membership")
+			}
+		}
+	}
+	if pools != 2 || ips != 1 {
+		t.Fatalf("got %d VMSS and %d public IPs", pools, ips)
 	}
 }

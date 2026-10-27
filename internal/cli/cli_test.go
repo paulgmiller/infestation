@@ -18,9 +18,15 @@ func TestLocalCommandsWithoutExternalTools(t *testing.T) {
 	state := t.TempDir()
 	config := filepath.Join(state, "cluster.json")
 	testutil.JSON(t, config, testutil.Config())
+	helper := filepath.Join(state, "node-helper")
+	os.WriteFile(helper, []byte("fake-helper"), 0700)
 	var out bytes.Buffer
 	for _, command := range []string{"validate", "pki", "ignition", "ignition"} {
-		if err := Run(context.Background(), []string{command, "--config", config, "--state-dir", state}, &out); err != nil {
+		args := []string{command, "--config", config, "--state-dir", state}
+		if command == "ignition" {
+			args = append(args, "--node-helper", helper)
+		}
+		if err := Run(context.Background(), args, &out); err != nil {
 			t.Fatalf("%s: %v", command, err)
 		}
 	}

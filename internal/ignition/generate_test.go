@@ -9,8 +9,59 @@ import (
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
 	"infestation/internal/cluster"
+	"infestation/internal/nodebootstrap"
+	"infestation/internal/pki"
 	"infestation/internal/testutil"
 )
+
+func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
+	c := testutil.Config()
+	c.Nodes = append(c.Nodes, cluster.Node{Name: "worker-0", IP: "192.168.1.104", Role: "worker"})
+	state := t.TempDir()
+	if err := pki.Create(c, state); err != nil {
+		t.Fatal(err)
+	}
+	credential, err := pki.BootstrapCredential(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := Bootstrap{Account: "testaccount", HelperSHA256: strings.Repeat("a", 64), DeploymentID: "test", APIEndpoint: "https://api.example.test:6443", Credential: credential}
+	if err := Generate(c, state, options); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range c.Nodes {
+		raw, err := os.ReadFile(filepath.Join(state, "output", n.Name+".ign"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) > 65535 {
+			t.Fatalf("%s exceeds Azure custom-data limit", n.Name)
+		}
+		doc, report, err := config.Parse(raw)
+		if err != nil {
+			t.Fatal(err, report)
+		}
+		count := 0
+		for _, file := range doc.Storage.Files {
+			if strings.HasPrefix(file.Path, nodebootstrap.BootstrapCredentialDir+"/") {
+				count++
+				if n.Name != "kube-0" || file.Mode == nil || *file.Mode != 0600 {
+					t.Fatal("bootstrap credentials exposed to wrong node or file mode")
+				}
+			}
+			if strings.Contains(file.Path, "ca.key") {
+				t.Fatal("CA signing key embedded in Ignition")
+			}
+		}
+		if (n.Name == "kube-0" && count != 2) || (n.Name != "kube-0" && count != 0) {
+			t.Fatalf("wrong credential files on %s", n.Name)
+		}
+	}
+	options.Credential = nil
+	if err := Generate(c, state, options); err == nil {
+		t.Fatal("missing bootstrap credential silently accepted")
+	}
+}
 
 func TestProfilesAndCredentials(t *testing.T) {
 	c := testutil.Config()
@@ -60,7 +111,7 @@ func TestProfilesAndCredentials(t *testing.T) {
 		for _, unit := range doc.Systemd.Units {
 			if unit.Name == "cockroachdb.service" {
 				db = true
-				if !strings.Contains(*unit.Contents, "src=/mnt/resource/cockroach,") || !strings.Contains(*unit.Contents, "ExecStartPre=/usr/local/sbin/check-cockroach-storage") {
+				if !strings.Contains(*unit.Contents, "src=/mnt/resource/cockroach,") || !strings.Contains(*unit.Contents, "ExecStartPre=/opt/infestation/check-cockroach-storage") {
 					t.Fatal("must not fall back to OS disk")
 				}
 			}

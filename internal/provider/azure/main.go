@@ -21,11 +21,12 @@ func Run() {
 			return fallback
 		}
 		s := Settings{
+			Uniform: cfg.GetBool("uniform"), PrivateDNSZone: cfg.Get("privateDNSZone"), APICount: cfg.GetInt("apiCount"), WorkerCount: cfg.GetInt("workerCount"),
 			Name: get("name", "flatcar-"+ctx.Stack()), Location: get("location", "westus2"),
 			FlatcarVersion: cfg.Require("flatcarVersion"), VMSize: cfg.Require("vmSize"),
 			ClusterPath: get("clusterPath", "cluster.local.json"), IgnitionDir: get("ignitionDir", "state/output"),
 			VNetCIDR: get("vnetCIDR", "192.168.0.0/16"), SubnetCIDR: get("subnetCIDR", "192.168.1.0/24"),
-			OSDiskSizeGB: 32, PublicNodeIPs: cfg.GetBool("publicNodeIPs"),
+			OSDiskSizeGB:             32,
 			OSDiskStorageAccountType: get("osDiskStorageAccountType", "StandardSSD_LRS"),
 			APILoadBalancer:          cfg.GetBool("apiLoadBalancer"),
 			OutboundPortsPerNode:     1024,
@@ -38,9 +39,6 @@ func Run() {
 			return err
 		}
 		if err := cfg.GetObject("nodeZones", &s.NodeZones); err != nil {
-			return err
-		}
-		if err := cfg.GetObject("adminCIDRs", &s.AdminCIDRs); err != nil {
 			return err
 		}
 		if cfg.Get("osDiskSizeGB") != "" {
@@ -63,7 +61,8 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 	if err != nil {
 		return err
 	}
-	if err := artifactStorage(ctx, rg.Name, location); err != nil {
+	artifacts, err := artifactStorage(ctx, rg.Name, location)
+	if err != nil {
 		return err
 	}
 	vnet, err := network.NewVirtualNetwork(ctx, "cluster", &network.VirtualNetworkArgs{
@@ -73,16 +72,14 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 	if err != nil {
 		return err
 	}
-	publicIP := func(name string) (*network.PublicIPAddress, error) {
-		return network.NewPublicIPAddress(ctx, name, &network.PublicIPAddressArgs{
-			PublicIpAddressName: pulumi.String(s.Name + "-" + name), ResourceGroupName: rg.Name, Location: location,
-			Sku:                      &network.PublicIPAddressSkuArgs{Name: pulumi.String("Standard")},
-			PublicIPAllocationMethod: pulumi.String("Static"),
-		})
-	}
 	rules := network.SecurityRuleTypeArray{
 		&network.SecurityRuleTypeArgs{
-			Name: pulumi.String("cluster-internal"), Priority: pulumi.Int(100), Direction: pulumi.String("Inbound"),
+			Name: pulumi.String("deny-ssh"), Priority: pulumi.Int(100), Direction: pulumi.String("Inbound"),
+			Access: pulumi.String("Deny"), Protocol: pulumi.String("Tcp"), SourcePortRange: pulumi.String("*"),
+			DestinationPortRange: pulumi.String("22"), SourceAddressPrefix: pulumi.String("*"), DestinationAddressPrefix: pulumi.String("*"),
+		},
+		&network.SecurityRuleTypeArgs{
+			Name: pulumi.String("cluster-internal"), Priority: pulumi.Int(110), Direction: pulumi.String("Inbound"),
 			Access: pulumi.String("Allow"), Protocol: pulumi.String("*"), SourcePortRange: pulumi.String("*"),
 			DestinationPortRange: pulumi.String("*"), SourceAddressPrefix: pulumi.String(s.SubnetCIDR), DestinationAddressPrefix: pulumi.String(s.SubnetCIDR),
 		},
@@ -91,13 +88,6 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 			Access: pulumi.String("Deny"), Protocol: pulumi.String("*"), SourcePortRange: pulumi.String("*"),
 			DestinationPortRange: pulumi.String("*"), SourceAddressPrefix: pulumi.String("*"), DestinationAddressPrefix: pulumi.String("*"),
 		},
-	}
-	if len(s.AdminCIDRs) > 0 {
-		rules = append(rules, &network.SecurityRuleTypeArgs{
-			Name: pulumi.String("management-ssh"), Priority: pulumi.Int(110), Direction: pulumi.String("Inbound"),
-			Access: pulumi.String("Allow"), Protocol: pulumi.String("Tcp"), SourcePortRange: pulumi.String("*"),
-			DestinationPortRange: pulumi.String("22"), SourceAddressPrefixes: pulumi.ToStringArray(s.AdminCIDRs), DestinationAddressPrefix: pulumi.String("*"),
-		})
 	}
 	if s.APILoadBalancer {
 		rules = append(rules,
@@ -127,23 +117,27 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 	if err != nil {
 		return err
 	}
-	zoneSet := map[string]bool{}
-	for _, zone := range s.NodeZones {
-		zoneSet[zone] = true
-	}
-	zones := make([]string, 0, len(zoneSet))
-	for zone := range zoneSet {
-		zones = append(zones, zone)
-	}
-	sort.Strings(zones)
-	vmss, err := compute.NewVirtualMachineScaleSet(ctx, "cluster", &compute.VirtualMachineScaleSetArgs{
-		VmScaleSetName: pulumi.String(s.Name + "-vmss"), ResourceGroupName: rg.Name, Location: location,
-		OrchestrationMode: pulumi.String("Flexible"), PlatformFaultDomainCount: pulumi.Int(1),
-		SinglePlacementGroup: pulumi.Bool(false), Zones: pulumi.ToStringArray(zones),
-		// Each VM has its own configuration; there is no shared scaling profile.
-	})
-	if err != nil {
-		return err
+	var vmss *compute.VirtualMachineScaleSet
+	if !s.Uniform {
+		zoneSet := map[string]bool{}
+		for _, zone := range s.NodeZones {
+			zoneSet[zone] = true
+		}
+		zones := make([]string, 0, len(zoneSet))
+		for zone := range zoneSet {
+			zones = append(zones, zone)
+		}
+		sort.Strings(zones)
+		vmss, err = compute.NewVirtualMachineScaleSet(ctx, "cluster", &compute.VirtualMachineScaleSetArgs{
+			VmScaleSetName: pulumi.String(s.Name + "-vmss"), ResourceGroupName: rg.Name, Location: location,
+			OrchestrationMode: pulumi.String("Flexible"), PlatformFaultDomainCount: pulumi.Int(1),
+			SinglePlacementGroup: pulumi.Bool(false), Zones: pulumi.ToStringArray(zones),
+			// Each VM has its own configuration; there is no shared scaling profile.
+		})
+		if err != nil {
+			return err
+		}
+
 	}
 	var apiBackend, egressBackend pulumi.StringOutput
 	{
@@ -176,13 +170,13 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 				DisableOutboundSnat:     pulumi.Bool(true), EnableTcpReset: pulumi.Bool(true), IdleTimeoutInMinutes: pulumi.Int(30),
 			}}
 		}
+		frontends := network.FrontendIPConfigurationArray{&network.FrontendIPConfigurationArgs{Name: pulumi.String("public"), PublicIPAddress: &network.PublicIPAddressTypeArgs{Id: ip.ID()}}}
+
 		lb, err := network.NewLoadBalancer(ctx, "api", &network.LoadBalancerArgs{
 			LoadBalancerName: pulumi.String(s.Name + "-api"), ResourceGroupName: rg.Name, Location: location,
-			Sku: &network.LoadBalancerSkuArgs{Name: pulumi.String("Standard")},
-			FrontendIPConfigurations: network.FrontendIPConfigurationArray{&network.FrontendIPConfigurationArgs{
-				Name: pulumi.String("public"), PublicIPAddress: &network.PublicIPAddressTypeArgs{Id: ip.ID()},
-			}},
-			BackendAddressPools: pools, Probes: probes, LoadBalancingRules: apiRules,
+			Sku:                      &network.LoadBalancerSkuArgs{Name: pulumi.String("Standard")},
+			FrontendIPConfigurations: frontends,
+			BackendAddressPools:      pools, Probes: probes, LoadBalancingRules: apiRules,
 			OutboundRules: network.OutboundRuleArray{&network.OutboundRuleArgs{
 				Name: pulumi.String("egress"), Protocol: pulumi.String("All"), AllocatedOutboundPorts: pulumi.Int(s.OutboundPortsPerNode),
 				BackendAddressPool:       &network.SubResourceArgs{Id: pulumi.Sprintf("%s/backendAddressPools/egress", lbID)},
@@ -203,6 +197,9 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 			ctx.Export("apiPublicIP", ip.IpAddress)
 		}
 	}
+	if s.Uniform {
+		return deployPools(ctx, d, rg.Name, location, subnet.ID().ToStringOutput(), vnet.ID().ToStringOutput(), apiBackend, egressBackend, artifacts)
+	}
 	privateIPs, publicIPs, apiEndpoints := pulumi.StringMap{}, pulumi.StringMap{}, pulumi.StringMap{}
 	for _, node := range d.Cluster.Nodes {
 		ipConfig := &network.NetworkInterfaceIPConfigurationArgs{
@@ -214,14 +211,6 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 		if s.APILoadBalancer && !node.Worker() {
 			ipConfig.LoadBalancerBackendAddressPools = network.BackendAddressPoolArray{&network.BackendAddressPoolArgs{Id: egressBackend}, &network.BackendAddressPoolArgs{Id: apiBackend}}
 		}
-		if s.PublicNodeIPs {
-			ip, err := publicIP("node-" + node.Name)
-			if err != nil {
-				return err
-			}
-			ipConfig.PublicIPAddress = &network.PublicIPAddressTypeArgs{Id: ip.ID()}
-			publicIPs[node.Name] = ip.IpAddress.Elem()
-		}
 		nic, err := network.NewNetworkInterface(ctx, "node-"+node.Name, &network.NetworkInterfaceArgs{
 			NetworkInterfaceName: pulumi.String(s.Name + "-" + node.Name), ResourceGroupName: rg.Name, Location: location,
 			EnableIPForwarding: pulumi.Bool(true), IpConfigurations: network.NetworkInterfaceIPConfigurationArray{ipConfig},
@@ -229,8 +218,9 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 		if err != nil {
 			return err
 		}
-		_, err = compute.NewVirtualMachine(ctx, "node-"+node.Name, &compute.VirtualMachineArgs{
+		vm, err := compute.NewVirtualMachine(ctx, "node-"+node.Name, &compute.VirtualMachineArgs{
 			VmName: pulumi.String(s.Name + "-" + node.Name), ResourceGroupName: rg.Name, Location: location,
+			Identity:               &compute.VirtualMachineIdentityArgs{Type: compute.ResourceIdentityTypeSystemAssigned},
 			Zones:                  pulumi.ToStringArray([]string{s.NodeZones[node.Name]}),
 			VirtualMachineScaleSet: &compute.SubResourceArgs{Id: vmss.ID()},
 			HardwareProfile:        &compute.HardwareProfileArgs{VmSize: pulumi.String(s.VMSize)},
@@ -240,9 +230,6 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 				CustomData: pulumi.ToSecret(pulumi.String(base64.StdEncoding.EncodeToString(d.Ignition[node.Name]))).(pulumi.StringOutput),
 				LinuxConfiguration: &compute.LinuxConfigurationArgs{
 					DisablePasswordAuthentication: pulumi.Bool(true),
-					Ssh: &compute.SshConfigurationArgs{PublicKeys: compute.SshPublicKeyTypeArray{&compute.SshPublicKeyTypeArgs{
-						Path: pulumi.String("/home/core/.ssh/authorized_keys"), KeyData: pulumi.String(d.Cluster.SSHAuthorizedKey),
-					}}},
 				},
 			},
 			StorageProfile: &compute.StorageProfileArgs{
@@ -257,6 +244,15 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 		}, pulumi.Protect(true), pulumi.IgnoreChanges([]string{"osProfile.customData"}))
 		if err != nil {
 			return err
+		}
+		if !node.Worker() {
+			principal := vm.Identity.PrincipalId().Elem()
+			if err := artifacts.grant(ctx, "node-assets-"+node.Name, artifacts.Assets, principal, false); err != nil {
+				return err
+			}
+			if err := artifacts.grant(ctx, "node-access-"+node.Name, artifacts.Access, principal, true); err != nil {
+				return err
+			}
 		}
 		privateIPs[node.Name] = pulumi.String(node.IP)
 		if !node.Worker() {

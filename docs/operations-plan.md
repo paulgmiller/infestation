@@ -36,12 +36,16 @@ the implementation status below distinguishes it from deployed behavior.
   limit, pending measurement. Allow CPU bursting with host CPU weights. Proposed
   OS/K3s reservation is 500m CPU and 1.5 GiB memory. Application requests remain
   optional, so their undeclared demand is not reflected in scheduling decisions.
-- No public SSH or public node addresses for management. SSH is private-network
-  break-glass access through a future bastion, Tailscale or another chosen path.
+- No SSH or public node addresses. SSH services/sockets are masked for now;
+  later operator access through Tailscale remains to be designed.
   The Kubernetes API remains public with TLS/authentication for now.
 - Deployment should self-bootstrap through Ignition-installed node services;
   no external SSH runner. K3s generates its own PKI; publish the resulting
   regional admin kubeconfig to protected storage and refresh after renewal.
+- For now the `-0` server VM (`kube-0` in the default inventory) is the only
+  initializer, regardless of inventory order. No automatic failover to another
+  initializer. A future Blob lease is a TODO; see [bootstrap design](bootstrap.md)
+  for the failure behavior and portability requirements.
 - Accept a Cockroach license secret and activate it during bootstrap. Licensing
   eligibility, provisioning the license and ongoing renewal remain operator duties.
 
@@ -52,8 +56,20 @@ access, delete protection, deployment discovery outputs, publication through the
 existing bootstrap, and `infestation azure kubeconfig` fetching. Unit and Pulumi
 mock tests do not establish actual regional availability or failure recovery.
 
-Node-local bootstrap, private-only SSH planner defaults, license activation,
-Cockroach stand-ins/host limits, backups/retention/restore, AZ failure tests,
-application placement defaults and certificate-renewal publication remain work
-to implement and verify. Existing deployment still performs workstation-driven
-SSH bootstrap. No cloud resources are provisioned as part of this source change.
+The Azure planner defaults to private nodes and a public API. Its output directory
+defaults to `state/<name>` and SSH keys/flags have been removed. Existing saved
+plans and PKI are not rewritten. Default node names are `kube-0` through `kube-2`.
+
+The node-local SQL credential path is wired: deployment mints a one-hour SQL
+root client certificate/key for `-0`'s private Ignition only, and the node removes
+it after recording successful Kine SQL setup. A pinned-image Docker test confirms
+initialization, SQL setup, cleanup and subsequent Kine authentication. The CA and
+long-lived admin keys remain on the workstation.
+
+Complete Azure node-local first boot, license activation, Cockroach stand-ins/host
+limits, backups/retention/restore, AZ failure tests, application placement defaults
+and certificate-renewal publication remain work to implement or verify. The
+Flexible VMSS currently groups static VM resources; automatic scale-out requires
+worker certificate enrollment and a shared scaling profile. Do not treat
+unit/mock or isolated Docker results as a successful Azure deployment. No cloud
+resources are provisioned as part of this source change.

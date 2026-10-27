@@ -17,6 +17,12 @@ Infestation is one Go module at this repository root. Read README.md first.
 - PKI is generated with Go crypto; Ignition uses official v3.3 types/validation.
   Never overwrite an existing CA or token. Root/admin credentials and CA signing
   keys stay on the workstation and must never be embedded in node profiles.
+  Explicitly approved bootstrap exception: a separately issued, one-hour SQL root
+  client certificate/key may be embedded in the API pool's shared private Ignition profile (or
+  only the `-0` profile for static inventories). Only API instance `0` may use it.
+  Other API instances remove their copy. Shared wildcard node leaf credentials
+  are authorized for Uniform VMSS; the CA signing key stays on the workstation. Never substitute the long-lived admin key or CA signing key. Remove
+  the temporary credential from the node after SQL setup succeeds.
 - `make check` validates without provisioning. Add meaningful tests for identity,
   storage, bootstrap/recovery guards, and infrastructure lifecycle changes.
 - No provisioning, disk formatting, remote deployment, database initialization,

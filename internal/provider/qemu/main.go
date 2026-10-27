@@ -90,7 +90,7 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 	if err != nil {
 		return err
 	}
-	privateIPs, sshCommands, apiEndpoints, domainNames := pulumi.StringMap{}, pulumi.StringMap{}, pulumi.StringMap{}, pulumi.StringMap{}
+	privateIPs, apiEndpoints, domainNames := pulumi.StringMap{}, pulumi.StringMap{}, pulumi.StringMap{}
 	for _, node := range d.Cluster.Nodes {
 		// Upload existing private Ignition directly: the provider's Ignition helper
 		// writes 0644 temporary files, unsuitable for our embedded private keys.
@@ -153,14 +153,12 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 			return err
 		}
 		privateIPs[node.Name] = pulumi.String(node.IP)
-		sshCommands[node.Name] = pulumi.String("ssh core@" + node.IP)
 		domainNames[node.Name] = domain.Name
 		if node.Role != "worker" {
 			apiEndpoints[node.Name] = pulumi.String("https://" + node.IP + ":6443")
 		}
 	}
 	ctx.Export("privateIPs", privateIPs)
-	ctx.Export("sshCommands", sshCommands)
 	ctx.Export("domainNames", domainNames)
 	ctx.Export("apiEndpoints", apiEndpoints)
 	ctx.Export("networkCIDR", pulumi.String(s.NetworkCIDR))

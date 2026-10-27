@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -162,6 +163,9 @@ func Select(skus []SKU, rates []Rate, usage []Usage, location string, count int,
 	return out
 }
 func Resolve(c cluster.Config, selected Candidate, name, location string, admin, api []string, minDisk int) (cluster.Config, map[string]any, error) {
+	if _, err := c.Initializer(); err != nil {
+		return c, nil, err
+	}
 	c.Nodes = append([]cluster.Node{}, c.Nodes...)
 	c.TLSSANs = append([]string{}, c.TLSSANs...)
 	servers, workers := []string{}, []string{}
@@ -175,12 +179,6 @@ func Resolve(c cluster.Config, selected Candidate, name, location string, admin,
 	if len(servers) != 3 || len(selected.AvailableZones) < 3 {
 		return c, nil, fmt.Errorf("exactly three servers and three available zones are required")
 	}
-	sort.Strings(servers)
-	sort.Strings(workers)
-	zones := map[string]string{}
-	for i, n := range append(servers, workers...) {
-		zones[n] = selected.AvailableZones[i%3]
-	}
 	hostname := name + "-api." + location + ".cloudapp.azure.com"
 	found := false
 	for _, san := range c.TLSSANs {
@@ -191,12 +189,26 @@ func Resolve(c cluster.Config, selected Candidate, name, location string, admin,
 	}
 	c.CockroachStorage = "azure-temporary"
 	c.CockroachMinDiskGiB = minDisk
+	apiOrdinal, workerOrdinal := 0, 0
 	for i := range c.Nodes {
 		n := &c.Nodes[i]
-		n.Locality = "cloud=azure,region=" + location + ",zone=" + zones[n.Name]
+		if n.Worker() {
+			n.Name = fmt.Sprintf("worker-%d", workerOrdinal)
+			workerOrdinal++
+		} else {
+			n.Name = fmt.Sprintf("api-%d", apiOrdinal)
+			apiOrdinal++
+		}
+		n.Locality = ""
 		n.ClusterMAC = ""
 	}
-	settings := map[string]any{"name": name, "location": location, "vmSize": selected.VMSize, "nodeZones": zones, "apiLoadBalancer": true, "apiDNSLabel": name + "-api", "apiAdminCIDRs": api, "publicNodeIPs": true, "adminCIDRs": admin, "osDiskSizeGB": 32, "osDiskStorageAccountType": "StandardSSD_LRS"}
+	if len(api) == 0 {
+		api = admin
+	}
+	if len(api) == 0 {
+		api = []string{"0.0.0.0/0"}
+	}
+	settings := map[string]any{"name": name, "location": location, "vmSize": selected.VMSize, "uniform": true, "privateDNSZone": name + "." + location + ".internal", "apiCount": 3, "workerCount": len(workers), "apiLoadBalancer": true, "apiDNSLabel": name + "-api", "apiAdminCIDRs": api, "vnetCIDR": "192.168.0.0/16", "osDiskSizeGB": 32, "osDiskStorageAccountType": "StandardSSD_LRS"}
 	return c, settings, c.Validate()
 }
 func RetailPrices(ctx context.Context, client *http.Client, location string) ([]Rate, error) {
@@ -205,7 +217,7 @@ func RetailPrices(ctx context.Context, client *http.Client, location string) ([]
 	var out []Rate
 	for next != "" {
 		u, err := url.Parse(next)
-		if err != nil || u.Scheme != "https" || u.Host != "prices.azure.com" {
+		if err != nil || u.Scheme != "https" || u.Hostname() != "prices.azure.com" || (u.Port() != "" && u.Port() != "443") || u.User != nil {
 			return nil, fmt.Errorf("unexpected retail pricing page URL")
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, next, nil)
@@ -236,13 +248,32 @@ func RetailPrices(ctx context.Context, client *http.Client, location string) ([]
 }
 
 type Options struct {
-	Location, Name, ClusterPath, PublicKey, OutputDir, SKUsFile, RatesFile string
-	AdminCIDRs, APICIDRs                                                   []string
-	Constraints                                                            Constraints
+	Location, Name, ClusterPath, OutputDir, SKUsFile, RatesFile string
+	AdminCIDRs, APICIDRs                                        []string
+	Constraints                                                 Constraints
+}
+
+// LocalDefaults resolves workstation inputs without Azure calls or filesystem writes.
+func (o Options) LocalDefaults() (Options, error) {
+	if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,29}$`).MatchString(o.Name) {
+		return o, fmt.Errorf("--name is required: use at most 30 lowercase letters, digits or hyphens, starting with a letter")
+	}
+	if o.OutputDir == "" {
+		o.OutputDir = filepath.Join("state", o.Name)
+	}
+	if len(o.AdminCIDRs) == 0 {
+		o.AdminCIDRs = []string{"0.0.0.0/0"}
+	}
+	return o, nil
 }
 
 func Create(ctx context.Context, runner executil.Runner, o Options) (Plan, error) {
 	var p Plan
+	var err error
+	o, err = o.LocalDefaults()
+	if err != nil {
+		return p, err
+	}
 	if o.Constraints.MinVCPUs < 1 || o.Constraints.MinMemoryGiB <= 0 || o.Constraints.MinUsableDiskGiB < 1 || o.Constraints.Spot {
 		return p, fmt.Errorf("positive resource constraints and on-demand pricing required")
 	}
@@ -257,12 +288,10 @@ func Create(ctx context.Context, runner executil.Runner, o Options) (Plan, error
 	if err = json.Unmarshal(data, &c); err != nil {
 		return p, err
 	}
-	key, err := os.ReadFile(o.PublicKey)
-	if err != nil {
+	if err = c.Validate(); err != nil {
 		return p, err
 	}
-	c.SSHAuthorizedKey = strings.TrimSpace(string(key))
-	if err = c.Validate(); err != nil {
+	if _, err = c.Initializer(); err != nil {
 		return p, err
 	}
 	az := func(target any, args ...string) error {
@@ -302,11 +331,7 @@ func Create(ctx context.Context, runner executil.Runner, o Options) (Plan, error
 	if len(candidates) == 0 {
 		return p, fmt.Errorf("no compatible three-zone SKU has sufficient quota and local temporary storage")
 	}
-	api := o.APICIDRs
-	if len(api) == 0 {
-		api = o.AdminCIDRs
-	}
-	c, settings, err := Resolve(c, candidates[0], o.Name, o.Location, o.AdminCIDRs, api, o.Constraints.MinUsableDiskGiB)
+	c, settings, err := Resolve(c, candidates[0], o.Name, o.Location, o.AdminCIDRs, o.APICIDRs, o.Constraints.MinUsableDiskGiB)
 	if err != nil {
 		return p, err
 	}

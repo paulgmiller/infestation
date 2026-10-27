@@ -1,15 +1,60 @@
 package pki
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"infestation/internal/testutil"
 )
+
+func TestBootstrapCredentialIsShortLivedAndSeparate(t *testing.T) {
+	state := t.TempDir()
+	if err := Create(testutil.Config(), state); err != nil {
+		t.Fatal(err)
+	}
+	caBefore, _ := os.ReadFile(filepath.Join(state, "pki", "ca.key"))
+	adminBefore, _ := os.ReadFile(filepath.Join(state, "pki", "admin", "client.root.key"))
+	raw, err := BootstrapCredential(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var credential struct{ Certificate, Key []byte }
+	if err := json.Unmarshal(raw, &credential); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(credential.Certificate, credential.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf.Subject.CommonName != "root" || leaf.IsCA || time.Until(leaf.NotAfter) > time.Hour || time.Until(leaf.NotAfter) < 59*time.Minute {
+		t.Fatal("unexpected bootstrap certificate identity or lifetime")
+	}
+	caPEM, _ := os.ReadFile(filepath.Join(state, "pki", "ca.crt"))
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caPEM)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(credential.Key, caBefore) || bytes.Equal(credential.Key, adminBefore) {
+		t.Fatal("bootstrap reused a long-lived private key")
+	}
+	caAfter, _ := os.ReadFile(filepath.Join(state, "pki", "ca.key"))
+	adminAfter, _ := os.ReadFile(filepath.Join(state, "pki", "admin", "client.root.key"))
+	if !bytes.Equal(caBefore, caAfter) || !bytes.Equal(adminBefore, adminAfter) {
+		t.Fatal("credential issuance changed existing PKI")
+	}
+}
 
 func TestNativeCertificatesAndNoOverwrite(t *testing.T) {
 	c := testutil.Config()
@@ -28,7 +73,7 @@ func TestNativeCertificatesAndNoOverwrite(t *testing.T) {
 		file, cn string
 		usage    x509.ExtKeyUsage
 		dns      string
-	}{{"kube1/node", "node", x509.ExtKeyUsageServerAuth, c.Nodes[0].IP}, {"kube1/node", "node", x509.ExtKeyUsageClientAuth, ""}, {"kube1/client.kine", "kine", x509.ExtKeyUsageClientAuth, ""}, {"admin/client.root", "root", x509.ExtKeyUsageClientAuth, ""}} {
+	}{{"kube-0/node", "node", x509.ExtKeyUsageServerAuth, c.Nodes[0].IP}, {"kube-0/node", "node", x509.ExtKeyUsageClientAuth, ""}, {"kube-0/client.kine", "kine", x509.ExtKeyUsageClientAuth, ""}, {"admin/client.root", "root", x509.ExtKeyUsageClientAuth, ""}} {
 		data, err := os.ReadFile(filepath.Join(dir, entry.file+".crt"))
 		if err != nil {
 			t.Fatal(err)

@@ -2,15 +2,11 @@ package deploy
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"golang.org/x/crypto/ssh"
 	"infestation/internal/azureplan"
 	"infestation/internal/fsutil"
 	"infestation/internal/testutil"
@@ -38,25 +34,15 @@ exit 1
 	state := filepath.Join(root, "plan")
 	os.Mkdir(state, 0700)
 	c := testutil.Config()
-	_, private, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	public, _ := ssh.NewPublicKey(private.Public())
-	c.SSHAuthorizedKey = string(ssh.MarshalAuthorizedKey(public))
-	block, err := ssh.MarshalPrivateKey(private, "test-only")
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := filepath.Join(root, "key")
-	os.WriteFile(key, pem.EncodeToMemory(block), 0600)
+	var err error
 	if err = fsutil.WriteJSON(filepath.Join(state, "cluster.json"), c); err != nil {
 		t.Fatal(err)
 	}
 	if err = fsutil.WriteJSON(filepath.Join(state, "plan.json"), azureplan.Plan{SubscriptionID: "fixture", PulumiConfig: map[string]any{"name": "fixture"}}); err != nil {
 		t.Fatal(err)
 	}
-	o := Options{RepoRoot: root, PlanDir: state, Stack: "fixture", PrivateKey: key, FlatcarVersion: "4757.2.1", PreviewOnly: true, Log: io.Discard}
+	os.WriteFile(filepath.Join(root, "node-helper"), []byte("fixture-node-binary"), 0700)
+	o := Options{RepoRoot: root, PlanDir: state, Stack: "fixture", NodeBinary: filepath.Join(root, "node-helper"), FlatcarVersion: "4757.2.1", PreviewOnly: true, Log: io.Discard}
 	if err = Azure(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}

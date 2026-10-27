@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -17,6 +18,47 @@ import (
 	"infestation/internal/cluster"
 	"infestation/internal/fsutil"
 )
+
+// BootstrapCredential mints a separate short-lived client key. It never exports
+// the CA signing key or the long-lived administrator's private key.
+func BootstrapCredential(state string) ([]byte, error) {
+	caPEM, err := os.ReadFile(filepath.Join(state, "pki", "ca.crt"))
+	if err != nil {
+		return nil, err
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(state, "pki", "ca.key"))
+	if err != nil {
+		return nil, err
+	}
+	caBlock, _ := pem.Decode(caPEM)
+	keyBlock, _ := pem.Decode(keyPEM)
+	if caBlock == nil || keyBlock == nil {
+		return nil, fmt.Errorf("invalid local CA")
+	}
+	ca, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	caKey, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	client, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	id, err := serial()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	leaf := &x509.Certificate{SerialNumber: id, Subject: pkix.Name{CommonName: "root"}, NotBefore: now.Add(-5 * time.Minute), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, ca, &client.PublicKey, caKey)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct{ Certificate, Key []byte }{pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(client)})})
+}
 
 func serial() (*big.Int, error) { return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128)) }
 func key(path string, k *rsa.PrivateKey) error {

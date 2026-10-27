@@ -163,3 +163,59 @@ and durability under faults remain untested. The VMs, disks, public IPs, NAT,
 and load balancer incur charges while retained; stopping VMs alone does not remove
 all those charges. Teardown requires a separate, deliberate operation that handles
 Pulumi protection and detached disks; no automatic cleanup is configured.
+
+## 2026-10-26 Uniform VMSS test (incomplete; teardown requested)
+
+New test plan: `state/infestation-vmss-test`, stack `uniformtest`, resource group
+`infestation-vmss-test-rg` in West US 2. Selected `Standard_D2d_v4` at
+$0.113/node-hour: 2 vCPU, 8 GiB RAM, 75 GiB temporary disk and 32 GiB managed
+Standard SSD OS disk. Regional quota was 10 vCPUs, so this test requested three
+API instances plus one worker; no second worker was created.
+
+Verified in Azure: the automatic-zone-placement subscription feature was already
+registered. The versioned Pulumi resource
+`azure-native:compute/v20260301:VirtualMachineScaleSet` is in provider 3.29.0's
+schema. Azure accepted two Uniform pools and placed API instance IDs 0/1/2 in
+zones 1/2/3; worker 0 was allocated in zone 1. Node NICs were private.
+Kubernetes/SQL readiness and worker scale-out were **not verified**.
+
+Live deployment exposed these issues, fixed in source:
+
+- NSG priority must be at least 100. SSH deny now uses 100, internal allow 110.
+- A Standard load balancer rejected mixed public/private frontends. Retain one
+  public API/egress SLB. Workers discover a live API member through private DNS
+  before each K3s agent start, after their host database can already start.
+- Azure requires OS authentication configuration. Generate a throwaway Ed25519
+  public key, immediately clear/discard its private key, and retain only the
+  public key to satisfy the API. No user key is required. SSH remains masked and
+  denied at the NSG.
+- Flatcar rejected `/usr/local/sbin/check-cockroach-storage` as read-only during
+  Ignition. The script now lives under `/opt/infestation`. This prevented the
+  attempted guests from reaching Cockroach/SQL initialization. Corrected
+  profiles were patched into the pools, manual instance upgrades requested,
+  and reimages requested; corrected boot had not been verified at teardown.
+- Manual VMSS reimage can reuse the instance's previous model. Apply the latest
+  pool model to instances before reimaging. Prefer a fresh cluster for the next
+  clean-first-boot test rather than relying on this interrupted recovery.
+- Azure retail pagination uses explicit `prices.azure.com:443`; accept the
+  default HTTPS port while preserving the hostname/userinfo checks.
+
+Local checks passed: Go suite, vet, race checks on PKI/Ignition/node bootstrap,
+provider mocks for both pools, wildcard/IMDS identity tests, and an isolated
+Cockroach v26.2.7 test of wildcard TLS, SQL init, credential cleanup and subsequent
+Kine authentication. The pinned node helper was uploaded manually during
+first-boot diagnosis, so the complete CLI upload/first-boot ordering still needs
+an unattended fresh-deployment test.
+
+The user requested stopping the experiment and deleting the resource group.
+The active deploy was terminated and the storage delete lock removed for that
+teardown. Preserve local PKI/state and logs; they include secret material.
+Failed Ignition boot diagnostics can dump full generated profiles: filter
+console output to status/error lines and do not share the raw log. After cloud
+teardown, the local backend is stale; refresh deliberately or use a new plan and
+stack name tomorrow. Do not blindly recreate from the interrupted stack.
+
+Teardown completed: Azure's `group wait --deleted` succeeded for
+`infestation-vmss-test-rg`. Both Uniform scale sets were removed before the
+remaining network cleanup. The local Pulumi update was canceled; no automatic
+redeployment is running.

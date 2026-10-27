@@ -1,4 +1,4 @@
-# Advanced/manual configuration. Prefer plan.py + deploy.py for automatic SKU,
+# Advanced/manual configuration. Prefer infestation azure plan/deploy for automatic SKU,
 # zone, TLS SAN, and bootstrap setup. Copy these settings into an initialized stack.
 config:
   azure-native:subscriptionId: 00000000-0000-0000-0000-000000000000
@@ -9,23 +9,18 @@ config:
   flatcar-k3s-azure:ignitionDir: state/output
   flatcar-k3s-azure:vnetCIDR: 192.168.0.0/16
   flatcar-k3s-azure:subnetCIDR: 192.168.1.0/24
-  # Use the size/placement resolved by plan.py; availability and quotas vary.
+  # Use the size/placement resolved by infestation azure plan; availability and quotas vary.
   flatcar-k3s-azure:vmSize: REPLACE_WITH_RESOLVED_SKU
   flatcar-k3s-azure:osDiskSizeGB: 32
   flatcar-k3s-azure:osDiskStorageAccountType: StandardSSD_LRS
   flatcar-k3s-azure:outboundPortsPerNode: 1024
-  flatcar-k3s-azure:nodeZones:
-    kube1: "1"
-    kube2: "2"
-    kube3: "3"
-    # worker1: "1"
-  flatcar-k3s-azure:publicNodeIPs: false
-  flatcar-k3s-azure:adminCIDRs: []
+  flatcar-k3s-azure:uniform: true
+  flatcar-k3s-azure:apiCount: 3
+  flatcar-k3s-azure:workerCount: 0
+  flatcar-k3s-azure:privateDNSZone: flatcar-k3s-dev.westus2.internal
   # The SLB always supplies egress. This switch adds TCP/TLS API ingress.
   # Add its DNS name to cluster.json
   # tls_sans before generating Ignition: flatcar-k3s-dev-api.westus2.cloudapp.azure.com
-  flatcar-k3s-azure:apiLoadBalancer: false
+  flatcar-k3s-azure:apiLoadBalancer: true
   flatcar-k3s-azure:apiDNSLabel: flatcar-k3s-dev-api
-  flatcar-k3s-azure:apiAdminCIDRs: []
-  # For workstation SSH, enable publicNodeIPs and set your actual public IP/32:
-  # flatcar-k3s-azure:adminCIDRs: ["203.0.113.10/32"]
+  flatcar-k3s-azure:apiAdminCIDRs: [0.0.0.0/0]

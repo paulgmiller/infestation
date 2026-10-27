@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"infestation/internal/cluster"
+	"infestation/internal/ignition"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -92,9 +93,6 @@ func loadDeployment(s Settings) (*Deployment, error) {
 	if d.Cluster.Architecture != "x86-64" {
 		return nil, fmt.Errorf("this local QEMU target requires x86-64")
 	}
-	if !strings.Contains(d.Cluster.SSHAuthorizedKey, " AAAA") {
-		return nil, fmt.Errorf("set a real SSH public key in cluster.json")
-	}
 	names, ips, macs := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	servers, databases := 0, 0
 	for _, node := range d.Cluster.Nodes {
@@ -127,7 +125,7 @@ func loadDeployment(s Settings) (*Deployment, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read Ignition for %s: %w", node.Name, err)
 		}
-		if err := validateIgnition(data, node, d.Cluster.SSHAuthorizedKey); err != nil {
+		if err := validateIgnition(data, node); err != nil {
 			return nil, fmt.Errorf("stale Ignition for %s: %w; regenerate from the same cluster.json", node.Name, err)
 		}
 	}
@@ -175,12 +173,16 @@ type ignitionDocument struct {
 	Systemd struct {
 		Units []struct {
 			Name    string
+			Mask bool `json:"mask,omitempty"`
 			Enabled bool
 		}
 	} `json:"systemd"`
 }
 
-func validateIgnition(data []byte, node Node, sshKey string) error {
+func validateIgnition(data []byte, node Node) error {
+	if err := ignition.ValidateNoSSH(data); err != nil {
+		return err
+	}
 	var doc ignitionDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("invalid JSON")
@@ -200,17 +202,6 @@ func validateIgnition(data []byte, node Node, sshKey string) error {
 	}
 	if files["/etc/hostname"] != node.Name+"\n" || !strings.Contains(files["/etc/rancher/k3s/config.yaml"], "node-ip: \""+node.IP+"\"") {
 		return fmt.Errorf("hostname/IP differs")
-	}
-	matchedKey := false
-	for _, user := range doc.Passwd.Users {
-		for _, key := range user.SSHAuthorizedKeys {
-			if user.Name == "core" && key == sshKey {
-				matchedKey = true
-			}
-		}
-	}
-	if !matchedKey {
-		return fmt.Errorf("SSH key differs")
 	}
 	service := "k3s.service"
 	if node.Role == "worker" {

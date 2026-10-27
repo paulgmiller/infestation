@@ -32,18 +32,24 @@ not provision anything. Runtime prerequisites depend on the command:
 
 | Operation | Additional tools |
 | --- | --- |
-| Validate, PKI, Ignition, image preparation | None |
+| Validate, PKI, image preparation | None |
+| Local Ignition | Built `bin/infestation-node` helper |
 | Azure price/quota planning | Azure CLI, authenticated subscription |
 | Fetch Azure kubeconfig from Blob Storage | Azure CLI, authenticated identity with blob read access |
 | Pulumi preview/apply | Pulumi CLI 3.272.0; Azure credentials or local libvirt access |
-| Database/Kubernetes bootstrap | Docker (Cockroach CLI), kubectl, Cilium CLI 0.20.1 |
+| Node-local bootstrap (draft) | Ignition services, node Docker/K3s, managed identity on Azure |
 | Connectivity smoke test | kubectl and a reachable cluster |
 
-Bootstrap currently assumes a Linux workstation for Docker host networking and
-Unix state permissions. SSH transport and forwarding use Go's SSH library. New host keys are recorded
-in private `known_hosts`; changed host keys are rejected. PKI uses Go crypto,
-and Ignition uses the official v3.3 types and validator. There is no Docker or
-OpenSSL dependency for certificate generation.
+SSH keys and workstation SSH bootstrap have been removed. Ignition masks SSH
+services and sockets, and Azure denies inbound port 22. PKI uses Go crypto and
+Ignition uses the official v3.3 types and validator.
+
+Node-local SQL bootstrap uses a one-hour credential in the API pool's private
+Ignition, used only by API instance `0`. Static inventories deliver it only to `-0`. The pinned-image SQL initialization/cleanup path passes
+an isolated Docker test; fresh Azure deployment without SSH is not yet verified.
+Only the `-0` server (`kube-0` by default) may initialize CockroachDB and perform
+initial SQL setup. If it never starts, initial deployment waits. See the
+[bootstrap design and Blob lease TODO](docs/bootstrap.md).
 
 ## Layout
 
@@ -53,7 +59,8 @@ internal/cluster/           shared inventory and validation
 internal/pki/               native Cockroach CA/node/client certificates
 internal/ignition/          Flatcar Ignition and systemd configuration
 internal/azureplan/         price, quota, SKU, and zone resolution
-internal/bootstrap/         guarded database init, Kine SQL, Cilium, kubeconfig
+internal/bootstrap/         shared bootstrap guards, Kine SQL, kubeconfig
+internal/nodebootstrap/     draft node-local init and kubeconfig publication
 internal/deploy/            preview/apply/bootstrap orchestration
 internal/provider/azure/    Azure Native Pulumi resources and mock tests
 internal/provider/qemu/     libvirt Pulumi resources and mock tests
@@ -70,7 +77,7 @@ Infestation binary and its infrastructure programs, rather than a public Go SDK.
 ## Shared node preparation
 
 Copy [examples/cluster.json](examples/cluster.json) to a private state directory,
-then set the real SSH public key and node addresses:
+then set the node addresses (no SSH key is required):
 
 ```sh
 mkdir -p state/local
@@ -79,12 +86,15 @@ cp examples/cluster.json state/local/cluster.json
 # Edit state/local/cluster.json before continuing.
 bin/infestation validate --config state/local/cluster.json
 bin/infestation pki --config state/local/cluster.json --state-dir state/local
+go build -o bin/infestation-node ./cmd/infestation-node
 bin/infestation ignition --config state/local/cluster.json --state-dir state/local
 ```
 
 PKI creation refuses to overwrite existing credentials. Ignition regeneration
 preserves the K3s token. Keep the CA signing key and admin credentials on the
-workstation; only per-node credentials enter private Ignition files. Generated
+workstation; only signed node/client credentials enter private Ignition files. Azure Uniform
+pools use a shared wildcard node certificate so new instances can join without
+a certificate enrollment service. Generated
 files are mode `0600` in private state directories and are ignored by Git.
 
 Normal clusters require exactly three servers. A deliberate single-server lab
@@ -95,9 +105,9 @@ CA-issued credentials; do not create a new CA for nodes joining an existing clus
 
 ## Deploy
 
-- [Azure Flexible VMSS](infra/azure/README.md): automatically choose and pin the
-  cheapest compatible on-demand VM SKU and three-zone placement, use one SLB
-  for API ingress and egress, and complete bootstrap through one CLI command.
+- [Azure Uniform VMSS](infra/azure/README.md): automatically choose and pin the
+  cheapest compatible on-demand VM SKU with automatic three-zone placement, use one SLB
+  for API ingress and egress, and orchestrate draft node-local bootstrap through one CLI command.
 - [Local QEMU/KVM](infra/qemu/README.md): private NAT network, stable DHCP/MAC
   identity, persistent qcow2 overlays, and the same Go-generated Ignition.
 - [Architecture and portability](docs/architecture.md): shared and cloud-specific
@@ -121,15 +131,16 @@ fetch it without SSH or the original PKI directory:
 
 ```sh
 az login
-bin/infestation azure kubeconfig --outputs state/dev/outputs.json \
-  --out state/dev/downloaded-kubeconfig
+# After deploying a plan named infestation-dev and publishing its kubeconfig:
+bin/infestation azure kubeconfig --outputs state/infestation-dev/outputs.json \
+  --out state/infestation-dev/downloaded-kubeconfig
 ```
 
 The command uses Azure identity authentication, keeps TLS verification and writes
 mode `0600`. Existing files require `--force`. See the [Azure guide](infra/azure/README.md#retrieve-the-kubeconfig)
-for portal-based discovery and access roles. Node-local self-bootstrap and
-automatic republishing on certificate renewal remain to be implemented; this
-change connects publication to the existing bootstrap workflow.
+for portal-based discovery and access roles. SQL credential delivery is wired
+through `-0` Ignition; complete node-local first boot and periodic publication
+still need fresh Azure deployment verification.
 
 To run the directed DNS/service check after bootstrap:
 

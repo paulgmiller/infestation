@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"infestation/internal/cluster"
+	"infestation/internal/ignition"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -17,11 +18,12 @@ type Node = cluster.Node
 
 type Settings struct {
 	Name, Location, FlatcarVersion, VMSize string
+	Uniform                                bool
+	PrivateDNSZone                         string
+	APICount, WorkerCount                  int
 	ClusterPath, IgnitionDir               string
 	VNetCIDR, SubnetCIDR                   string
 	NodeZones                              map[string]string
-	PublicNodeIPs                          bool
-	AdminCIDRs                             []string
 	OSDiskSizeGB                           int
 	OSDiskStorageAccountType               string
 	APILoadBalancer                        bool
@@ -35,9 +37,10 @@ func (s Settings) apiHostname() string {
 }
 
 type Deployment struct {
-	Settings Settings
-	Cluster  Cluster
-	Ignition map[string][]byte
+	Settings         Settings
+	Cluster          Cluster
+	Ignition         map[string][]byte
+	DisabledLoginKey string
 }
 
 type ignitionFile struct {
@@ -66,6 +69,7 @@ type ignitionDocument struct {
 	Systemd struct {
 		Units []struct {
 			Name     string `json:"name"`
+			Mask     bool   `json:"mask,omitempty"`
 			Enabled  bool   `json:"enabled"`
 			Contents string `json:"contents"`
 		} `json:"units"`
@@ -108,17 +112,8 @@ func loadDeployment(s Settings) (*Deployment, error) {
 			return nil, fmt.Errorf("vnetCIDR overlaps the default K3s pod/service networks")
 		}
 	}
-	if s.PublicNodeIPs && len(s.AdminCIDRs) == 0 {
-		return nil, fmt.Errorf("publicNodeIPs requires explicit adminCIDRs")
-	}
 	if s.APILoadBalancer && (len(s.APIAdminCIDRs) == 0 || !regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`).MatchString(s.APIDNSLabel)) {
 		return nil, fmt.Errorf("apiLoadBalancer requires explicit apiAdminCIDRs and an Azure-compatible apiDNSLabel")
-	}
-	for _, cidr := range s.AdminCIDRs {
-		p, err := netip.ParsePrefix(cidr)
-		if err != nil || !p.Addr().Is4() || p.Bits() == 0 {
-			return nil, fmt.Errorf("adminCIDRs must contain explicit IPv4 CIDRs, not 0.0.0.0/0")
-		}
 	}
 	for _, cidr := range s.APIAdminCIDRs {
 		p, err := netip.ParsePrefix(cidr)
@@ -155,10 +150,10 @@ func loadDeployment(s Settings) (*Deployment, error) {
 	if storage := d.Cluster.CockroachStorage; storage != "" && storage != "persistent" && storage != "azure-temporary" {
 		return nil, fmt.Errorf("unsupported CockroachDB storage profile")
 	}
-	databaseZones := map[string]bool{}
-	if !strings.HasPrefix(d.Cluster.SSHAuthorizedKey, "ssh-ed25519 AAAA") && !strings.HasPrefix(d.Cluster.SSHAuthorizedKey, "ssh-rsa AAAA") {
-		return nil, fmt.Errorf("set a real Azure-compatible SSH public key in cluster.json")
+	if s.Uniform {
+		return loadPools(d)
 	}
+	databaseZones := map[string]bool{}
 	names, ips, servers := map[string]bool{}, map[string]bool{}, 0
 	for _, node := range d.Cluster.Nodes {
 		if len(s.Name)+1+len(node.Name) > 64 {
@@ -197,7 +192,7 @@ func loadDeployment(s Settings) (*Deployment, error) {
 		if len(data) > 65535 {
 			return nil, fmt.Errorf("Ignition for %s exceeds Azure's 65535-byte custom-data limit", node.Name)
 		}
-		if err := validateIgnition(data, node, d.Cluster.SSHAuthorizedKey, d.Cluster.TLSSANs); err != nil {
+		if err := validateIgnition(data, node, d.Cluster.TLSSANs); err != nil {
 			return nil, fmt.Errorf("Ignition for %s is stale or mismatched: %w; regenerate with the same cluster.json", node.Name, err)
 		}
 		if d.Cluster.CockroachStorage == "azure-temporary" && node.Database() {
@@ -206,12 +201,12 @@ func loadDeployment(s Settings) (*Deployment, error) {
 			found := false
 			unitMatches := false
 			for _, f := range doc.Storage.Files {
-				found = found || f.Path == "/usr/local/sbin/check-cockroach-storage"
+				found = found || f.Path == "/opt/infestation/check-cockroach-storage"
 			}
 			for _, unit := range doc.Systemd.Units {
 				if unit.Name == "cockroachdb.service" {
 					unitMatches = strings.Contains(unit.Contents, "src=/mnt/resource/cockroach,") &&
-						strings.Contains(unit.Contents, "ExecStartPre=/usr/local/sbin/check-cockroach-storage\n") &&
+						strings.Contains(unit.Contents, "ExecStartPre=/opt/infestation/check-cockroach-storage\n") &&
 						strings.Contains(unit.Contents, "--locality="+node.Locality+" ")
 				}
 			}
@@ -249,7 +244,10 @@ func reservedAzureIP(prefix netip.Prefix, ip netip.Addr) bool {
 	return ip == netip.AddrFrom4(last)
 }
 
-func validateIgnition(data []byte, node Node, sshKey string, sans []string) error {
+func validateIgnition(data []byte, node Node, sans []string) error {
+	if err := ignition.ValidateNoSSH(data); err != nil {
+		return err
+	}
 	var doc ignitionDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("invalid JSON")
@@ -281,17 +279,6 @@ func validateIgnition(data []byte, node Node, sshKey string, sans []string) erro
 	}
 	if !strings.Contains(conf, "node-ip: \""+node.IP+"\"") {
 		return fmt.Errorf("node IP differs")
-	}
-	keyMatches := false
-	for _, user := range doc.Passwd.Users {
-		for _, key := range user.SSHAuthorizedKeys {
-			if user.Name == "core" && key == sshKey {
-				keyMatches = true
-			}
-		}
-	}
-	if !keyMatches {
-		return fmt.Errorf("SSH key differs")
 	}
 	service := "k3s.service"
 	if node.Worker() {

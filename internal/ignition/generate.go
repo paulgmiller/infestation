@@ -55,7 +55,10 @@ func Token(c cluster.Config, state string) (string, error) {
 	return token, closeErr
 }
 
-func Generate(c cluster.Config, state string) error {
+func Generate(c cluster.Config, state string, options ...Bootstrap) error {
+	if len(options) > 0 && options[0].Pool != nil {
+		return GeneratePools(c, state, options[0])
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -66,7 +69,7 @@ func Generate(c cluster.Config, state string) error {
 	}
 	docs := map[string][]byte{}
 	for _, n := range c.Nodes {
-		doc, err := Render(c, n, state, token)
+		doc, err := Render(c, n, state, token, options...)
 		if err != nil {
 			return fmt.Errorf("%s: %w", n.Name, err)
 		}
@@ -91,9 +94,12 @@ func Generate(c cluster.Config, state string) error {
 	return nil
 }
 
-func Render(c cluster.Config, n cluster.Node, state, token string) (types.Config, error) {
+func Render(c cluster.Config, n cluster.Node, state, token string, options ...Bootstrap) (types.Config, error) {
 	doc := types.Config{Ignition: types.Ignition{Version: "3.3.0"}}
-	doc.Passwd.Users = []types.PasswdUser{{Name: "core", SSHAuthorizedKeys: []types.SSHAuthorizedKey{types.SSHAuthorizedKey(c.SSHAuthorizedKey)}}}
+	// Mask both service and socket activation, including Flatcar's image defaults.
+	for _, name := range []string{"sshd.service", "sshd.socket", "ssh.service", "ssh.socket", "sshd@.service"} {
+		doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: name, Mask: ptr(true)})
+	}
 	add := func(path, text string, mode int) {
 		doc.Storage.Files = append(doc.Storage.Files, File(path, []byte(text), mode))
 	}
@@ -101,7 +107,7 @@ func Render(c cluster.Config, n cluster.Node, state, token string) (types.Config
 	add("/etc/flatcar/update.conf", "REBOOT_STRATEGY=off\n", 0644)
 	doc.Storage.Files = append(doc.Storage.Files, types.File{Node: types.Node{Path: "/etc/extensions/k3s.raw", Overwrite: ptr(true)}, FileEmbedded1: types.FileEmbedded1{Mode: ptr(0644), Contents: types.Resource{Source: ptr(fmt.Sprintf("https://extensions.flatcar.org/extensions/k3s-%s-%s.raw", c.K3sExtensionVersion, c.Architecture))}}})
 	if n.Database() && c.CockroachStorage == "azure-temporary" {
-		add("/usr/local/sbin/check-cockroach-storage", fmt.Sprintf("#!/bin/sh\nset -eu\ntest \"$(findmnt -rn -M /mnt/resource -o FSTYPE)\" = ext4\ntest \"$(findmnt -brn -M /mnt/resource -o SIZE)\" -ge %d\n", int64(c.MinDiskGiB())*1024*1024*1024), 0755)
+		add("/opt/infestation/check-cockroach-storage", fmt.Sprintf("#!/bin/sh\nset -eu\ntest \"$(findmnt -rn -M /mnt/resource -o FSTYPE)\" = ext4\ntest \"$(findmnt -brn -M /mnt/resource -o SIZE)\" -ge %d\n", int64(c.MinDiskGiB())*1024*1024*1024), 0755)
 	}
 	if n.ClusterMAC != "" {
 		add("/etc/systemd/network/10-lab-cluster.network", fmt.Sprintf("[Match]\nMACAddress=%s\n\n[Network]\nAddress=%s/24\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n", n.ClusterMAC, n.IP), 0644)
@@ -188,6 +194,11 @@ func Render(c cluster.Config, n cluster.Node, state, token string) (types.Config
 		dropin = "10-cockroach-dependency.conf"
 	}
 	doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: service, Dropins: []types.Dropin{{Name: dropin, Contents: &restart}}})
+	if len(options) > 0 {
+		if err := bootstrapProfile(&doc, c, n, options[0]); err != nil {
+			return doc, err
+		}
+	}
 	return doc, nil
 }
 
@@ -212,7 +223,7 @@ func CockroachUnit(c cluster.Config, n cluster.Node) string {
 	if c.CockroachStorage == "azure-temporary" {
 		store = "/mnt/resource/cockroach"
 		dependency = " waagent.service"
-		check = "ExecStartPre=/usr/local/sbin/check-cockroach-storage\n"
+		check = "ExecStartPre=/opt/infestation/check-cockroach-storage\n"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=CockroachDB host datastore
@@ -226,8 +237,9 @@ Type=simple
 TimeoutStartSec=0
 TimeoutStopSec=120
 %sExecStartPre=/usr/bin/install -d -o 1000 -g 1000 -m 0700 %s
+ExecStartPre=/usr/bin/install -d -o 0 -g 0 -m 0700 /run/infestation
 ExecStartPre=-/usr/bin/docker rm -f cockroachdb
-ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=%s,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --entrypoint=/cockroach/cockroach %s %s --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr=%s --http-addr=127.0.0.1:8080%s%s --cache=%s --max-sql-memory=%s --logtostderr=INFO
+ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=%s,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --mount type=bind,src=/run/infestation,dst=/run/infestation,readonly --entrypoint=/cockroach/cockroach %s %s --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr=%s --http-addr=127.0.0.1:8080%s%s --cache=%s --max-sql-memory=%s --logtostderr=INFO
 ExecStop=/usr/bin/docker stop --time 90 cockroachdb
 Restart=always
 RestartSec=10

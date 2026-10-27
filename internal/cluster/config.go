@@ -10,13 +10,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"golang.org/x/crypto/ssh"
 )
 
 type Node struct {
 	Name          string `json:"name"`
 	IP            string `json:"ip"`
+	DNSName       string `json:"dns_name,omitempty"`
 	Role          string `json:"role,omitempty"`
 	CockroachDB   *bool  `json:"cockroachdb,omitempty"`
 	DatastoreHost string `json:"datastore_host,omitempty"`
@@ -25,11 +24,17 @@ type Node struct {
 	Locality      string `json:"locality,omitempty"`
 }
 
+func (n Node) Address() string {
+	if n.DNSName != "" {
+		return n.DNSName
+	}
+	return n.IP
+}
+
 func (n Node) Worker() bool   { return n.Role == "worker" }
 func (n Node) Database() bool { return n.CockroachDB == nil || *n.CockroachDB }
 
 type Config struct {
-	SSHAuthorizedKey    string   `json:"ssh_authorized_key"`
 	CockroachImage      string   `json:"cockroach_image"`
 	K3sExtensionVersion string   `json:"k3s_extension_version"`
 	Architecture        string   `json:"architecture"`
@@ -70,6 +75,25 @@ func (c Config) Databases() []Node {
 		}
 	}
 	return out
+}
+
+// Initializer selects the fixed server VM with ordinal zero, independently of
+// inventory order. This is intentionally a naming convention, not leader election.
+// TODO: replace this with a coordinated bootstrap target (e.g. a Blob lease on
+// Azure) so a fresh deployment can proceed when the -0 VM never starts.
+func (c Config) Initializer() (Node, error) {
+	var selected Node
+	count := 0
+	for _, n := range c.Servers() {
+		if strings.HasSuffix(n.Name, "-0") {
+			selected = n
+			count++
+		}
+	}
+	if count != 1 || !selected.Database() {
+		return Node{}, fmt.Errorf("bootstrap requires exactly one server named with suffix -0, hosting CockroachDB (for example kube-0)")
+	}
+	return selected, nil
 }
 func (c Config) MinDiskGiB() int {
 	if c.CockroachMinDiskGiB == 0 {
@@ -112,9 +136,6 @@ func (c Config) Validate() error {
 	if c.Architecture != "x86-64" && c.Architecture != "aarch64" {
 		return fmt.Errorf("architecture must be x86-64 or aarch64")
 	}
-	if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(c.SSHAuthorizedKey)); err != nil {
-		return fmt.Errorf("set a valid SSH authorized key: %w", err)
-	}
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@+-]*$`).MatchString(c.CockroachImage) {
 		return fmt.Errorf("invalid cockroach_image")
 	}
@@ -148,6 +169,9 @@ func (c Config) Validate() error {
 	for _, n := range c.Nodes {
 		if n.Role != "" && n.Role != "server" && n.Role != "worker" {
 			return fmt.Errorf("invalid role for %s", n.Name)
+		}
+		if n.DNSName != "" && !ValidSAN(n.DNSName) {
+			return fmt.Errorf("invalid node DNS name")
 		}
 		addr, err := netip.ParseAddr(n.IP)
 		if err != nil {

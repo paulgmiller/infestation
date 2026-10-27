@@ -1,7 +1,6 @@
 package qemu
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -43,7 +42,6 @@ func fixture(t *testing.T) Settings {
 	}
 	cluster["architecture"] = "x86-64"
 	delete(cluster, "single_node_lab")
-	cluster["ssh_authorized_key"] = "ssh-ed25519 " + base64.StdEncoding.EncodeToString(append([]byte("\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"), make([]byte, 32)...))
 	nodes := []map[string]any{}
 	for i := 1; i <= 3; i++ {
 		nodes = append(nodes, map[string]any{"name": fmt.Sprintf("kube%d", i), "ip": fmt.Sprintf("192.168.124.%d", 10+i)})

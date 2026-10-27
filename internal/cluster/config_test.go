@@ -6,6 +6,28 @@ import (
 	"testing"
 )
 
+func TestFixedInitializerIgnoresInventoryOrder(t *testing.T) {
+	c := testutil.Config()
+	c.Nodes = []cluster.Node{c.Nodes[2], c.Nodes[1], c.Nodes[0]}
+	n, err := c.Initializer()
+	if err != nil || n.Name != "kube-0" || n.IP != "192.168.1.101" {
+		t.Fatalf("wrong initializer: %+v, %v", n, err)
+	}
+	for _, change := range []func(*cluster.Config){
+		func(c *cluster.Config) { c.Nodes[2].Name = "kube-3" },
+		func(c *cluster.Config) { c.Nodes[0].Name = "other-0" },
+		func(c *cluster.Config) { off := false; c.Nodes[2].CockroachDB = &off },
+		func(c *cluster.Config) { c.Nodes[2].Role = "worker" },
+	} {
+		v := c
+		v.Nodes = append([]cluster.Node{}, c.Nodes...)
+		change(&v)
+		if _, err := v.Initializer(); err == nil {
+			t.Fatal("missing, ambiguous or ineligible initializer accepted")
+		}
+	}
+}
+
 func TestConfiguration(t *testing.T) {
 	c := testutil.Config()
 	if err := c.Validate(); err != nil {
@@ -17,7 +39,6 @@ func TestConfiguration(t *testing.T) {
 	}{
 		{"duplicate", func(c *cluster.Config) { c.Nodes[1].IP = c.Nodes[0].IP }},
 		{"invalid role", func(c *cluster.Config) { c.Nodes[0].Role = "workre" }},
-		{"key", func(c *cluster.Config) { c.SSHAuthorizedKey = "ssh-ed25519 AAAATEST" }},
 		{"SAN URL", func(c *cluster.Config) { c.TLSSANs = []string{"https://api.example.com"} }},
 		{"SAN port", func(c *cluster.Config) { c.TLSSANs = []string{"host:6443"} }},
 		{"locality injection", func(c *cluster.Config) { c.Nodes[0].Locality = "zone=1 --insecure" }},

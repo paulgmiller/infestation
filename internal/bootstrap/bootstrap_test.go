@@ -1,188 +1,15 @@
 package bootstrap
 
 import (
-	"context"
 	"fmt"
-	"io"
+	"infestation/internal/fsutil"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
-
-	"infestation/internal/blobstore"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
-	"infestation/internal/testutil"
 )
 
 const testID = "96c1d420-f94b-43e3-845d-e946b2fcce1b"
 
-type fakeRemote struct{}
-
-func (fakeRemote) Run(context.Context, string, string) executil.Result {
-	return executil.Result{Stdout: "active\n"}
-}
-
-type kubeRemote struct{}
-
-func (kubeRemote) Run(context.Context, string, string) executil.Result {
-	return executil.Result{Stdout: `apiVersion: v1
-kind: Config
-clusters:
-- name: default
-  cluster:
-    server: https://127.0.0.1:6443
-    certificate-authority-data: dGVzdC1jYQ==
-users:
-- name: default
-  user:
-    client-certificate-data: dGVzdC1jZXJ0
-    client-key-data: dGVzdC1rZXk=
-`}
-}
-func (kubeRemote) Tunnel(context.Context, string, string, int) (int, func(), error) {
-	panic("Kubernetes bootstrap must not open SQL tunnels")
-}
-
-type kubeRunner struct{ apiReady, ciliumInspected bool }
-
-func (r *kubeRunner) Run(_ context.Context, _ string, args ...string) executil.Result {
-	cmd := strings.Join(args, " ")
-	if strings.Contains(cmd, "/readyz") {
-		r.apiReady = true
-	}
-	if strings.Contains(cmd, "get daemonset cilium") {
-		r.ciliumInspected = true
-		return executil.Result{Stdout: "daemonset.apps/cilium"}
-	}
-	if strings.Contains(cmd, "get configmap cilium-config") {
-		return executil.Result{Stdout: "false"}
-	}
-	return executil.Result{}
-}
-
-type artifactWriter struct {
-	runner *kubeRunner
-	t      *testing.T
-	fail   bool
-	calls  int
-}
-
-func (w *artifactWriter) Put(_ context.Context, l blobstore.Location, data []byte) error {
-	w.calls++
-	if !w.runner.apiReady || w.runner.ciliumInspected {
-		w.t.Fatal("publish after API verification and before Cilium")
-	}
-	if l.Account != "testaccount" || !strings.Contains(string(data), "https://api.example.test:6443") {
-		w.t.Fatal("wrong publication location or API endpoint")
-	}
-	if w.fail {
-		return fmt.Errorf("publication failed")
-	}
-	return nil
-}
-func TestKubeconfigPublishedBeforeNetworkingAndRequiredForCompletion(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		state := t.TempDir()
-		if err := fsutil.WriteJSON(filepath.Join(state, "bootstrap.json"), Marker{ClusterID: testID}); err != nil {
-			t.Fatal(err)
-		}
-		runner := &kubeRunner{}
-		writer := &artifactWriter{runner: runner, t: t, fail: fail}
-		worker := New(Options{StateDir: state, Cluster: testutil.Config(), Outputs: Outputs{
-			APIEndpoint: "https://api.example.test:6443", KubeconfigBlob: &blobstore.Location{Account: "testaccount", Container: "access", Blob: "kubeconfig.json"},
-		}, Remote: kubeRemote{}, Runner: runner, Artifacts: writer, Log: io.Discard, Timeout: time.Millisecond})
-		err := worker.Kubernetes(context.Background())
-		if (err != nil) != fail || writer.calls != 1 {
-			t.Fatalf("publication failure handling: %v", err)
-		}
-		var marker Marker
-		if err := fsutil.ReadJSON(filepath.Join(state, "bootstrap.json"), &marker); err != nil {
-			t.Fatal(err)
-		}
-		if marker.KubernetesReady == fail {
-			t.Fatal("bootstrap marked complete despite failed publication")
-		}
-	}
-}
-func (fakeRemote) Tunnel(context.Context, string, string, int) (int, func(), error) {
-	return 12345, func() {}, nil
-}
-
-type database struct {
-	state             string
-	initialized, fail bool
-	inits             int
-	t                 *testing.T
-}
-
-func (d *database) Run(ctx context.Context, name string, args ...string) executil.Result {
-	cmd := strings.Join(args, " ")
-	if strings.Contains(cmd, "--execute=SELECT") {
-		if d.initialized {
-			return executil.Result{Stdout: "cluster_id\n" + testID + "\n"}
-		}
-		return executil.Result{Code: 1}
-	}
-	for _, arg := range args {
-		if arg == "init" {
-			d.inits++
-			var m Marker
-			if err := fsutil.ReadJSON(filepath.Join(d.state, "bootstrap.json"), &m); err != nil || !m.InitializationAttempted {
-				d.t.Fatal("intent must precede initialization")
-			}
-			if !d.fail {
-				d.initialized = true
-			}
-			return executil.Result{}
-		}
-	}
-	if strings.Contains(cmd, "--ranges") {
-		return executil.Result{Stdout: "is_live,ranges_unavailable,ranges_underreplicated\ntrue,0,0\ntrue,0,0\ntrue,0,0\n"}
-	}
-	return executil.Result{}
-}
-func TestInitializeOnlyOnce(t *testing.T) {
-	state := t.TempDir()
-	db := &database{state: state, t: t}
-	w := New(Options{StateDir: state, Cluster: testutil.Config(), Runner: db, Remote: fakeRemote{}, AllowInitialize: true, Log: io.Discard, Timeout: time.Millisecond})
-	if err := w.Database(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Database(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if db.inits != 1 {
-		t.Fatal(db.inits)
-	}
-	var marker Marker
-	fsutil.ReadJSON(filepath.Join(state, "bootstrap.json"), &marker)
-	if marker.ClusterID != testID {
-		t.Fatal(marker)
-	}
-	db.initialized = false
-	if err := w.Database(context.Background()); err == nil {
-		t.Fatal("lost quorum must not initialize a new database")
-	}
-	if db.inits != 1 {
-		t.Fatal("second cluster initialized")
-	}
-}
-func TestAmbiguousInitIsNeverRepeated(t *testing.T) {
-	state := t.TempDir()
-	db := &database{state: state, t: t, fail: true}
-	w := New(Options{StateDir: state, Cluster: testutil.Config(), Runner: db, Remote: fakeRemote{}, AllowInitialize: true, Log: io.Discard, Timeout: time.Millisecond})
-	if err := w.Database(context.Background()); err == nil {
-		t.Fatal("expected failure")
-	}
-	if err := w.Database(context.Background()); err == nil {
-		t.Fatal("must require recovery")
-	}
-	if db.inits != 1 {
-		t.Fatal("init repeated")
-	}
-}
 func TestKubeconfigPreservesTLS(t *testing.T) {
 	raw := []byte(`apiVersion: v1
 kind: Config
@@ -225,5 +52,20 @@ func TestMalformedStatusFailsClosed(t *testing.T) {
 		if err := Healthy(data, 3); err == nil {
 			t.Fatal(fmt.Sprint("accepted ", data))
 		}
+	}
+}
+
+func TestInitializationIdentityGuard(t *testing.T) {
+	var m Marker
+	if !m.CanInitialize(true) || m.CanInitialize(false) {
+		t.Fatal("initialization authorization")
+	}
+	m.InitializationAttempted = true
+	if m.CanInitialize(true) {
+		t.Fatal("ambiguous initialization retried")
+	}
+	m.ClusterID = testID
+	if _, err := m.WithIdentity("e9c1d420-f94b-43e3-845d-e946b2fcce1b"); err == nil {
+		t.Fatal("replacement identity accepted")
 	}
 }
