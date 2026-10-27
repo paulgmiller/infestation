@@ -24,7 +24,7 @@ func TestUniformProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := Bootstrap{Account: "inf0123456789", HelperSHA256: strings.Repeat("a", 64), Credential: cred, Pool: &nodebootstrap.AzurePool{Name: "test", Role: "api", Zone: "test.westus2.internal", Location: "westus2", Subnet: "192.168.1.0/24", APICount: 3, WorkerDatabase: true}}
+	b := Bootstrap{Account: "inf0123456789", HelperSHA256: strings.Repeat("a", 64), Credential: cred, APIEndpoint: "https://test-api.westus2.cloudapp.azure.com:6443", Pool: &nodebootstrap.AzurePool{Name: "test", Role: "api", Zone: "test.westus2.internal", Location: "westus2", Subnet: "192.168.1.0/24", APICount: 3, WorkerDatabase: true}}
 	if err := Generate(c, state, b); err != nil {
 		t.Fatal(err)
 	}

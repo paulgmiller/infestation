@@ -3,8 +3,11 @@ package ignition
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 
 	"github.com/coreos/ignition/v2/config/v3_3/types"
 	"infestation/internal/cluster"
@@ -79,6 +82,10 @@ exec /opt/infestation/infestation-node "$@"
 	if n.Worker() {
 		return nil
 	}
+	host, port, err := ciliumAPIEndpoint(c, b)
+	if err != nil {
+		return err
+	}
 	// K3s' bootstrap Helm job runs in the host network, before CNI exists.
 	replicas := 2
 	if c.SingleNodeLab {
@@ -98,15 +105,40 @@ spec:
   valuesContent: |-
     operator:
       replicas: %d
-    kubeProxyReplacement: false
-    k8sServiceHost: 10.43.0.1
-    k8sServicePort: 443
+    kubeProxyReplacement: true
+    k8sServiceHost: %s
+    k8sServicePort: %s
     cni:
       binPath: /opt/cni/bin
       confPath: /etc/cni/net.d
     ipam:
       operator:
         clusterPoolIPv4PodCIDRList: [10.42.0.0/16]
-`, replicas), 0600)
+`, replicas, quoted(host), port), 0600)
 	return nil
+}
+
+// Cilium must reach the API before it can implement Kubernetes Service IPs.
+// Azure pools use the public API LB; static/local inventories can use a server.
+func ciliumAPIEndpoint(c cluster.Config, b Bootstrap) (string, string, error) {
+	endpoint := b.APIEndpoint
+	if endpoint == "" {
+		if b.Pool != nil || len(c.Servers()) == 0 {
+			return "", "", fmt.Errorf("Cilium requires a direct HTTPS API endpoint for Azure pools")
+		}
+		endpoint = "https://" + net.JoinHostPort(c.Servers()[0].IP, "6443")
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", "", fmt.Errorf("Cilium requires a direct HTTPS API endpoint without credentials, path, query or fragment")
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", "", fmt.Errorf("invalid Cilium API endpoint port")
+	}
+	return u.Hostname(), port, nil
 }

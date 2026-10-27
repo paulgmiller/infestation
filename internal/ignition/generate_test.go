@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
+	"gopkg.in/yaml.v3"
 	"infestation/internal/cluster"
 	"infestation/internal/nodebootstrap"
 	"infestation/internal/pki"
@@ -42,7 +43,35 @@ func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
 			t.Fatal(err, report)
 		}
 		count := 0
+		chartFound := false
 		for _, file := range doc.Storage.Files {
+			data, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(*file.Contents.Source, "data:;base64,"))
+			if file.Path == "/etc/rancher/k3s/config.yaml" && !strings.Contains(string(data), "disable-kube-proxy: true\n") {
+				t.Fatal("kube-proxy must be disabled on every role")
+			}
+			if file.Path == "/var/lib/rancher/k3s/server/manifests/infestation-cilium.yaml" {
+				chartFound = true
+				var chart struct {
+					Spec struct {
+						Bootstrap bool   `yaml:"bootstrap"`
+						Values    string `yaml:"valuesContent"`
+					} `yaml:"spec"`
+				}
+				if err := yaml.Unmarshal(data, &chart); err != nil {
+					t.Fatal(err)
+				}
+				var values struct {
+					Replacement bool   `yaml:"kubeProxyReplacement"`
+					Host        string `yaml:"k8sServiceHost"`
+					Port        int    `yaml:"k8sServicePort"`
+				}
+				if err := yaml.Unmarshal([]byte(chart.Spec.Values), &values); err != nil {
+					t.Fatal(err)
+				}
+				if !chart.Spec.Bootstrap || !values.Replacement || values.Host != "api.example.test" || values.Port != 6443 {
+					t.Fatalf("Cilium must bootstrap without a Service VIP: %+v", values)
+				}
+			}
 			if strings.HasPrefix(file.Path, nodebootstrap.BootstrapCredentialDir+"/") {
 				count++
 				if n.Name != "kube-0" || file.Mode == nil || *file.Mode != 0600 {
@@ -52,6 +81,9 @@ func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
 			if strings.Contains(file.Path, "ca.key") {
 				t.Fatal("CA signing key embedded in Ignition")
 			}
+		}
+		if chartFound == n.Worker() {
+			t.Fatal("Cilium chart must be present only on servers")
 		}
 		if (n.Name == "kube-0" && count != 2) || (n.Name != "kube-0" && count != 0) {
 			t.Fatalf("wrong credential files on %s", n.Name)
@@ -99,6 +131,9 @@ func TestProfilesAndCredentials(t *testing.T) {
 			}
 		}
 		conf := files["/etc/rancher/k3s/config.yaml"]
+		if !strings.Contains(conf, "disable-kube-proxy: true\n") {
+			t.Fatal("kube-proxy must be disabled even without automatic bootstrap")
+		}
 		if n.Worker() {
 			if !strings.Contains(conf, `server: "https://192.168.1.101:6443"`) || strings.Contains(conf, "datastore-") || strings.Contains(conf, "tls-san:") {
 				t.Fatal("worker profile contains server options")

@@ -7,7 +7,7 @@ Ignition, planning, and bootstrap implementation for Azure and local QEMU/KVM.
 Three server nodes run the Kubernetes API, backed by TLS CockroachDB through
 Kine. Additional workers run the K3s agent and host CockroachDB by default;
 `"cockroachdb": false` opts a node out. Cockroach starts independently of
-Kubernetes and stores its data outside pods. Kube-proxy stays enabled; Flannel,
+Kubernetes and stores its data outside pods. New profiles disable kube-proxy and use Cilium for Service routing; Flannel,
 Traefik, ServiceLB, embedded etcd, and SQLite are not used.
 
 This is a tested prototype, not a production-ready operations platform. The
@@ -75,6 +75,13 @@ docs/                       architecture, migration notes, historical lab record
 
 `internal/` is intentional: these packages are implementation details of the
 Infestation binary and its infrastructure programs, rather than a public Go SDK.
+
+Cilium now bootstraps against the direct API endpoint instead of a Kubernetes
+Service IP. Azure profiles use the public API load balancer on TCP 6443; ports
+80/443 remain available for a future Cilium Gateway. Gateway resources and
+Azure forwarding rules for those ports are not installed by this change.
+The kube-proxy replacement configuration has local test coverage only; the
+2026-10-27 deployment used kube-proxy and does not verify this new mode.
 
 ## Shared node preparation
 

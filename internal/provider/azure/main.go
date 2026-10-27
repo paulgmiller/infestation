@@ -72,6 +72,19 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 	if err != nil {
 		return err
 	}
+	var dns network.PublicIPAddressDnsSettingsPtrInput
+	if s.APILoadBalancer {
+		dns = &network.PublicIPAddressDnsSettingsArgs{DomainNameLabel: pulumi.String(s.APIDNSLabel)}
+	}
+	ip, err := network.NewPublicIPAddress(ctx, "api", &network.PublicIPAddressArgs{
+		PublicIpAddressName: pulumi.String(s.Name + "-api"), ResourceGroupName: rg.Name, Location: location,
+		Sku: &network.PublicIPAddressSkuArgs{Name: pulumi.String("Standard")}, PublicIPAllocationMethod: pulumi.String("Static"),
+		Zones:       pulumi.ToStringArray([]string{"1", "2", "3"}),
+		DnsSettings: dns,
+	})
+	if err != nil {
+		return err
+	}
 	rules := network.SecurityRuleTypeArray{
 		&network.SecurityRuleTypeArgs{
 			Name: pulumi.String("deny-ssh"), Priority: pulumi.Int(100), Direction: pulumi.String("Inbound"),
@@ -95,6 +108,11 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 				Name: pulumi.String("management-api"), Priority: pulumi.Int(120), Direction: pulumi.String("Inbound"),
 				Access: pulumi.String("Allow"), Protocol: pulumi.String("Tcp"), SourcePortRange: pulumi.String("*"),
 				DestinationPortRange: pulumi.String("6443"), SourceAddressPrefixes: pulumi.ToStringArray(s.APIAdminCIDRs), DestinationAddressPrefix: pulumi.String("*"),
+			},
+			&network.SecurityRuleTypeArgs{
+				Name: pulumi.String("cluster-public-api"), Priority: pulumi.Int(125), Direction: pulumi.String("Inbound"),
+				Access: pulumi.String("Allow"), Protocol: pulumi.String("Tcp"), SourcePortRange: pulumi.String("*"),
+				DestinationPortRange: pulumi.String("6443"), SourceAddressPrefix: ip.IpAddress, DestinationAddressPrefix: pulumi.String("*"),
 			},
 			&network.SecurityRuleTypeArgs{
 				Name: pulumi.String("api-health-probe"), Priority: pulumi.Int(130), Direction: pulumi.String("Inbound"),
@@ -141,19 +159,6 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 	}
 	var apiBackend, egressBackend pulumi.StringOutput
 	{
-		var dns network.PublicIPAddressDnsSettingsPtrInput
-		if s.APILoadBalancer {
-			dns = &network.PublicIPAddressDnsSettingsArgs{DomainNameLabel: pulumi.String(s.APIDNSLabel)}
-		}
-		ip, err := network.NewPublicIPAddress(ctx, "api", &network.PublicIPAddressArgs{
-			PublicIpAddressName: pulumi.String(s.Name + "-api"), ResourceGroupName: rg.Name, Location: location,
-			Sku: &network.PublicIPAddressSkuArgs{Name: pulumi.String("Standard")}, PublicIPAllocationMethod: pulumi.String("Static"),
-			Zones:       pulumi.ToStringArray([]string{"1", "2", "3"}),
-			DnsSettings: dns,
-		})
-		if err != nil {
-			return err
-		}
 		// Derive child IDs from the group so inline rules do not depend on their own LB.
 		lbID := pulumi.Sprintf("%s/providers/Microsoft.Network/loadBalancers/%s-api", rg.ID(), s.Name)
 		pools := network.BackendAddressPoolArray{&network.BackendAddressPoolArgs{Name: pulumi.String("egress")}}

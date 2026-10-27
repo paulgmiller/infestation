@@ -152,7 +152,7 @@ func Render(c cluster.Config, n cluster.Node, state, token string, options ...Bo
 			doc.Storage.Files = append(doc.Storage.Files, file)
 		}
 	}
-	conf := fmt.Sprintf("token: %s\nnode-name: %s\nnode-ip: %s\n", quoted(token), quoted(n.Name), quoted(n.IP))
+	conf := fmt.Sprintf("token: %s\nnode-name: %s\nnode-ip: %s\ndisable-kube-proxy: true\n", quoted(token), quoted(n.Name), quoted(n.IP))
 	if n.Worker() {
 		server := n.ServerURL
 		if server == "" {

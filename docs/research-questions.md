@@ -79,7 +79,8 @@ another simpler CNI, NetworkPolicy enforcement, and a gateway such as Traefik.
 - NetworkPolicy is an API; which component would enforce it with each candidate
   CNI? Do not assume a simpler overlay implements policy by itself.
 - Compare a Flannel/policy-controller/Traefik combination, other simpler CNIs,
-  and the current Cilium setup with kube-proxy retained. Is using several smaller
+  and the Cilium setup (historically kube-proxy enabled; new profiles use
+  Cilium replacement, pending deployment verification). Is using several smaller
   controllers simpler to operate than the existing stack?
 - Measure idle and loaded CPU/memory, startup time, image footprint, debugging
   effort and upgrade risk on the 2-vCPU/8-GiB baseline.

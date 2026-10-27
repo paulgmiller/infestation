@@ -69,6 +69,11 @@ remove their copies. The default output directory is `state/<name>`.
 Azure cloud-controller-manager is not installed. K3s ServiceLB is disabled;
 application LoadBalancer Services do not configure the Pulumi API/egress SLB.
 
+New generated profiles disable kube-proxy and configure Cilium replacement
+against the public API LB on 6443. This supersedes the kube-proxy-enabled baseline
+for future profiles; it has not been deployment-tested. Ports 80/443 remain
+available for future gateway listeners. Existing deployments are not migrated.
+
 Safe decommission/scale-in, coordinated upgrades, license activation, Cockroach
 stand-ins/host limits, backups/retention/restore, AZ failure tests and certificate-
 renewal publication remain unimplemented or unverified. Upgrade discovery changes

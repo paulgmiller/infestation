@@ -118,8 +118,20 @@ bin/infestation smoke --config state/infestation-dev/cluster.json --state-dir st
 
 The kubeconfig embeds admin credentials and retains TLS CA verification. The
 Standard Load Balancer passes TCP 6443 through to K3s; its DNS name is included
-in every server certificate. Cilium keeps kube-proxy enabled and uses the
-Kubernetes Service VIP for bootstrap rather than one fixed private server IP.
+in every server certificate. New profiles disable K3s kube-proxy and enable
+Cilium's replacement, with Cilium connecting to that public DNS name on 6443.
+The NSG allows the cluster's outbound public IP to reach TCP 6443 independently
+of the operator CIDR allowlist. Cilium's bootstrap Helm job uses the local API
+and host networking. Ports 80/443 remain available for future Cilium Gateway
+listeners; no gateway or forwarding rules for those ports are installed yet.
+
+The new mode has local unit/mock coverage only. The recorded 2026-10-27 test
+used kube-proxy. Verify public-LB access from every node, fresh bootstrap, reboot
+and Service routing before relying on this mode. Existing first-boot profiles
+are not automatically migrated; do not disable kube-proxy on running nodes
+without coordinating Cilium configuration and allowing for connection disruption.
+See [Cilium's K3s guide](https://docs.cilium.io/en/stable/installation/k3s/) and
+[kube-proxy replacement requirements](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/).
 
 ## Retrieve the kubeconfig
 

@@ -331,7 +331,7 @@ func TestAPILoadBalancer(t *testing.T) {
 	s := fixture(t, true)
 	s.APILoadBalancer = true
 	s.APIDNSLabel = "test-api"
-	s.APIAdminCIDRs = []string{"0.0.0.0/0"}
+	s.APIAdminCIDRs = []string{"198.51.100.10/32"}
 	d, err := loadDeployment(s)
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +340,7 @@ func TestAPILoadBalancer(t *testing.T) {
 	if err := pulumi.RunErr(func(ctx *pulumi.Context) error { return deploy(ctx, d) }, pulumi.WithMocks("test", "test", mocks)); err != nil {
 		t.Fatal(err)
 	}
-	lbCount, backends, apiRules, probeRules := 0, 0, 0, 0
+	lbCount, backends, apiRules, probeRules, clusterRules := 0, 0, 0, 0, 0
 	for _, res := range mocks.resources {
 		switch res.TypeToken {
 		case "azure-native:network:LoadBalancer":
@@ -370,8 +370,13 @@ func TestAPILoadBalancer(t *testing.T) {
 				switch rule["name"].StringValue() {
 				case "management-api":
 					apiRules++
-					if rule["destinationPortRange"].StringValue() != "6443" || rule["sourceAddressPrefixes"].ArrayValue()[0].StringValue() != "0.0.0.0/0" {
+					if rule["destinationPortRange"].StringValue() != "6443" || rule["sourceAddressPrefixes"].ArrayValue()[0].StringValue() != "198.51.100.10/32" {
 						t.Error("only the API port should use the explicitly configured public source range")
+					}
+				case "cluster-public-api":
+					clusterRules++
+					if rule["sourceAddressPrefix"].StringValue() != "203.0.113.20" || rule["destinationPortRange"].StringValue() != "6443" || rule["access"].StringValue() != "Allow" || rule["protocol"].StringValue() != "Tcp" || rule["direction"].StringValue() != "Inbound" || rule["priority"].NumberValue() >= 200 {
+						t.Error("allow the cluster egress IP to reach the public API without widening operator access")
 					}
 				case "api-health-probe":
 					probeRules++
@@ -382,8 +387,8 @@ func TestAPILoadBalancer(t *testing.T) {
 			}
 		}
 	}
-	if lbCount != 1 || backends != 3 || apiRules != 1 || probeRules != 1 {
-		t.Fatalf("load balancer=%d backends=%d api rules=%d probe rules=%d", lbCount, backends, apiRules, probeRules)
+	if lbCount != 1 || backends != 3 || apiRules != 1 || probeRules != 1 || clusterRules != 1 {
+		t.Fatalf("load balancer=%d backends=%d api rules=%d probe rules=%d cluster rules=%d", lbCount, backends, apiRules, probeRules, clusterRules)
 	}
 }
 
@@ -451,7 +456,7 @@ func TestUniformPools(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := &nodebootstrap.AzurePool{Name: "test", Role: "api", Zone: "test.westus2.internal", Location: "westus2", Subnet: "192.168.1.0/24", APICount: 3, WorkerDatabase: true}
-	if err := ignition.Generate(c, root, ignition.Bootstrap{Account: "inf0123456789", HelperSHA256: strings.Repeat("a", 64), Credential: credential, Pool: pool}); err != nil {
+	if err := ignition.Generate(c, root, ignition.Bootstrap{Account: "inf0123456789", HelperSHA256: strings.Repeat("a", 64), Credential: credential, APIEndpoint: "https://test-api.westus2.cloudapp.azure.com:6443", Pool: pool}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "cluster.json")
