@@ -132,7 +132,13 @@ func ValidSAN(s string) bool {
 	}
 	return true
 }
-func (c Config) Validate() error {
+func (c Config) Validate() error { return c.validate(false) }
+
+// ValidateDiscovered permits temporary control-plane surge during replacement.
+// Persistent inventories keep the stricter, exactly-three-server contract.
+func (c Config) ValidateDiscovered() error { return c.validate(true) }
+
+func (c Config) validate(surge bool) error {
 	if c.Architecture != "x86-64" && c.Architecture != "aarch64" {
 		return fmt.Errorf("architecture must be x86-64 or aarch64")
 	}
@@ -162,7 +168,8 @@ func (c Config) Validate() error {
 	if c.SingleNodeLab {
 		expected = 1
 	}
-	if len(c.Nodes) == 0 || (len(c.Servers()) != 0 && len(c.Servers()) != expected) {
+	servers := len(c.Servers())
+	if len(c.Nodes) == 0 || (servers != 0 && ((!surge && servers != expected) || (surge && servers < expected))) {
 		return fmt.Errorf("exactly %d servers are required (or workers only)", expected)
 	}
 	names, ips := map[string]bool{}, map[string]bool{}

@@ -69,3 +69,18 @@ func TestConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDiscoveredSurgeDoesNotRelaxPinnedInventory(t *testing.T) {
+	c := testutil.Config()
+	c.Nodes = append(c.Nodes, cluster.Node{Name: "api-3", IP: "192.168.1.104"})
+	if c.Validate() == nil {
+		t.Fatal("pinned inventory accepted surge")
+	}
+	if err := c.ValidateDiscovered(); err != nil {
+		t.Fatal(err)
+	}
+	c.Nodes = c.Nodes[:2]
+	if c.ValidateDiscovered() == nil {
+		t.Fatal("discovered inventory accepted too few servers")
+	}
+}

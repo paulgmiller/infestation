@@ -49,27 +49,36 @@ the implementation status below distinguishes it from deployed behavior.
 - Accept a Cockroach license secret and activate it during bootstrap. Licensing
   eligibility, provisioning the license and ongoing renewal remain operator duties.
 
-## Implementation boundary
+## Implementation boundary (updated 2026-10-27)
 
-This change adds Azure RA-GZRS artifact storage, private identity-authenticated
-access, delete protection, deployment discovery outputs, publication through the
-existing bootstrap, and `infestation azure kubeconfig` fetching. Unit and Pulumi
-mock tests do not establish actual regional availability or failure recovery.
+The Azure Uniform VMSS test completed fresh CLI-driven first boot without SSH,
+using three API servers and initially one worker. Scaling the worker pool to two
+produced five Ready Kubernetes nodes and five live Cockroach members across
+three zones. All 20 directed DNS/service checks passed. Kubeconfig publication
+and fetch, IMDS locality, temporary SQL-key cleanup, SSH masking and worker-role
+reconciliation were verified. See the [Azure runbook](../infra/azure/RUNBOOK.md)
+for evidence, limits and teardown history.
 
-The Azure planner defaults to private nodes and a public API. Its output directory
-defaults to `state/<name>` and SSH keys/flags have been removed. Existing saved
-plans and PKI are not rewritten. Default node names are `kube-0` through `kube-2`.
+New Azure plans use two shared role profiles, dynamic private addresses and
+`api-N` / `worker-N` identities derived from IMDS. Shared wildcard node leaf
+credentials support scale-out without a certificate enrollment service; CA and
+long-lived administrator keys stay local. A separate one-hour SQL root credential
+is in the shared API profile, used only by API instance 0; other API members
+remove their copies. The default output directory is `state/<name>`.
 
-The node-local SQL credential path is wired: deployment mints a one-hour SQL
-root client certificate/key for `-0`'s private Ignition only, and the node removes
-it after recording successful Kine SQL setup. A pinned-image Docker test confirms
-initialization, SQL setup, cleanup and subsequent Kine authentication. The CA and
-long-lived admin keys remain on the workstation.
+Azure cloud-controller-manager is not installed. K3s ServiceLB is disabled;
+application LoadBalancer Services do not configure the Pulumi API/egress SLB.
 
-Complete Azure node-local first boot, license activation, Cockroach stand-ins/host
-limits, backups/retention/restore, AZ failure tests, application placement defaults
-and certificate-renewal publication remain work to implement or verify. The
-Flexible VMSS currently groups static VM resources; automatic scale-out requires
-worker certificate enrollment and a shared scaling profile. Do not treat
-unit/mock or isolated Docker results as a successful Azure deployment. No cloud
-resources are provisioned as part of this source change.
+Safe decommission/scale-in, coordinated upgrades, license activation, Cockroach
+stand-ins/host limits, backups/retention/restore, AZ failure tests and certificate-
+renewal publication remain unimplemented or unverified. Upgrade discovery changes
+are local preparation, not a tested rollout. Both Azure test resource groups were deleted and their absence verified.
+The source, private local state and test evidence remain for planning.
+
+## Open research
+
+The user requested investigation of ephemeral container storage, external cloud
+providers, Tailscale Funnel, simpler CNI/gateway options, and coordinated automatic
+maintenance. These are questions for later design, not approvals to change the
+current baseline. The detailed backlog and additional lessons are in
+[research-questions.md](research-questions.md).

@@ -219,3 +219,113 @@ Teardown completed: Azure's `group wait --deleted` succeeded for
 `infestation-vmss-test-rg`. Both Uniform scale sets were removed before the
 remaining network cleanup. The local Pulumi update was canceled; no automatic
 redeployment is running.
+
+## 2026-10-27 Uniform VMSS deployment and scale-out
+
+Fresh plan: `state/infestation-vmss-day2`, local stack `uniformday2`, resource
+group `infestation-vmss-day2-rg`, West US 2. Previous test state was preserved.
+Current SKU: `Standard_D2d_v4` (2 vCPU, 8 GiB RAM, 75 GiB temporary disk), with
+32 GiB Standard SSD OS disks. Three API instances and initially one worker.
+
+The normal `infestation azure deploy` path created all 24 resources in 3m40s,
+published its checksum-pinned Go helper after Azure guest provisioning, waited
+for node-local initialization, and fetched the Blob kubeconfig. No manual helper
+upload, SSH, SQL init, Cilium install or reimage was needed for fresh bootstrap.
+The generated profiles contain no file writes under `/usr`; the storage check
+is under `/opt/infestation`.
+
+Verified:
+
+- API IDs 0/1/2 in automatically selected Azure zones 1/2/3; worker 0 in zone 1.
+- All four initial Kubernetes nodes Ready; Cilium/Envoy healthy and operators 2/2.
+- Published kubeconfig passed public API `/readyz` and `get nodes` with TLS
+  verification. Nodes have no public addresses. Only private node records were
+  registered in `infestation-vmss-day2.westus2.internal`; application/traffic DNS
+  was not changed.
+- `az vmss scale ... --new-capacity 2` added worker 1 in zone 2, using the
+  existing shared profile/wildcard certificate. No new certificate was issued
+  or node name pre-registered. All five Kubernetes nodes became Ready.
+- Cockroach SQL reported five live members with matching IMDS-derived zone
+  locality. Every store reported `ranges.unavailable=0` and
+  `ranges.underreplicated=0` after scale-out.
+- All 20 directed DNS and ClusterIP HTTP smoke jobs passed across the five nodes.
+- Azure Run Command on API 0 verified the temporary SQL key had been removed,
+  runtime locality was zone 1, and `sshd.service` was masked. No SSH was used.
+- SQL checks used a temporary host-network probe pod plus a localhost-only
+  authenticated Kubernetes port-forward. The long-lived SQL administrator key
+  remained mounted read-only in a workstation Docker client, never copied to
+  the cluster. Port-forward connections can close when the SQL client disconnects;
+  reopen the tunnel for another query.
+
+Worker role labeling was then added to the API bootstrap helper. Kubelets cannot
+self-assign these reserved labels; all API helper passes reconcile discovered
+worker nodes with `node-role.kubernetes.io/worker=worker`, including scale-out.
+Both VMSS templates were patched to the new checksum-pinned helper, and the
+running API helpers were upgraded through Azure Run Command without restarting
+K3s/Cockroach or reimaging. Initial Ignition is preserved under
+`output/{api,worker}.initial.ign`; `output/{api,worker}.ign` reflects the updated
+templates. CA, node and administrator PKI were preserved.
+
+Current pool capacities are **3 API + 2 workers** (10 vCPUs, the regional quota).
+VM compute is about **$0.565/hour**, excluding disks, SLB, storage and traffic.
+The original pinned plan/stack config still declares **one** worker; scale-out
+was deliberately performed through Azure to test the common profile. Do not
+blindly reapply that plan: it would request a scale-in. Reconcile desired capacity
+explicitly before a future apply. Safe database decommission/scale-in, reimage
+recovery and AZ/region outage drills remain untested.
+
+Access from the repository root:
+
+```sh
+export KUBECONFIG="$PWD/state/infestation-vmss-day2/kubeconfig"
+kubectl get nodes
+az resource list --resource-group infestation-vmss-day2-rg --output table
+```
+
+The refreshed discovery snapshot for testing is `observed-cluster.json`, separate
+from the immutable initial inventory. Connectivity evidence is in
+`state/uniform-day2-smoke.log`; deployment output is in
+`state/uniform-day2-deploy.log`. Generated state, profiles and kubeconfigs are
+private and ignored. Keep the resource group until explicitly asked to tear it
+down; the artifact account retains its Azure delete lock.
+
+Worker labeling reconciliation was verified live by changing only worker 1's
+label value to `reconcile-check` (keeping the worker role key), invoking API 1's
+bootstrap service, and observing the value restored to `worker`. Final Cilium
+and Envoy readiness was 5/5, operators 2/2, and API `/readyz` returned `ok`.
+Temporary probe/smoke workloads were removed by deleting their dedicated
+`infestation-smoke` namespace after collecting all 20 PASS results. Cluster
+compute remains running. Azure CCM is not installed: application LoadBalancer
+Services will remain pending until that integration is added.
+
+### Teardown and upgrade-planning handoff (2026-10-27)
+
+The user stopped the upgrade experiment and requested deletion of the entire
+resource group. At that point the pool capacities remained 3 API + 2 workers;
+no Cockroach member had been decommissioned, no worker VM had been removed,
+and no K3s replacement upgrade had been applied. All running nodes were still
+on v1.35.8+k3s1. The proposed v1.35.9+k3s1 Flatcar extension returned HTTP 200.
+
+Upgrade preparation identified two bootstrap limitations: exactly-three API
+discovery prevents a surge, and requiring api-0 after SQL initialization prevents
+full pool replacement. Local source changes to address those remain preparatory
+and were not deployed or validated with a live upgrade. Preserve them for review
+rather than treating them as a tested upgrade implementation.
+
+A retirement procedure still needs to map each Azure instance/DNS name to its
+Cockroach node ID, cordon/drain Kubernetes workloads, run Cockroach decommission
+with --wait=all to completion, verify surviving replicas, then delete the exact
+VM, Kubernetes Node and stale private DNS record. Do not use generic VMSS scale-in
+as a substitute for selecting the safely retired instance. Durable resume/fencing,
+local volume handling, topology changes and desired-state reconciliation need
+further design before testing upgrades.
+
+The storage delete lock was removed and resource-group deletion requested.
+Local PKI, state, generated profiles, source changes and test evidence are
+preserved. This local Pulumi stack becomes stale after cloud teardown; do not
+blindly reapply it. No upgrade/decommission process is running.
+
+Teardown completed: Azure returned ResourceGroupNotFound and
+`az group exists --name infestation-vmss-day2-rg` returned `false`. The resource
+group and its cloud resources are gone. Local source/state/evidence remain.
+The follow-up design backlog is [research-questions.md](../../docs/research-questions.md).

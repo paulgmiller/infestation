@@ -11,12 +11,11 @@ Planning requires Azure CLI authentication. Applying requires Pulumi 3.272.0
 and Go to build the node bootstrap helper. SSH keys, SSH connectivity and a
 workstation Docker/Cilium installation are no longer part of deployment.
 
-**Fresh Azure deployment remains unverified.** Initial SQL credential delivery
-is wired through `-0` Ignition and passes an isolated pinned-Cockroach test.
-Planning and preview are reviewable; complete Flatcar/K3s/Cilium first boot
-without SSH has not yet been demonstrated. See the
-[bootstrap design](../../docs/bootstrap.md) for the fixed `-0` initializer and
-future Blob lease TODO.
+**Fresh Azure deployment passed on 2026-10-27.** Three API servers and one worker
+bootstrapped through the CLI without SSH; a second worker joined from the
+existing VMSS template without pre-registering its certificate. Five Kubernetes
+nodes became Ready, all five Cockroach members were live, and all 20 directed
+DNS/service checks passed. See [the runbook](RUNBOOK.md) for scope and limits.
 
 ```sh
 mkdir -p state
@@ -107,7 +106,8 @@ A separately issued one-hour SQL root client credential is embedded only in
 the API pool's shared private Ignition. The node deletes its temporary credential files after
 Kine SQL setup succeeds and uses the normal Kine identity thereafter. This
 credential is not distributed through Blob Storage. See the [credential lifecycle](../../docs/bootstrap.md#initial-sql-credential).
-The full command must not yet be considered Azure deployment-verified.
+The fresh CLI path was verified in the 2026-10-27 test; recovery and safe
+scale-in remain unverified.
 
 ```sh
 export KUBECONFIG="$PWD/state/infestation-dev/kubeconfig"
@@ -180,10 +180,20 @@ References: [Azure identity authorization](https://learn.microsoft.com/en-us/res
 [Azure redundancy](https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy),
 [Azure resource locks](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources).
 
+Services of type `LoadBalancer` are not wired to Azure yet: Azure
+cloud-controller-manager is not installed and K3s ServiceLB is disabled. Such
+Services remain pending for an external IP. The Pulumi SLB handles the API and
+egress; Kubernetes does not manage its application-service rules.
+[K3s ServiceLB behavior](https://docs.k3s.io/networking/networking-services#service-load-balancer).
+
 ## Pool identity and scale-out
 
 New plans create two Uniform scale sets, `<name>-api` and `<name>-worker`, with
-one shared Ignition profile per role. Increase worker capacity with Azure VMSS
+one shared Ignition profile per role. API bootstrap periodically labels agent
+nodes with `node-role.kubernetes.io/worker=worker`, including newly discovered
+workers. Kubernetes reserves role labels, so the API applies them with its admin
+identity rather than passing them as kubelet self-registration labels.
+Increase worker capacity with Azure VMSS
 scaling; new nodes fetch the same checksum-pinned Go helper, read IMDS, register
 an A record in `<name>.<region>.internal`, then start Cockroach and the K3s agent.
 The API pool stays at three members. There is no autoscale policy or safe

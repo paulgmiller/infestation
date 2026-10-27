@@ -38,3 +38,16 @@ func TestUniformIdentity(t *testing.T) {
 		t.Fatalf("scale-out ID: %+v %v", id, err)
 	}
 }
+
+func TestInventoryCountsAfterSQLInitialization(t *testing.T) {
+	p := AzurePool{APICount: 3, WorkerCount: 1}
+	for _, tc := range []struct {
+		servers, workers  int
+		initialized, want bool
+	}{{3, 1, false, true}, {4, 1, false, false}, {3, 0, false, false}, {4, 0, true, true}, {3, 0, true, true}, {2, 1, true, false}} {
+		err := p.checkInventory(tc.servers, tc.workers, tc.initialized)
+		if (err == nil) != tc.want {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+	}
+}

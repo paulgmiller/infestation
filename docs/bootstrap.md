@@ -73,5 +73,7 @@ INFESTATION_DOCKER_TEST=1 go test ./internal/nodebootstrap -run '^TestPinnedSQLB
 
 The test uses a cached image, no networking or host ports, and disposable data.
 It does not verify three-VM membership, Flatcar first boot, Azure managed identity,
-Cilium or Azure VM provisioning without SSH credentials. A fresh Azure deployment
-and failure-recovery drill remain to be performed.
+Cilium or Azure VM provisioning without SSH credentials. The 2026-10-27 Azure deployment additionally verified fresh CLI first boot,
+five-node membership after worker scale-out, credential cleanup on API instance
+0, and all 20 directed DNS/service checks. Failure-recovery drills remain
+unverified; see the [Azure runbook](../infra/azure/RUNBOOK.md).

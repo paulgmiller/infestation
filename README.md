@@ -10,11 +10,13 @@ Kine. Additional workers run the K3s agent and host CockroachDB by default;
 Kubernetes and stores its data outside pods. Kube-proxy stays enabled; Flannel,
 Traefik, ServiceLB, embedded etcd, and SQLite are not used.
 
-This is a tested prototype, not a production-ready operations platform. Earlier
-QEMU and Azure smoke deployments passed; the revised temporary-disk Azure
-profile has preview/unit coverage but has not passed a new VM deployment or
-failure-recovery test. The Azure smoke resource group was deleted. The local
-Pulumi QEMU VMs remain stopped with their persistent disks preserved.
+This is a tested prototype, not a production-ready operations platform. The
+2026-10-27 Azure Uniform VMSS deployment completed fresh first boot through the
+CLI, scaled from one to two workers, and passed all 20 directed DNS/service
+checks across five nodes. Cockroach reported five live members in three zones
+with zero unavailable or under-replicated ranges. Fault/recovery drills remain
+untested. See the [Azure runbook](infra/azure/RUNBOOK.md) for test
+resource groups and evidence. Local QEMU VMs remain stopped with storage preserved.
 
 ## Build and test
 
@@ -45,8 +47,8 @@ services and sockets, and Azure denies inbound port 22. PKI uses Go crypto and
 Ignition uses the official v3.3 types and validator.
 
 Node-local SQL bootstrap uses a one-hour credential in the API pool's private
-Ignition, used only by API instance `0`. Static inventories deliver it only to `-0`. The pinned-image SQL initialization/cleanup path passes
-an isolated Docker test; fresh Azure deployment without SSH is not yet verified.
+Ignition, used only by API instance `0`. Static inventories deliver it only to `-0`. Fresh Azure deployment without SSH and the pinned-image SQL
+initialization/cleanup path have passed deployment and isolated Docker tests.
 Only the `-0` server (`kube-0` by default) may initialize CockroachDB and perform
 initial SQL setup. If it never starts, initial deployment waits. See the
 [bootstrap design and Blob lease TODO](docs/bootstrap.md).
@@ -110,6 +112,8 @@ CA-issued credentials; do not create a new CA for nodes joining an existing clus
   for API ingress and egress, and orchestrate draft node-local bootstrap through one CLI command.
 - [Local QEMU/KVM](infra/qemu/README.md): private NAT network, stable DHCP/MAC
   identity, persistent qcow2 overlays, and the same Go-generated Ignition.
+- [Research questions](docs/research-questions.md): storage, cloud integration,
+  Tailscale ingress, CNI alternatives, maintenance and recovery questions.
 - [Architecture and portability](docs/architecture.md): shared and cloud-specific
   responsibilities. Google Compute Engine and AWS EC2 are planned, not implemented.
 
@@ -138,9 +142,8 @@ bin/infestation azure kubeconfig --outputs state/infestation-dev/outputs.json \
 
 The command uses Azure identity authentication, keeps TLS verification and writes
 mode `0600`. Existing files require `--force`. See the [Azure guide](infra/azure/README.md#retrieve-the-kubeconfig)
-for portal-based discovery and access roles. SQL credential delivery is wired
-through `-0` Ignition; complete node-local first boot and periodic publication
-still need fresh Azure deployment verification.
+for portal-based discovery and access roles. Fresh Uniform VMSS first boot, SQL credential cleanup and Blob kubeconfig
+publication were verified in the 2026-10-27 deployment.
 
 To run the directed DNS/service check after bootstrap:
 

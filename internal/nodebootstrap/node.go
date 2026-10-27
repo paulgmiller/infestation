@@ -165,26 +165,6 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 }
 
 func (w Worker) Run(ctx context.Context) error {
-	if w.Config.Azure != nil {
-		if w.Config.Azure.Role == "worker" {
-			return w.cleanupCredentials()
-		}
-		if err := w.discoverAzure(ctx); err != nil {
-			return err
-		}
-		if w.Config.Node != "api-0" {
-			if err := w.cleanupCredentials(); err != nil {
-				return err
-			}
-		}
-	}
-	if err := w.Config.Cluster.Validate(); err != nil {
-		return err
-	}
-	initializer, err := w.Config.Cluster.Initializer()
-	if err != nil {
-		return err
-	}
 	if w.Runner == nil {
 		w.Runner = executil.OSRunner{}
 	}
@@ -195,11 +175,55 @@ func (w Worker) Run(ctx context.Context) error {
 			w.Store = blobstore.Client{Token: blobstore.ManagedIdentityToken}
 		}
 	}
-	leader := initializer.Name == w.Config.Node
-	id := ""
-	if leader {
+	var durable bootstrap.Marker
+	if w.Config.Azure != nil {
+		if w.Config.Azure.Role == "worker" {
+			return w.cleanupCredentials()
+		}
+		raw, err := w.Store.Get(ctx, w.location("bootstrap-state.json"))
+		if err != nil && !errors.Is(err, blobstore.ErrNotFound) {
+			return err
+		}
+		if err == nil && json.Unmarshal(raw, &durable) != nil {
+			return fmt.Errorf("invalid persistent bootstrap marker")
+		}
+		if durable.SQLReady && durable.ClusterID == "" {
+			return fmt.Errorf("bootstrap SQL marker is missing its cluster identity")
+		}
+		if err := w.discoverAzure(ctx, durable.SQLReady); err != nil {
+			return err
+		}
+		if w.Config.Node != "api-0" {
+			if err := w.cleanupCredentials(); err != nil {
+				return err
+			}
+		}
+	}
+	var err error
+	if w.Config.Azure != nil && durable.SQLReady {
+		err = w.Config.Cluster.ValidateDiscovered()
+	} else {
+		err = w.Config.Cluster.Validate()
+	}
+	if err != nil {
+		return err
+	}
+	initializer, targetErr := w.Config.Cluster.Initializer()
+	if targetErr != nil && !durable.SQLReady {
+		return targetErr
+	}
+	leader := targetErr == nil && initializer.Name == w.Config.Node
+	id := durable.ClusterID
+	if !durable.SQLReady && leader {
 		id, err = w.Database(ctx)
 		if err != nil {
+			return err
+		}
+	} else if durable.SQLReady {
+		// Once initialized, every API member may verify/publish readiness. Ordinal
+		// zero retains exclusive fresh-init authority but is no longer a dependency
+		// for normal operation or a complete rolling replacement of the API pool.
+		if err := w.cleanupCredentials(); err != nil {
 			return err
 		}
 	}
@@ -225,7 +249,7 @@ func (w Worker) Run(ctx context.Context) error {
 	if err := w.Store.Put(ctx, w.location("kubeconfig.json"), data); err != nil {
 		return err
 	}
-	if !leader {
+	if !leader && !durable.SQLReady {
 		return nil
 	}
 	for _, n := range w.Config.Cluster.Databases() {

@@ -264,7 +264,7 @@ func PrepareAzure(ctx context.Context, c Config, root string) error {
 	return fsutil.WriteJSON(filepath.Join(root, "run/infestation/runtime.json"), c)
 }
 
-func (w *Worker) discoverAzure(ctx context.Context) error {
+func (w *Worker) discoverAzure(ctx context.Context, initialized bool) error {
 	m, err := ReadMetadata(ctx)
 	if err != nil {
 		return err
@@ -286,7 +286,7 @@ func (w *Worker) discoverAzure(ctx context.Context) error {
 			servers++
 		}
 	}
-	if servers != w.Config.Azure.APICount || workers < w.Config.Azure.WorkerCount {
+	if err := w.Config.Azure.checkInventory(servers, workers, initialized); err != nil {
 		return fmt.Errorf("waiting for initial DNS registration: %d API, %d workers", servers, workers)
 	}
 	w.Config.Node = id.Name
@@ -338,4 +338,19 @@ func JoinAzure(ctx context.Context, c Config, root string) error {
 		return fsutil.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600)
 	}
 	return fmt.Errorf("no private API listener available yet")
+}
+
+// Initial counts gate fresh bootstrap only. After durable SQL readiness, API
+// surge and worker retirement must not make the publication helper unusable.
+func (p AzurePool) checkInventory(servers, workers int, initialized bool) error {
+	if initialized {
+		if servers < 3 {
+			return fmt.Errorf("fewer than three API nodes registered")
+		}
+		return nil
+	}
+	if servers != p.APICount || workers < p.WorkerCount {
+		return fmt.Errorf("initial inventory incomplete")
+	}
+	return nil
 }
