@@ -51,3 +51,24 @@ func TestInventoryCountsAfterSQLInitialization(t *testing.T) {
 		}
 	}
 }
+
+func TestSmokePoolRequiresExplicitModeAndDatabaseWorker(t *testing.T) {
+	p := AzurePool{Name: "test", Role: "api", Zone: "test.westus2.internal", Location: "westus2", Subnet: "192.168.1.0/24", Token: strings.Repeat("a", 32), APICount: 2, WorkerCount: 1, WorkerDatabase: true}
+	if p.Validate() == nil {
+		t.Fatal("normal pool accepted two API nodes")
+	}
+	p.SmokeTest = true
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.checkInventory(2, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if p.checkInventory(1, 1, true) == nil || p.checkInventory(2, 0, false) == nil {
+		t.Fatal("incomplete test bootstrap accepted")
+	}
+	p.WorkerDatabase = false
+	if p.Validate() == nil {
+		t.Fatal("test worker must host the third database")
+	}
+}

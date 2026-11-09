@@ -329,3 +329,72 @@ Teardown completed: Azure returned ResourceGroupNotFound and
 `az group exists --name infestation-vmss-day2-rg` returned `false`. The resource
 group and its cloud resources are gone. Local source/state/evidence remain.
 The follow-up design backlog is [research-questions.md](../../docs/research-questions.md).
+
+## 2026-10-27 Cilium replacement and public httpbin gateway
+
+User-requested fresh deployment: `state/infestation-gateway`, stack `gateway`,
+resource group `infestation-gateway-rg`, West US 2. Earlier stacks and local VM
+storage were preserved. Four `Standard_D2d_v4` instances (three API, one worker)
+use Flatcar 4757.2.1, K3s v1.35.8+k3s1, Cockroach v26.2.7 and Cilium 1.20.4.
+Azure created all 24 resources in 2m54s. Retail pricing returned HTTP 429 twice;
+planning used the retained 2026-10-27 16:28 UTC price/SKU snapshot and a fresh
+quota check. Estimated compute was $0.452/hour, excluding disks/networking;
+this was not a fresh complete price comparison.
+
+The first bootstrap did **not** complete unattended: the generated worker
+configuration included `disable-kube-proxy`, which K3s rejected as a server-only
+flag. Servers were healthy but the worker did not register. Worker-label failure
+also prevented kubeconfig publication, and the CLI's 30-minute readiness wait
+expired. Boot logs were retained privately; generated credentials were not
+printed. Azure Run Command retrieved the failed agent's journal without SSH.
+
+Repair removed only the unsupported worker flag and restarted `k3s-agent` on
+worker instance 0. The worker joined and normal bootstrap published kubeconfig.
+No VM/store was deleted, reformatted or reinitialized. Source generation now
+sets the flag only on servers; K3s agents inherit the server setting. The
+worker's corrected first-boot profile was applied through a saved Pulumi plan:
+one VMSS template update, 23 unchanged, Manual upgrade mode, no VM replacement.
+Source also publishes kubeconfig before worker labeling, with a regression test
+that still blocks readiness and prevents repeated init when labeling fails.
+That helper publication-order fix was unit-tested, not rolled onto these nodes.
+[Pinned K3s agent implementation](https://github.com/k3s-io/k3s/blob/v1.35.8%2Bk3s1/pkg/agent/config/config.go).
+
+Installed Gateway API v1.6.3 standard CRDs, applied
+`examples/cilium-gateway.yaml`, and restarted Cilium agents/operator after the
+Helm update. Host-network Envoy listeners use the existing all-node backend
+pool on TCP 80/443. Pulumi owns the LB/NSG rules; Azure CCM remains absent.
+The API remains direct TCP 6443 and Cilium uses its public DNS endpoint.
+
+Applied `examples/httpbin-gateway.yaml`: two go-httpbin 2.25.0 replicas, a
+ClusterIP Service, a Cilium Gateway on HTTP 80 and an accepted HTTPRoute.
+The Docker image tag is `2.25.0`, not the Git release tag `v2.25.0`.
+Both replicas became Ready on separate nodes. Gateway `Programmed=True`.
+
+Verified from the workstation:
+
+```sh
+curl --noproxy '*' --fail \
+  'http://infestation-gateway-api.westus2.cloudapp.azure.com/get?source=public-lb'
+```
+
+Returned HTTP 200, `server: envoy`, and the expected query parameter in httpbin's
+JSON response. Public IP: `20.120.138.93`. HTTP only was configured/tested;
+the 443 forwarding rule requires an HTTPS listener/certificate before serving TLS.
+All four nodes became Ready, Cilium/Envoy reached 4/4, and all 12 directed
+DNS/cross-node ClusterIP HTTP checks passed. Some initial check attempts retried
+while newly created Service endpoints became ready. This does not establish
+reboot, node/zone failure, upgrade or disaster recovery guarantees.
+
+Private evidence: `state/gateway-deploy.log`, `state/gateway-smoke.log`,
+`state/gateway-worker-template-{preview,update}.log`, and HTTP headers/body under
+`state/infestation-gateway/`. Kubeconfig is at
+`state/infestation-gateway/kubeconfig`, mode 0600. Original timeout evidence is
+retained; the repair was not presented as successful unattended first boot.
+The user subsequently requested teardown. The artifact account's
+`retain-artifacts` Azure deletion lock was removed and the entire
+`infestation-gateway-rg` resource group deleted, including the VM pools, httpbin,
+disks, storage and public load balancer. Completion was verified with
+`az group exists --name infestation-gateway-rg` returning `false`.
+Local PKI, kubeconfigs, generated profiles, source and evidence were preserved.
+The local Pulumi backend is now stale after out-of-band cloud deletion; do not
+blindly reapply it or treat the retained kubeconfig/public URL as live.

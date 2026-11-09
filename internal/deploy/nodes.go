@@ -80,7 +80,7 @@ func prepareNode(ctx context.Context, repo, state, binary string, plan azureplan
 				workers++
 			}
 		}
-		a.Profile.Pool = &nodebootstrap.AzurePool{Name: name, Role: "api", Zone: zone, Location: location, Subnet: "192.168.1.0/24", APICount: 3, WorkerCount: workers, WorkerDatabase: workerDB}
+		a.Profile.Pool = &nodebootstrap.AzurePool{Name: name, Role: "api", Zone: zone, Location: location, Subnet: "192.168.1.0/24", APICount: c.RequiredServers(), SmokeTest: c.SmokeTest, WorkerCount: workers, WorkerDatabase: workerDB}
 	}
 	a.Binary = data
 	a.Location = blobstore.Location{Account: account, Container: "bootstrap-assets", Blob: "infestation-node-" + hash, SubscriptionID: plan.SubscriptionID}

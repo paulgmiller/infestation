@@ -176,8 +176,8 @@ func Resolve(c cluster.Config, selected Candidate, name, location string, admin,
 			servers = append(servers, n.Name)
 		}
 	}
-	if len(servers) != 3 || len(selected.AvailableZones) < 3 {
-		return c, nil, fmt.Errorf("exactly three servers and three available zones are required")
+	if len(servers) != c.RequiredServers() || c.SingleNodeLab || len(selected.AvailableZones) < 3 {
+		return c, nil, fmt.Errorf("configured API count and three available zones are required")
 	}
 	hostname := name + "-api." + location + ".cloudapp.azure.com"
 	found := false
@@ -208,7 +208,7 @@ func Resolve(c cluster.Config, selected Candidate, name, location string, admin,
 	if len(api) == 0 {
 		api = []string{"0.0.0.0/0"}
 	}
-	settings := map[string]any{"name": name, "location": location, "vmSize": selected.VMSize, "uniform": true, "privateDNSZone": name + "." + location + ".internal", "apiCount": 3, "workerCount": len(workers), "apiLoadBalancer": true, "apiDNSLabel": name + "-api", "apiAdminCIDRs": api, "vnetCIDR": "192.168.0.0/16", "osDiskSizeGB": 32, "osDiskStorageAccountType": "StandardSSD_LRS"}
+	settings := map[string]any{"name": name, "location": location, "vmSize": selected.VMSize, "uniform": true, "privateDNSZone": name + "." + location + ".internal", "apiCount": len(servers), "workerCount": len(workers), "apiLoadBalancer": true, "apiDNSLabel": name + "-api", "apiAdminCIDRs": api, "vnetCIDR": "192.168.0.0/16", "osDiskSizeGB": 32, "osDiskStorageAccountType": "StandardSSD_LRS"}
 	return c, settings, c.Validate()
 }
 func RetailPrices(ctx context.Context, client *http.Client, location string) ([]Rate, error) {
@@ -251,6 +251,7 @@ type Options struct {
 	Location, Name, ClusterPath, OutputDir, SKUsFile, RatesFile string
 	AdminCIDRs, APICIDRs                                        []string
 	Constraints                                                 Constraints
+	GatewayEnabled                                              bool
 }
 
 // LocalDefaults resolves workstation inputs without Azure calls or filesystem writes.
@@ -334,6 +335,9 @@ func Create(ctx context.Context, runner executil.Runner, o Options) (Plan, error
 	c, settings, err := Resolve(c, candidates[0], o.Name, o.Location, o.AdminCIDRs, o.APICIDRs, o.Constraints.MinUsableDiskGiB)
 	if err != nil {
 		return p, err
+	}
+	if o.GatewayEnabled {
+		settings["gatewayEnabled"] = true
 	}
 	p = Plan{time.Now().UTC().Format(time.RFC3339), account.ID, candidates[0], candidates[1:min(len(candidates), 6)], o.Constraints, settings}
 	if err = os.MkdirAll(filepath.Dir(o.OutputDir), 0700); err != nil {

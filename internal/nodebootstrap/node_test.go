@@ -60,10 +60,14 @@ type dbRunner struct {
 	inits                 int
 	target                string
 	failSQL               bool
+	failLabels            bool
 }
 
 func (r *dbRunner) Run(_ context.Context, name string, args ...string) executil.Result {
 	if name == "k3s" {
+		if r.failLabels && strings.Contains(strings.Join(args, " "), "label node ") {
+			return executil.Result{Code: 1}
+		}
 		return executil.Result{}
 	}
 	if name != "docker" {
@@ -334,6 +338,17 @@ users:
 	}
 	if r.inits != 1 || !strings.Contains(string(s.blobs["kubeconfig.json"]), w.Config.APIEndpoint) || len(s.blobs["bootstrap-status.json"]) == 0 {
 		t.Fatal("publication or initialization failed")
+	}
+	// A worker that never registers must not hide an otherwise usable API.
+	w.Config.Cluster.Nodes = append(w.Config.Cluster.Nodes, cluster.Node{Name: "worker-0", IP: "192.168.1.104", Role: "worker"})
+	r.failLabels = true
+	delete(s.blobs, "kubeconfig.json")
+	delete(s.blobs, "bootstrap-status.json")
+	if err := w.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "worker role") {
+		t.Fatalf("worker failure must still block readiness: %v", err)
+	}
+	if len(s.blobs["kubeconfig.json"]) == 0 || len(s.blobs["bootstrap-status.json"]) != 0 || r.inits != 1 {
+		t.Fatal("worker failure blocked publication, reported readiness or repeated init")
 	}
 }
 

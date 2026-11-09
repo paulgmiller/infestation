@@ -39,6 +39,7 @@ type Config struct {
 	K3sExtensionVersion string   `json:"k3s_extension_version"`
 	Architecture        string   `json:"architecture"`
 	SingleNodeLab       bool     `json:"single_node_lab,omitempty"`
+	SmokeTest           bool     `json:"smoke_test,omitempty"`
 	TLSSANs             []string `json:"tls_sans,omitempty"`
 	CockroachStorage    string   `json:"cockroach_storage,omitempty"`
 	CockroachMinDiskGiB int      `json:"cockroach_min_disk_gib,omitempty"`
@@ -134,8 +135,20 @@ func ValidSAN(s string) bool {
 }
 func (c Config) Validate() error { return c.validate(false) }
 
+// RequiredServers keeps normal clusters at three servers. Smoke tests exercise
+// both node roles using two servers and one worker, all hosting CockroachDB.
+func (c Config) RequiredServers() int {
+	if c.SmokeTest {
+		return 2
+	}
+	if c.SingleNodeLab {
+		return 1
+	}
+	return 3
+}
+
 // ValidateDiscovered permits temporary control-plane surge during replacement.
-// Persistent inventories keep the stricter, exactly-three-server contract.
+// Persistent inventories retain their configured server count.
 func (c Config) ValidateDiscovered() error { return c.validate(true) }
 
 func (c Config) validate(surge bool) error {
@@ -164,9 +177,9 @@ func (c Config) validate(surge bool) error {
 			return fmt.Errorf("invalid TLS SAN %q", san)
 		}
 	}
-	expected := 3
-	if c.SingleNodeLab {
-		expected = 1
+	expected := c.RequiredServers()
+	if c.SmokeTest && (c.SingleNodeLab || len(c.Nodes) != 3 || len(c.Servers()) != 2 || len(c.Databases()) != 3) {
+		return fmt.Errorf("smoke_test requires two API servers and one worker, all hosting CockroachDB")
 	}
 	servers := len(c.Servers())
 	if len(c.Nodes) == 0 || (servers != 0 && ((!surge && servers != expected) || (surge && servers < expected))) {

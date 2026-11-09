@@ -24,8 +24,8 @@ func loadPools(d *Deployment) (*Deployment, error) {
 	if !s.APILoadBalancer || s.SubnetCIDR != "192.168.1.0/24" {
 		return nil, fmt.Errorf("Uniform currently requires API load balancer and subnet 192.168.1.0/24")
 	}
-	if s.APICount != 3 || s.WorkerCount < 0 || len(d.Cluster.Servers()) != 3 || len(d.Cluster.Nodes)-3 != s.WorkerCount {
-		return nil, fmt.Errorf("pool counts must match initial inventory (three API servers)")
+	if s.APICount != d.Cluster.RequiredServers() || s.WorkerCount < 0 || len(d.Cluster.Servers()) != s.APICount || len(d.Cluster.Nodes)-s.APICount != s.WorkerCount {
+		return nil, fmt.Errorf("pool counts must match the configured initial inventory")
 	}
 	if !strings.HasSuffix(s.PrivateDNSZone, ".internal") || s.PrivateDNSZone != s.Name+"."+s.Location+".internal" {
 		return nil, fmt.Errorf("privateDNSZone must be the cluster's regional internal zone")
@@ -70,7 +70,7 @@ func loadPools(d *Deployment) (*Deployment, error) {
 					return nil, err
 				}
 				var c nodebootstrap.Config
-				if json.Unmarshal(data, &c) != nil || c.Azure == nil || c.Azure.Validate() != nil || c.Azure.Name != s.Name || c.Azure.Role != role || c.Azure.Zone != s.PrivateDNSZone || c.Azure.Location != s.Location || c.Azure.Subnet != s.SubnetCIDR || c.Azure.APICount != s.APICount || c.Azure.WorkerCount != s.WorkerCount {
+				if json.Unmarshal(data, &c) != nil || c.Azure == nil || c.Azure.Validate() != nil || c.Azure.Name != s.Name || c.Azure.Role != role || c.Azure.Zone != s.PrivateDNSZone || c.Azure.Location != s.Location || c.Azure.Subnet != s.SubnetCIDR || c.Azure.APICount != s.APICount || c.Azure.WorkerCount != s.WorkerCount || c.Azure.SmokeTest != d.Cluster.SmokeTest {
 					return nil, fmt.Errorf("pool Ignition config is stale or mismatched")
 				}
 				found = true

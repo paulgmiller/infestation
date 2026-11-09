@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"infestation/internal/azurecheck"
 	"infestation/internal/azureplan"
 	"infestation/internal/blobstore"
 	"infestation/internal/bootstrap"
@@ -32,14 +33,14 @@ func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *list) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
 		return nil
 	}
 	command := args[0]
 	args = args[1:]
 	if command == "azure" {
 		if len(args) == 0 {
-			return fmt.Errorf("expected azure plan, azure deploy or azure kubeconfig")
+			return fmt.Errorf("expected azure plan, azure deploy, azure kubeconfig or azure check")
 		}
 		command += " " + args[0]
 		args = args[1:]
@@ -148,6 +149,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		flags.Float64Var(&o.Constraints.MinMemoryGiB, "min-memory-gib", 8, "minimum RAM GiB")
 		flags.IntVar(&o.Constraints.MinUsableDiskGiB, "min-disk-gib", 64, "minimum database filesystem GiB")
 		exclude := flags.Bool("exclude-burstable", false, "exclude B-series VMs")
+		flags.BoolVar(&o.GatewayEnabled, "gateway", false, "forward public TCP 80/443 to Cilium host-network Gateway listeners")
 		var admin, api list
 		flags.Var(&admin, "admin-cidr", "API/admin source CIDR (repeatable; default 0.0.0.0/0)")
 		flags.Var(&api, "api-cidr", "API source CIDR override (defaults to admin ranges)")
@@ -170,6 +172,20 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			fmt.Fprintln(out, "No cloud resources created; prices exclude disks and networking.")
 		}
 		return err
+	case "azure check":
+		o := azurecheck.Options{RepoRoot: ".", StateDir: "state", Location: "westus2", Log: out}
+		flags.StringVar(&o.RepoRoot, "repo", o.RepoRoot, "Infestation checkout root")
+		flags.StringVar(&o.StateDir, "state-dir", o.StateDir, "private parent directory for fresh check state")
+		flags.StringVar(&o.Location, "location", o.Location, "Azure region")
+		flags.StringVar(&o.FlatcarVersion, "flatcar-version", azurecheck.DefaultFlatcarVersion, "pinned Flatcar image release")
+		flags.StringVar(&o.CockroachVersion, "cockroach-version", azurecheck.DefaultCockroachVersion, "pinned CockroachDB release")
+		flags.StringVar(&o.K3sVersion, "k3s-version", azurecheck.DefaultK3sVersion, "pinned K3s extension release")
+		flags.StringVar(&o.SKUsFile, "skus-file", "", "optional saved SKU inventory")
+		flags.StringVar(&o.RatesFile, "rates-file", "", "optional saved retail prices")
+		if err := parse(flags, args); err != nil {
+			return help(err)
+		}
+		return azurecheck.Run(ctx, o)
 	case "azure deploy":
 		o := deploy.Options{RepoRoot: ".", Log: out}
 		flags.StringVar(&o.RepoRoot, "repo", o.RepoRoot, "Infestation checkout root")
@@ -188,6 +204,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	case "smoke":
 		portable()
 		kube := flags.String("kubeconfig", "", "admin kubeconfig path")
+		publicURL := flags.String("public-url", "", "also test HTTP through the public LB and Cilium host-network Gateway")
 		if err := parse(flags, args); err != nil {
 			return help(err)
 		}
@@ -198,7 +215,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		if *kube == "" {
 			*kube = filepath.Join(state, "kubeconfig")
 		}
-		return smoke.Run(ctx, executil.OSRunner{Output: out}, c, state, *kube)
+		return smoke.Run(ctx, executil.OSRunner{Output: out}, c, state, *kube, smoke.Options{PublicURL: *publicURL, Log: out})
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

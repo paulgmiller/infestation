@@ -13,12 +13,14 @@ to the direct API endpoint, never the Kubernetes Service VIP during bootstrap.
 Azure uses the public API load balancer on 6443; local/static profiles use their
 configured API endpoint or a server address. The bootstrap Helm job uses host
 networking and the local API. Ports 80/443 are reserved for future gateway use;
-gateway resources and forwarding rules are not yet installed.
+the optional Azure `--gateway` plan flag adds LB forwarding, and the example
+HelmChartConfig/Gateway manifests enable the listeners.
 
-This networking change has local test coverage only. The recorded Azure
-bootstrap/connectivity deployment used kube-proxy. Fresh bootstrap, all-node
-access through the public LB (including backend-to-frontend connections), reboot,
-and service/gateway failover still require deployment tests.
+The 2026-10-27 gateway experiment verified Cilium replacement on four nodes,
+12 directed DNS/Service checks, and public HTTP through Envoy. It required a
+worker startup repair: `disable-kube-proxy` is a server-only K3s flag; agents
+inherit that setting. Reboot, gateway failover and a clean unattended fresh
+bootstrap with the corrected profiles remain unverified.
 
 Go packages under `internal/provider` own Pulumi resource lifecycle. Planning
 resolves prices, quota and zones once and saves the result; subsequent previews
@@ -36,3 +38,10 @@ SDK, without making generated SDK source a build prerequisite.
 AWS EC2 and Google Compute Engine need their own infrastructure packages around
 the same portable node preparation. Managed EKS/GKE/AKS would be a different
 architecture because they own their Kubernetes control planes.
+
+`infestation azure check` is an opt-in disposable lifecycle check. Its explicit
+`smoke_test` topology uses two API servers plus a database-hosting worker, while
+normal clusters retain three API servers. It uses the shared deployment and
+smoke packages, verifies public HTTP via Cilium Gateway, and deletes only its
+fresh, ownership-tagged resource group. The command has local tests; its full
+three-node Azure cycle remains unverified. It does not implement upgrades.

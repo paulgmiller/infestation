@@ -25,6 +25,7 @@ import (
 // AzurePool is common to every member of a role. IMDS supplies the instance
 // identity, primary private address, and actual Azure-selected zone at runtime.
 type AzurePool struct {
+	SmokeTest      bool   `json:"smokeTest,omitempty"`
 	Name           string `json:"name"`
 	Role           string `json:"role"`
 	Zone           string `json:"dnsZone"`
@@ -62,7 +63,7 @@ func (p AzurePool) Validate() error {
 	if err != nil || !subnet.Addr().Is4() {
 		return fmt.Errorf("invalid pool subnet")
 	}
-	if p.APICount != 3 || p.WorkerCount < 0 || len(p.Token) < 16 || strings.ContainsAny(p.Token, "\r\n") {
+	if p.APICount != (cluster.Config{SmokeTest: p.SmokeTest}).RequiredServers() || (p.SmokeTest && (p.WorkerCount != 1 || !p.WorkerDatabase)) || p.WorkerCount < 0 || len(p.Token) < 16 || strings.ContainsAny(p.Token, "\r\n") {
 		return fmt.Errorf("invalid pool counts or token")
 	}
 	return nil
@@ -344,8 +345,8 @@ func JoinAzure(ctx context.Context, c Config, root string) error {
 // surge and worker retirement must not make the publication helper unusable.
 func (p AzurePool) checkInventory(servers, workers int, initialized bool) error {
 	if initialized {
-		if servers < 3 {
-			return fmt.Errorf("fewer than three API nodes registered")
+		if servers < p.APICount {
+			return fmt.Errorf("fewer than the configured API nodes registered")
 		}
 		return nil
 	}

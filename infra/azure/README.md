@@ -122,16 +122,49 @@ in every server certificate. New profiles disable K3s kube-proxy and enable
 Cilium's replacement, with Cilium connecting to that public DNS name on 6443.
 The NSG allows the cluster's outbound public IP to reach TCP 6443 independently
 of the operator CIDR allowlist. Cilium's bootstrap Helm job uses the local API
-and host networking. Ports 80/443 remain available for future Cilium Gateway
-listeners; no gateway or forwarding rules for those ports are installed yet.
+and host networking. Add `--gateway` during planning to forward ports 80/443;
+install the optional Gateway resources as described below.
 
-The new mode has local unit/mock coverage only. The recorded 2026-10-27 test
-used kube-proxy. Verify public-LB access from every node, fresh bootstrap, reboot
-and Service routing before relying on this mode. Existing first-boot profiles
+The gateway experiment verified four Ready nodes with replacement enabled,
+12 directed DNS/Service checks and public HTTP 200 through Envoy. It required
+repairing a worker startup flag; a clean unattended first boot, reboot and
+failure-recovery tests remain outstanding. Set `disable-kube-proxy` only on
+servers; agents inherit the setting from their servers. Existing first-boot profiles
 are not automatically migrated; do not disable kube-proxy on running nodes
 without coordinating Cilium configuration and allowing for connection disruption.
 See [Cilium's K3s guide](https://docs.cilium.io/en/stable/installation/k3s/) and
 [kube-proxy replacement requirements](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/).
+
+## Optional public Cilium Gateway
+
+Create a fresh plan with `azure plan --gateway` to add TCP 80/443 forwarding
+on the existing public load balancer, using the all-node backend pool and
+separate TCP listener probes. The API stays on 6443. Pulumi owns these rules;
+Azure CCM is not required. Without the flag, application ports remain closed.
+
+After the deployment is ready, install the pinned Gateway API CRDs, configure
+Cilium host-network listeners, and deploy the example HTTP service:
+
+```sh
+kubectl --kubeconfig state/NAME/kubeconfig apply --server-side -f \
+  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.3/standard-install.yaml
+kubectl --kubeconfig state/NAME/kubeconfig apply -f examples/cilium-gateway.yaml
+# Wait for the K3s Helm job to finish, then reload agent/operator configuration.
+kubectl --kubeconfig state/NAME/kubeconfig -n kube-system rollout restart ds/cilium deployment/cilium-operator
+kubectl --kubeconfig state/NAME/kubeconfig -n kube-system rollout status ds/cilium
+kubectl --kubeconfig state/NAME/kubeconfig -n kube-system rollout status deployment/cilium-operator
+kubectl --kubeconfig state/NAME/kubeconfig apply -f examples/httpbin-gateway.yaml
+kubectl --kubeconfig state/NAME/kubeconfig -n httpbin rollout status deployment/httpbin
+curl --fail http://NAME-api.westus2.cloudapp.azure.com/get
+```
+
+The example is public HTTP on port 80. Port 443 forwards to the gateway nodes
+but needs an HTTPS listener and certificate before it can serve HTTPS. The
+Gateway binds the host ports on all nodes; its namespace only accepts routes
+from that same namespace. Host-network Gateway mode does not request another
+Azure load balancer. The example HelmChartConfig preserves the default Envoy
+capabilities and adds the capability required to bind ports below 1024.
+[Cilium host-network documentation](https://docs.cilium.io/en/stable/network/servicemesh/gateway-api/gateway-api/#host-network-mode).
 
 ## Retrieve the kubeconfig
 
@@ -197,6 +230,52 @@ cloud-controller-manager is not installed and K3s ServiceLB is disabled. Such
 Services remain pending for an external IP. The Pulumi SLB handles the API and
 egress; Kubernetes does not manage its application-service rules.
 [K3s ServiceLB behavior](https://docs.k3s.io/networking/networking-services#service-load-balancer).
+
+## Disposable Azure check
+
+```sh
+go build -o bin/infestation ./cmd/infestation
+bin/infestation azure check
+```
+
+This command provisions billable Azure resources and deletes its test cluster
+at the end. It requires Azure CLI authentication, Pulumi 3.272.0, Go and kubectl,
+plus the same regional SKU/quota/feature prerequisites as a regular deployment.
+All four executables (`az`, `pulumi`, `go`, `kubectl`) must be on PATH. The check
+reports missing tools before creating state, querying Azure, or entering the
+provision/teardown cycle. Verify the local tools with `command -v az pulumi go
+kubectl` and `pulumi version`.
+All component versions are optional overrides: defaults are Flatcar
+`4757.2.1`, CockroachDB `v26.2.7`, and K3s `v1.35.8+k3s1`, pinned in
+`internal/azurecheck/options.go`. Use `--flatcar-version`, `--cockroach-version`,
+and `--k3s-version` to override them individually. The effective versions are
+printed and recorded in `check.log`; discovery does not silently select newer
+releases. Choose an available Flatcar image when changing regions with
+`--location`. `--repo` selects the checkout;
+`--state-dir` selects the private parent directory. `--skus-file` and
+`--rates-file` can supply retained discovery snapshots when the pricing API is
+throttled; they do not constitute a fresh availability/price comparison.
+
+The cycle uses two K3s API servers and one worker, all hosting CockroachDB.
+This is the explicit `smoke_test` inventory mode; normal plans still require
+three API servers. It installs the pinned Gateway API CRDs and the Cilium
+host-network Gateway settings, then checks all six directed DNS/ClusterIP pairs
+and makes three HTTP requests from the workstation through the public LB and
+Envoy, one to each node's test server. Requests use fresh route prefixes and
+must return HTTP 200 with the correct node name. Port 80 is tested; HTTPS,
+upgrades and failure recovery are outside this check.
+
+Each invocation uses a fresh name, state directory and stack, and tags its
+resource group with a unique check ID. Teardown checks that ownership tag,
+removes the test group's deletion locks, deletes the group, and polls until
+Azure reports it absent. Teardown also runs after provisioning/smoke failure
+or cancellation, with a ten-minute independent timeout. A cleanup failure
+returns an error naming the group rather than reporting a successful check.
+Private `check.log`, manifests, plan, PKI and kubeconfig remain under
+`state/infcheck-*/`; retained Pulumi state is historical after deletion.
+The automatic cycle and smaller topology have unit/mock/HTTP-server coverage;
+they have **not yet been exercised as one real Azure deployment**. The earlier
+four-node gateway experiment is separate evidence.
 
 ## Pool identity and scale-out
 

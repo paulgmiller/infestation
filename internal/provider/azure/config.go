@@ -27,6 +27,8 @@ type Settings struct {
 	OSDiskSizeGB                           int
 	OSDiskStorageAccountType               string
 	APILoadBalancer                        bool
+	GatewayEnabled                         bool
+	CheckID                                string
 	APIDNSLabel                            string
 	APIAdminCIDRs                          []string
 	OutboundPortsPerNode                   int
@@ -77,6 +79,9 @@ type ignitionDocument struct {
 }
 
 func loadDeployment(s Settings) (*Deployment, error) {
+	if s.GatewayEnabled && !s.APILoadBalancer {
+		return nil, fmt.Errorf("gatewayEnabled requires apiLoadBalancer for the shared public frontend")
+	}
 	if s.OSDiskStorageAccountType == "" {
 		s.OSDiskStorageAccountType = "StandardSSD_LRS"
 	}
@@ -216,8 +221,8 @@ func loadDeployment(s Settings) (*Deployment, error) {
 		}
 		d.Ignition[node.Name] = data
 	}
-	if servers != 3 {
-		return nil, fmt.Errorf("include exactly three K3s servers plus all workers")
+	if servers != d.Cluster.RequiredServers() {
+		return nil, fmt.Errorf("include the configured K3s servers plus all workers")
 	}
 	if d.Cluster.CockroachStorage == "azure-temporary" && len(databaseZones) < 3 {
 		return nil, fmt.Errorf("temporary-disk databases must span three zones")

@@ -59,7 +59,7 @@ func TestAzureKubeconfigNeedsOnlyAzureLoginAndDiscovery(t *testing.T) {
 	}
 }
 func TestHelpAndInvalidArguments(t *testing.T) {
-	for _, args := range [][]string{{}, {"--help"}, {"azure", "plan", "--help"}, {"azure", "kubeconfig", "--help"}} {
+	for _, args := range [][]string{{}, {"--help"}, {"azure", "plan", "--help"}, {"azure", "kubeconfig", "--help"}, {"azure", "check", "--help"}, {"smoke", "--help"}} {
 		var out bytes.Buffer
 		if err := Run(context.Background(), args, &out); err != nil {
 			t.Fatal(err)
@@ -68,5 +68,15 @@ func TestHelpAndInvalidArguments(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run(context.Background(), []string{"validate", "unexpected"}, &out); err == nil {
 		t.Fatal("positional argument accepted")
+	}
+}
+
+func TestAzureCheckRejectsUnpinnedImageBeforeDiscovery(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	for _, version := range []string{"latest", "4757.2"} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), []string{"azure", "check", "--flatcar-version", version}, &out); err == nil || !strings.Contains(err.Error(), "exact pinned release") {
+			t.Fatalf("%q: %v", version, err)
+		}
 	}
 }

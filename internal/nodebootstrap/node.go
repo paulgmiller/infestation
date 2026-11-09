@@ -234,9 +234,6 @@ func (w Worker) Run(ctx context.Context) error {
 	if w.command(ctx, "k3s", "kubectl", "--kubeconfig", local, "--request-timeout=15s", "get", "--raw=/readyz").Code != 0 {
 		return fmt.Errorf("local API is not ready")
 	}
-	if err := w.labelWorkers(ctx, local); err != nil {
-		return err
-	}
 	data, err := os.ReadFile(local)
 	if err != nil {
 		return err
@@ -247,6 +244,11 @@ func (w Worker) Run(ctx context.Context) error {
 	}
 	data, _ = json.Marshal(conf)
 	if err := w.Store.Put(ctx, w.location("kubeconfig.json"), data); err != nil {
+		return err
+	}
+	// Operator access must remain available when a worker cannot register or
+	// Cilium is unhealthy. Role reconciliation gates readiness, not publication.
+	if err := w.labelWorkers(ctx, local); err != nil {
 		return err
 	}
 	if !leader && !durable.SQLReady {

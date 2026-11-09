@@ -76,12 +76,14 @@ docs/                       architecture, migration notes, historical lab record
 `internal/` is intentional: these packages are implementation details of the
 Infestation binary and its infrastructure programs, rather than a public Go SDK.
 
-Cilium now bootstraps against the direct API endpoint instead of a Kubernetes
-Service IP. Azure profiles use the public API load balancer on TCP 6443; ports
-80/443 remain available for a future Cilium Gateway. Gateway resources and
-Azure forwarding rules for those ports are not installed by this change.
-The kube-proxy replacement configuration has local test coverage only; the
-2026-10-27 deployment used kube-proxy and does not verify this new mode.
+Cilium bootstraps against the direct API endpoint instead of a Kubernetes
+Service IP. Azure profiles use the public API load balancer on TCP 6443.
+`azure plan --gateway` optionally adds TCP 80/443 forwarding to host-network
+Cilium Gateway listeners; see the [gateway example](infra/azure/README.md#optional-public-cilium-gateway).
+The 2026-10-27 gateway experiment verified four Ready nodes, all 12 directed
+DNS/Service checks and public HTTP 200 through Envoy. It required an in-place
+worker startup repair, so it does not establish unattended fresh bootstrap in
+this mode. See the [runbook](infra/azure/RUNBOOK.md#2026-10-27-cilium-replacement-and-public-httpbin-gateway).
 
 ## Shared node preparation
 
@@ -106,7 +108,10 @@ pools use a shared wildcard node certificate so new instances can join without
 a certificate enrollment service. Generated
 files are mode `0600` in private state directories and are ignored by Git.
 
-Normal clusters require exactly three servers. A deliberate single-server lab
+Normal clusters require exactly three servers. The explicit `smoke_test` topology
+uses two API servers and one worker, with CockroachDB required on all three.
+It exercises both roles but does not establish zone-failure guarantees.
+A deliberate single-server lab
 can set `"single_node_lab": true`; it must have exactly one database host.
 Workers in that mode must set `"cockroachdb": false`. A workers-only inventory
 requires explicit HTTPS `server_url` values and the original cluster token and
@@ -163,6 +168,35 @@ This creates resources in namespace `infestation-smoke` and tests every directed
 pair of configured nodes. It is an explicit workload test, not a read-only check.
 Each invocation creates fresh check jobs instead of reusing completed results;
 finished jobs expire after one hour.
+
+To include requests from the workstation through the public load balancer and
+Cilium Gateway, add `--public-url http://YOUR_LB_HOSTNAME`. This creates a smoke
+Gateway listening on host port 80 and one route to each node's existing test
+server, and checks HTTP 200 plus the exact node response. Gateway API CRDs,
+Cilium host-network Gateway support, and public LB port-80 forwarding must
+already be configured. Use a test cluster where another Gateway does not own
+host port 80. Test resources remain in `infestation-smoke` until removed.
+
+For a disposable Azure provision/smoke/teardown cycle:
+
+```sh
+go build -o bin/infestation ./cmd/infestation
+bin/infestation azure check
+```
+
+The check defaults to Flatcar `4757.2.1`, CockroachDB `v26.2.7`, and K3s
+`v1.35.8+k3s1`. Override any with `--flatcar-version`, `--cockroach-version`, or
+`--k3s-version`; omitted versions keep their pinned defaults.
+
+This opt-in command provisions **three VMs: two API nodes and one worker**, all
+hosting CockroachDB. It enables Gateway support, runs six directed internal
+checks and three public HTTP checks, then removes its own tagged resource group
+and verifies its absence. Cleanup is attempted on provisioning/test failure and
+cancellation with a separate ten-minute deadline; failures are returned along
+with the test error. Local private state and `check.log` remain under a fresh
+`state/infcheck-*` directory. Each invocation uses a new name; it never resumes
+or tears down a pre-existing cluster. See the [Azure guide](infra/azure/README.md#disposable-azure-check)
+for prerequisites and verification limits.
 
 ## Existing state and verification
 

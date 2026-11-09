@@ -71,8 +71,11 @@ application LoadBalancer Services do not configure the Pulumi API/egress SLB.
 
 New generated profiles disable kube-proxy and configure Cilium replacement
 against the public API LB on 6443. This supersedes the kube-proxy-enabled baseline
-for future profiles; it has not been deployment-tested. Ports 80/443 remain
-available for future gateway listeners. Existing deployments are not migrated.
+for future profiles. The gateway experiment verified four Ready nodes, all
+12 directed DNS/Service checks and public HTTP through Envoy, after an in-place
+worker startup repair. `--gateway` optionally adds shared-LB 80/443 forwarding.
+A clean unattended first boot and reboot/failure recovery remain unverified.
+Existing deployments are not automatically migrated.
 
 Safe decommission/scale-in, coordinated upgrades, license activation, Cockroach
 stand-ins/host limits, backups/retention/restore, AZ failure tests and certificate-

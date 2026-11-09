@@ -84,3 +84,32 @@ func TestDiscoveredSurgeDoesNotRelaxPinnedInventory(t *testing.T) {
 		t.Fatal("discovered inventory accepted too few servers")
 	}
 }
+
+func TestThreeNodeSmokeTopologyIsExplicitAndKeepsThreeDatabases(t *testing.T) {
+	c := testutil.Config()
+	c.Nodes[2].Role = "worker"
+	if c.Validate() == nil {
+		t.Fatal("normal clusters must still require three API servers")
+	}
+	c.SmokeTest = true
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if c.RequiredServers() != 2 || len(c.Databases()) != 3 {
+		t.Fatal("wrong smoke topology")
+	}
+	off := false
+	for _, change := range []func(*cluster.Config){
+		func(c *cluster.Config) { c.Nodes[2].CockroachDB = &off },
+		func(c *cluster.Config) { c.SingleNodeLab = true },
+		func(c *cluster.Config) { c.Nodes = c.Nodes[:2] },
+		func(c *cluster.Config) { c.Nodes[2].Role = "server" },
+	} {
+		bad := c
+		bad.Nodes = append([]cluster.Node{}, c.Nodes...)
+		change(&bad)
+		if bad.Validate() == nil {
+			t.Fatal("invalid smoke topology accepted")
+		}
+	}
+}

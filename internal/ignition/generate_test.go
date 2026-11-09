@@ -46,8 +46,8 @@ func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
 		chartFound := false
 		for _, file := range doc.Storage.Files {
 			data, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(*file.Contents.Source, "data:;base64,"))
-			if file.Path == "/etc/rancher/k3s/config.yaml" && !strings.Contains(string(data), "disable-kube-proxy: true\n") {
-				t.Fatal("kube-proxy must be disabled on every role")
+			if file.Path == "/etc/rancher/k3s/config.yaml" && strings.Contains(string(data), "disable-kube-proxy: true\n") == n.Worker() {
+				t.Fatal("disable-kube-proxy must be set only on servers; agents inherit it")
 			}
 			if file.Path == "/var/lib/rancher/k3s/server/manifests/infestation-cilium.yaml" {
 				chartFound = true
@@ -131,8 +131,8 @@ func TestProfilesAndCredentials(t *testing.T) {
 			}
 		}
 		conf := files["/etc/rancher/k3s/config.yaml"]
-		if !strings.Contains(conf, "disable-kube-proxy: true\n") {
-			t.Fatal("kube-proxy must be disabled even without automatic bootstrap")
+		if strings.Contains(conf, "disable-kube-proxy: true\n") == n.Worker() {
+			t.Fatal("server-only kube-proxy flag must not be passed to agents")
 		}
 		if n.Worker() {
 			if !strings.Contains(conf, `server: "https://192.168.1.101:6443"`) || strings.Contains(conf, "datastore-") || strings.Contains(conf, "tls-san:") {
