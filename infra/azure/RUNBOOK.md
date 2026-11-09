@@ -1,0 +1,400 @@
+> Historical smoke-test record. The project is now the root Go module; see [migration notes](../../docs/migration.md) for current commands and preserved state.
+
+# Azure smoke deployment, 2026-10-25
+
+The current [deployment guide](README.md) supersedes this historical NAT Gateway
+and persistent-database profile with SLB egress, temporary database storage,
+automatic SKU/zone planning, and automated bootstrap. A separate private
+`state/next` preview resolved `Standard_D2d_v4` with 75 GiB temporary disks and
+three zones, and planned 17 resources. That revised profile has not been deployed.
+
+**Deleted after testing:** `flatcar-azure-smoke-rg` and its resources were deleted
+at the user's request on 2026-10-25. Azure's deletion wait completed and
+`az group exists` returned `false`. The inventory and access instructions below
+are historical. Local credentials and Pulumi state are retained; the kubeconfig
+no longer connects. Refresh and review state before any future apply, which could
+recreate the cluster.
+
+The [deployment guide](README.md) describes a fresh installation. This records
+the actual deployment and how to reconnect without creating another cluster.
+The [local QEMU runbook](../qemu/RUNBOOK.md) records the preceding host test;
+those three local VMs are shut off with disks preserved and `running: false`.
+
+## Inventory and access
+
+| Item | Deployed value |
+| --- | --- |
+| Subscription | North Briton |
+| Resource group | `flatcar-azure-smoke-rg` |
+| Region / Flexible VMSS | `westus2` / `flatcar-azure-smoke-vmss` |
+| Pulumi project / stack | `flatcar-k3s-azure` / `smoke` |
+| Servers | `kube1`, `kube2`, `kube3`, in zones 1, 2, 3 |
+| Private IPs | `192.168.1.101`, `.102`, `.103` |
+| VM size / OS disks | `Standard_D2s_v3` (2 vCPU, 8 GiB), 128 GiB Premium SSD each |
+| Flatcar image | `kinvolk:flatcar-container-linux-corevm-amd64:stable-gen2:4757.2.1` |
+| K3s / CockroachDB | `v1.35.8+k3s1` / `v26.2.7` |
+| Cilium CLI / chart | `0.20.1` / `1.20.4` |
+| Public API | `https://flatcar-azure-smoke-api.westus2.cloudapp.azure.com:6443` |
+| API allowed sources | `0.0.0.0/0`, explicitly requested for this temporary lab |
+| SSH allowed sources | `216.160.64.23/32` |
+
+Run on the provisioning workstation from `infra/azure`:
+
+```bash
+export KUBECONFIG="$PWD/state/kubeconfig"
+kubectl get nodes -o wide
+kubectl get --raw=/readyz
+kubectl get pods -A
+python3 state/run.py pulumi stack output
+python3 state/run.py pulumi preview --refresh --diff --stack smoke
+```
+
+The kubeconfig uses the public load balancer with context `azure-smoke`; no API
+tunnel is needed. It embeds cluster-admin client credentials and is mode `0600`.
+Copy it privately to another computer and retain those permissions. SSH remains
+restricted independently; update `adminCIDRs` deliberately if that source changes.
+
+For database administration, use `pulumi stack output publicIPs` through the
+wrapper to find kube1's current public IP. The running session has a local SQL
+tunnel on `127.0.0.1:26257`. If reconnecting later, start one in another terminal:
+
+```bash
+ssh -i state/id_ed25519 -N -L 127.0.0.1:26257:192.168.1.101:26257 core@KUBE1_PUBLIC_IP
+```
+
+Use `state/pki/admin` with the Cockroach CLI over that tunnel, retaining TLS
+verification. The private `state/check.py db-status` helper uses that local port.
+
+Private files are ignored by Git: `cluster.local.json`, `Pulumi.smoke.yaml`,
+`state/backend`, `state/passphrase`, `state/pulumi-home`, `state/pki`, SSH key
+`state/id_ed25519`, and kubeconfig. Keep private backups of state, encryption
+passphrase, and credentials together. Do not regenerate PKI or rerun database
+initialization to reconnect. The local `state/run.py` and `state/check.py` helpers
+are private session conveniences, unavailable in a fresh checkout.
+
+The wrapper selects this deployment's file backend and passphrase. It currently
+reuses the pinned Pulumi CLI and Go caches under `../qemu/state`; retain those
+tools or install the pinned CLI independently if that directory is removed.
+
+## Lessons for a fresh deployment
+
+1. Check subscription quota **and** SKU/zone availability before choosing VMs.
+   West US 2 had only 10 total vCPUs and zero Dsv5-family quota. Three D2s v3
+   instances fit the available DSv3 quota and listed all three zones.
+2. Verify the exact regional Marketplace version. QEMU used Flatcar `4757.2.2`,
+   while the verified Azure image was `4757.2.1`. CoreVM has the same image
+   contents as Flatcar's other Azure offers, without purchase-plan metadata or
+   Marketplace terms acceptance. See the [vendor guide](https://www.flatcar.org/docs/latest/deploy/cloud/azure/).
+3. Generate a new SSH key, CA, node certificates, and K3s token for a separate
+   cluster. Do not reuse the local lab's database identity.
+4. Wait for SSH and CockroachDB on all three nodes. The Azure apply completed in
+   about three minutes; SSH initially refused connections during first boot.
+   Boot diagnostics confirmed successful Ignition processing.
+5. Initialize the fresh database once, then apply `bootstrap.sql`. K3s retries
+   until its Kine database, role, grants, and sequence setting exist. An early
+   missing kubeconfig or database connection error can precede successful bootstrap.
+6. Install Cilium after the API exists. Use the tested settings below and inspect
+   the effective config: the CLI's auto-detection message suggested full kube-proxy
+   replacement, but the explicitly configured effective value was `false`.
+
+The tested installation command (run only on a fresh cluster) was:
+
+```bash
+../qemu/state/tools/cilium --kubeconfig state/kubeconfig install --version 1.20.4 \
+  --set operator.replicas=2 --set kubeProxyReplacement=false \
+  --set ipam.operator.clusterPoolIPv4PodCIDRList=10.42.0.0/16 \
+  --set cni.binPath=/opt/cni/bin --set cni.confPath=/etc/cni/net.d \
+  --set k8sServiceHost=192.168.1.101 --set k8sServicePort=6443
+```
+
+Cilium's configured bootstrap API address is currently kube1's private IP;
+recovery from that endpoint being unavailable has not been tested. The public
+load balancer provides the workstation API endpoint.
+
+## API load balancer and provider behavior
+
+The Standard Load Balancer passes TCP 6443 to the three server NICs, checks their
+TCP listeners every five seconds, and uses a zone-redundant public IP. It has no
+SQL or workload ingress rules. The NSG allows API clients separately from SSH
+and permits probes from the `AzureLoadBalancer` service tag ahead of the custom
+deny rule. The probe checks listener availability, rather than authenticated
+Kubernetes `/readyz`.
+
+For new clusters, add the DNS name to `cluster.json`'s `tls_sans` before generating
+Ignition. For this already-running cluster, the generated K3s configuration was
+installed privately on each node and K3s restarted one node at a time. Each API
+passed `/readyz` before proceeding. TLS was then verified against all three node
+addresses using the load balancer DNS name and the cluster CA, and through the
+load balancer itself. No CA or client credentials were replaced.
+
+Real Azure refreshes exposed derived networking fields:
+
+- Public IP `natGateway` is maintained through the NAT resource.
+- Inline NSG rule `etag` fields are Azure-managed metadata.
+- LB backend address entries are derived from membership owned by NIC IP
+  configurations. Preserve those entries when updating the LB; manage membership
+  through the NICs.
+
+The program ignores those specific fields while retaining managed networking
+configuration. Saved-plan enforcement initially rejected a preview/apply pair
+because refresh-derived fields differed. Pair a refreshed saved preview with a
+refreshed apply:
+
+```bash
+python3 state/run.py pulumi preview --refresh --diff --save-plan=state/next-plan.json --stack smoke
+python3 state/run.py pulumi up --refresh --plan=state/next-plan.json --stack smoke
+```
+
+Review the plan before applying. Protection blocks VM replacement; OS disks use
+`Detach`. Existing VM custom data is ignored because Ignition runs only on first
+boot. Changes to runtime configuration need a separate update procedure.
+
+## Verified and untested
+
+Verified: all three K3s nodes Ready, Cilium and Envoy 3/3, operators 2/2, effective
+kube-proxy replacement `false`, six directed DNS/service HTTP jobs passing, and
+three live CockroachDB nodes with zero unavailable/under-replicated ranges.
+The public kubeconfig passed `get nodes` and `/readyz` with TLS verification.
+The Go tests and eight Python generator/helper tests passed.
+The final Pulumi preview with refresh reported **19 unchanged resources**.
+
+Azure reboot recovery, replacement recovery, deliberate API-backend failure,
+and durability under faults remain untested. The VMs, disks, public IPs, NAT,
+and load balancer incur charges while retained; stopping VMs alone does not remove
+all those charges. Teardown requires a separate, deliberate operation that handles
+Pulumi protection and detached disks; no automatic cleanup is configured.
+
+## 2026-10-26 Uniform VMSS test (incomplete; teardown requested)
+
+New test plan: `state/infestation-vmss-test`, stack `uniformtest`, resource group
+`infestation-vmss-test-rg` in West US 2. Selected `Standard_D2d_v4` at
+$0.113/node-hour: 2 vCPU, 8 GiB RAM, 75 GiB temporary disk and 32 GiB managed
+Standard SSD OS disk. Regional quota was 10 vCPUs, so this test requested three
+API instances plus one worker; no second worker was created.
+
+Verified in Azure: the automatic-zone-placement subscription feature was already
+registered. The versioned Pulumi resource
+`azure-native:compute/v20260301:VirtualMachineScaleSet` is in provider 3.29.0's
+schema. Azure accepted two Uniform pools and placed API instance IDs 0/1/2 in
+zones 1/2/3; worker 0 was allocated in zone 1. Node NICs were private.
+Kubernetes/SQL readiness and worker scale-out were **not verified**.
+
+Live deployment exposed these issues, fixed in source:
+
+- NSG priority must be at least 100. SSH deny now uses 100, internal allow 110.
+- A Standard load balancer rejected mixed public/private frontends. Retain one
+  public API/egress SLB. Workers discover a live API member through private DNS
+  before each K3s agent start, after their host database can already start.
+- Azure requires OS authentication configuration. Generate a throwaway Ed25519
+  public key, immediately clear/discard its private key, and retain only the
+  public key to satisfy the API. No user key is required. SSH remains masked and
+  denied at the NSG.
+- Flatcar rejected `/usr/local/sbin/check-cockroach-storage` as read-only during
+  Ignition. The script now lives under `/opt/infestation`. This prevented the
+  attempted guests from reaching Cockroach/SQL initialization. Corrected
+  profiles were patched into the pools, manual instance upgrades requested,
+  and reimages requested; corrected boot had not been verified at teardown.
+- Manual VMSS reimage can reuse the instance's previous model. Apply the latest
+  pool model to instances before reimaging. Prefer a fresh cluster for the next
+  clean-first-boot test rather than relying on this interrupted recovery.
+- Azure retail pagination uses explicit `prices.azure.com:443`; accept the
+  default HTTPS port while preserving the hostname/userinfo checks.
+
+Local checks passed: Go suite, vet, race checks on PKI/Ignition/node bootstrap,
+provider mocks for both pools, wildcard/IMDS identity tests, and an isolated
+Cockroach v26.2.7 test of wildcard TLS, SQL init, credential cleanup and subsequent
+Kine authentication. The pinned node helper was uploaded manually during
+first-boot diagnosis, so the complete CLI upload/first-boot ordering still needs
+an unattended fresh-deployment test.
+
+The user requested stopping the experiment and deleting the resource group.
+The active deploy was terminated and the storage delete lock removed for that
+teardown. Preserve local PKI/state and logs; they include secret material.
+Failed Ignition boot diagnostics can dump full generated profiles: filter
+console output to status/error lines and do not share the raw log. After cloud
+teardown, the local backend is stale; refresh deliberately or use a new plan and
+stack name tomorrow. Do not blindly recreate from the interrupted stack.
+
+Teardown completed: Azure's `group wait --deleted` succeeded for
+`infestation-vmss-test-rg`. Both Uniform scale sets were removed before the
+remaining network cleanup. The local Pulumi update was canceled; no automatic
+redeployment is running.
+
+## 2026-10-27 Uniform VMSS deployment and scale-out
+
+Fresh plan: `state/infestation-vmss-day2`, local stack `uniformday2`, resource
+group `infestation-vmss-day2-rg`, West US 2. Previous test state was preserved.
+Current SKU: `Standard_D2d_v4` (2 vCPU, 8 GiB RAM, 75 GiB temporary disk), with
+32 GiB Standard SSD OS disks. Three API instances and initially one worker.
+
+The normal `infestation azure deploy` path created all 24 resources in 3m40s,
+published its checksum-pinned Go helper after Azure guest provisioning, waited
+for node-local initialization, and fetched the Blob kubeconfig. No manual helper
+upload, SSH, SQL init, Cilium install or reimage was needed for fresh bootstrap.
+The generated profiles contain no file writes under `/usr`; the storage check
+is under `/opt/infestation`.
+
+Verified:
+
+- API IDs 0/1/2 in automatically selected Azure zones 1/2/3; worker 0 in zone 1.
+- All four initial Kubernetes nodes Ready; Cilium/Envoy healthy and operators 2/2.
+- Published kubeconfig passed public API `/readyz` and `get nodes` with TLS
+  verification. Nodes have no public addresses. Only private node records were
+  registered in `infestation-vmss-day2.westus2.internal`; application/traffic DNS
+  was not changed.
+- `az vmss scale ... --new-capacity 2` added worker 1 in zone 2, using the
+  existing shared profile/wildcard certificate. No new certificate was issued
+  or node name pre-registered. All five Kubernetes nodes became Ready.
+- Cockroach SQL reported five live members with matching IMDS-derived zone
+  locality. Every store reported `ranges.unavailable=0` and
+  `ranges.underreplicated=0` after scale-out.
+- All 20 directed DNS and ClusterIP HTTP smoke jobs passed across the five nodes.
+- Azure Run Command on API 0 verified the temporary SQL key had been removed,
+  runtime locality was zone 1, and `sshd.service` was masked. No SSH was used.
+- SQL checks used a temporary host-network probe pod plus a localhost-only
+  authenticated Kubernetes port-forward. The long-lived SQL administrator key
+  remained mounted read-only in a workstation Docker client, never copied to
+  the cluster. Port-forward connections can close when the SQL client disconnects;
+  reopen the tunnel for another query.
+
+Worker role labeling was then added to the API bootstrap helper. Kubelets cannot
+self-assign these reserved labels; all API helper passes reconcile discovered
+worker nodes with `node-role.kubernetes.io/worker=worker`, including scale-out.
+Both VMSS templates were patched to the new checksum-pinned helper, and the
+running API helpers were upgraded through Azure Run Command without restarting
+K3s/Cockroach or reimaging. Initial Ignition is preserved under
+`output/{api,worker}.initial.ign`; `output/{api,worker}.ign` reflects the updated
+templates. CA, node and administrator PKI were preserved.
+
+Current pool capacities are **3 API + 2 workers** (10 vCPUs, the regional quota).
+VM compute is about **$0.565/hour**, excluding disks, SLB, storage and traffic.
+The original pinned plan/stack config still declares **one** worker; scale-out
+was deliberately performed through Azure to test the common profile. Do not
+blindly reapply that plan: it would request a scale-in. Reconcile desired capacity
+explicitly before a future apply. Safe database decommission/scale-in, reimage
+recovery and AZ/region outage drills remain untested.
+
+Access from the repository root:
+
+```sh
+export KUBECONFIG="$PWD/state/infestation-vmss-day2/kubeconfig"
+kubectl get nodes
+az resource list --resource-group infestation-vmss-day2-rg --output table
+```
+
+The refreshed discovery snapshot for testing is `observed-cluster.json`, separate
+from the immutable initial inventory. Connectivity evidence is in
+`state/uniform-day2-smoke.log`; deployment output is in
+`state/uniform-day2-deploy.log`. Generated state, profiles and kubeconfigs are
+private and ignored. Keep the resource group until explicitly asked to tear it
+down; the artifact account retains its Azure delete lock.
+
+Worker labeling reconciliation was verified live by changing only worker 1's
+label value to `reconcile-check` (keeping the worker role key), invoking API 1's
+bootstrap service, and observing the value restored to `worker`. Final Cilium
+and Envoy readiness was 5/5, operators 2/2, and API `/readyz` returned `ok`.
+Temporary probe/smoke workloads were removed by deleting their dedicated
+`infestation-smoke` namespace after collecting all 20 PASS results. Cluster
+compute remains running. Azure CCM is not installed: application LoadBalancer
+Services will remain pending until that integration is added.
+
+### Teardown and upgrade-planning handoff (2026-10-27)
+
+The user stopped the upgrade experiment and requested deletion of the entire
+resource group. At that point the pool capacities remained 3 API + 2 workers;
+no Cockroach member had been decommissioned, no worker VM had been removed,
+and no K3s replacement upgrade had been applied. All running nodes were still
+on v1.35.8+k3s1. The proposed v1.35.9+k3s1 Flatcar extension returned HTTP 200.
+
+Upgrade preparation identified two bootstrap limitations: exactly-three API
+discovery prevents a surge, and requiring api-0 after SQL initialization prevents
+full pool replacement. Local source changes to address those remain preparatory
+and were not deployed or validated with a live upgrade. Preserve them for review
+rather than treating them as a tested upgrade implementation.
+
+A retirement procedure still needs to map each Azure instance/DNS name to its
+Cockroach node ID, cordon/drain Kubernetes workloads, run Cockroach decommission
+with --wait=all to completion, verify surviving replicas, then delete the exact
+VM, Kubernetes Node and stale private DNS record. Do not use generic VMSS scale-in
+as a substitute for selecting the safely retired instance. Durable resume/fencing,
+local volume handling, topology changes and desired-state reconciliation need
+further design before testing upgrades.
+
+The storage delete lock was removed and resource-group deletion requested.
+Local PKI, state, generated profiles, source changes and test evidence are
+preserved. This local Pulumi stack becomes stale after cloud teardown; do not
+blindly reapply it. No upgrade/decommission process is running.
+
+Teardown completed: Azure returned ResourceGroupNotFound and
+`az group exists --name infestation-vmss-day2-rg` returned `false`. The resource
+group and its cloud resources are gone. Local source/state/evidence remain.
+The follow-up design backlog is [research-questions.md](../../docs/research-questions.md).
+
+## 2026-10-27 Cilium replacement and public httpbin gateway
+
+User-requested fresh deployment: `state/infestation-gateway`, stack `gateway`,
+resource group `infestation-gateway-rg`, West US 2. Earlier stacks and local VM
+storage were preserved. Four `Standard_D2d_v4` instances (three API, one worker)
+use Flatcar 4757.2.1, K3s v1.35.8+k3s1, Cockroach v26.2.7 and Cilium 1.20.4.
+Azure created all 24 resources in 2m54s. Retail pricing returned HTTP 429 twice;
+planning used the retained 2026-10-27 16:28 UTC price/SKU snapshot and a fresh
+quota check. Estimated compute was $0.452/hour, excluding disks/networking;
+this was not a fresh complete price comparison.
+
+The first bootstrap did **not** complete unattended: the generated worker
+configuration included `disable-kube-proxy`, which K3s rejected as a server-only
+flag. Servers were healthy but the worker did not register. Worker-label failure
+also prevented kubeconfig publication, and the CLI's 30-minute readiness wait
+expired. Boot logs were retained privately; generated credentials were not
+printed. Azure Run Command retrieved the failed agent's journal without SSH.
+
+Repair removed only the unsupported worker flag and restarted `k3s-agent` on
+worker instance 0. The worker joined and normal bootstrap published kubeconfig.
+No VM/store was deleted, reformatted or reinitialized. Source generation now
+sets the flag only on servers; K3s agents inherit the server setting. The
+worker's corrected first-boot profile was applied through a saved Pulumi plan:
+one VMSS template update, 23 unchanged, Manual upgrade mode, no VM replacement.
+Source also publishes kubeconfig before worker labeling, with a regression test
+that still blocks readiness and prevents repeated init when labeling fails.
+That helper publication-order fix was unit-tested, not rolled onto these nodes.
+[Pinned K3s agent implementation](https://github.com/k3s-io/k3s/blob/v1.35.8%2Bk3s1/pkg/agent/config/config.go).
+
+Installed Gateway API v1.6.3 standard CRDs, applied
+`examples/cilium-gateway.yaml`, and restarted Cilium agents/operator after the
+Helm update. Host-network Envoy listeners use the existing all-node backend
+pool on TCP 80/443. Pulumi owns the LB/NSG rules; Azure CCM remains absent.
+The API remains direct TCP 6443 and Cilium uses its public DNS endpoint.
+
+Applied `examples/httpbin-gateway.yaml`: two go-httpbin 2.25.0 replicas, a
+ClusterIP Service, a Cilium Gateway on HTTP 80 and an accepted HTTPRoute.
+The Docker image tag is `2.25.0`, not the Git release tag `v2.25.0`.
+Both replicas became Ready on separate nodes. Gateway `Programmed=True`.
+
+Verified from the workstation:
+
+```sh
+curl --noproxy '*' --fail \
+  'http://infestation-gateway-api.westus2.cloudapp.azure.com/get?source=public-lb'
+```
+
+Returned HTTP 200, `server: envoy`, and the expected query parameter in httpbin's
+JSON response. Public IP: `20.120.138.93`. HTTP only was configured/tested;
+the 443 forwarding rule requires an HTTPS listener/certificate before serving TLS.
+All four nodes became Ready, Cilium/Envoy reached 4/4, and all 12 directed
+DNS/cross-node ClusterIP HTTP checks passed. Some initial check attempts retried
+while newly created Service endpoints became ready. This does not establish
+reboot, node/zone failure, upgrade or disaster recovery guarantees.
+
+Private evidence: `state/gateway-deploy.log`, `state/gateway-smoke.log`,
+`state/gateway-worker-template-{preview,update}.log`, and HTTP headers/body under
+`state/infestation-gateway/`. Kubeconfig is at
+`state/infestation-gateway/kubeconfig`, mode 0600. Original timeout evidence is
+retained; the repair was not presented as successful unattended first boot.
+The user subsequently requested teardown. The artifact account's
+`retain-artifacts` Azure deletion lock was removed and the entire
+`infestation-gateway-rg` resource group deleted, including the VM pools, httpbin,
+disks, storage and public load balancer. Completion was verified with
+`az group exists --name infestation-gateway-rg` returning `false`.
+Local PKI, kubeconfigs, generated profiles, source and evidence were preserved.
+The local Pulumi backend is now stale after out-of-band cloud deletion; do not
+blindly reapply it or treat the retained kubeconfig/public URL as live.

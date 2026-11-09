@@ -1,0 +1,247 @@
+// Package cluster defines the portable node inventory shared by every target.
+package cluster
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/netip"
+	"net/url"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+type Node struct {
+	Name          string `json:"name"`
+	IP            string `json:"ip"`
+	DNSName       string `json:"dns_name,omitempty"`
+	Role          string `json:"role,omitempty"`
+	CockroachDB   *bool  `json:"cockroachdb,omitempty"`
+	DatastoreHost string `json:"datastore_host,omitempty"`
+	ServerURL     string `json:"server_url,omitempty"`
+	ClusterMAC    string `json:"cluster_mac,omitempty"`
+	Locality      string `json:"locality,omitempty"`
+}
+
+func (n Node) Address() string {
+	if n.DNSName != "" {
+		return n.DNSName
+	}
+	return n.IP
+}
+
+func (n Node) Worker() bool   { return n.Role == "worker" }
+func (n Node) Database() bool { return n.CockroachDB == nil || *n.CockroachDB }
+
+type Config struct {
+	CockroachImage      string   `json:"cockroach_image"`
+	K3sExtensionVersion string   `json:"k3s_extension_version"`
+	Architecture        string   `json:"architecture"`
+	SingleNodeLab       bool     `json:"single_node_lab,omitempty"`
+	SmokeTest           bool     `json:"smoke_test,omitempty"`
+	TLSSANs             []string `json:"tls_sans,omitempty"`
+	APITailnetHostname  string   `json:"api_tailnet_hostname,omitempty"`
+	CockroachStorage    string   `json:"cockroach_storage,omitempty"`
+	CockroachMinDiskGiB int      `json:"cockroach_min_disk_gib,omitempty"`
+	CockroachCache      string   `json:"cockroach_cache,omitempty"`
+	CockroachSQLMemory  string   `json:"cockroach_sql_memory,omitempty"`
+	Nodes               []Node   `json:"nodes"`
+}
+
+func Load(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	var c Config
+	if err = json.Unmarshal(data, &c); err != nil {
+		return c, err
+	}
+	return c, c.Validate()
+}
+func (c Config) Servers() []Node {
+	var out []Node
+	for _, n := range c.Nodes {
+		if !n.Worker() {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+func (c Config) Databases() []Node {
+	var out []Node
+	for _, n := range c.Nodes {
+		if n.Database() {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// Initializer selects the fixed server VM with ordinal zero, independently of
+// inventory order. This is intentionally a naming convention, not leader election.
+// TODO: replace this with a coordinated bootstrap target (e.g. a Blob lease on
+// Azure) so a fresh deployment can proceed when the -0 VM never starts.
+func (c Config) Initializer() (Node, error) {
+	var selected Node
+	count := 0
+	for _, n := range c.Servers() {
+		if strings.HasSuffix(n.Name, "-0") {
+			selected = n
+			count++
+		}
+	}
+	if count != 1 || !selected.Database() {
+		return Node{}, fmt.Errorf("bootstrap requires exactly one server named with suffix -0, hosting CockroachDB (for example kube-0)")
+	}
+	return selected, nil
+}
+func (c Config) MinDiskGiB() int {
+	if c.CockroachMinDiskGiB == 0 {
+		return 64
+	}
+	return c.CockroachMinDiskGiB
+}
+func (c Config) Cache() string {
+	if c.CockroachCache == "" {
+		return "512MiB"
+	}
+	return c.CockroachCache
+}
+func (c Config) SQLMemory() string {
+	if c.CockroachSQLMemory == "" {
+		return "512MiB"
+	}
+	return c.CockroachSQLMemory
+}
+
+var label = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var dnsLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+var locality = regexp.MustCompile(`^[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+)*$`)
+
+func ValidSAN(s string) bool {
+	if _, err := netip.ParseAddr(s); err == nil {
+		return true
+	}
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	for _, part := range strings.Split(s, ".") {
+		if !dnsLabel.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
+func (c Config) Validate() error { return c.validate(false) }
+
+// RequiredServers keeps normal clusters at three servers. Smoke tests exercise
+// both node roles using two servers and one worker, all hosting CockroachDB.
+func (c Config) RequiredServers() int {
+	if c.SmokeTest {
+		return 2
+	}
+	if c.SingleNodeLab {
+		return 1
+	}
+	return 3
+}
+
+// ValidateDiscovered permits temporary control-plane surge during replacement.
+// Persistent inventories retain their configured server count.
+func (c Config) ValidateDiscovered() error { return c.validate(true) }
+
+func (c Config) validate(surge bool) error {
+	if c.Architecture != "x86-64" && c.Architecture != "aarch64" {
+		return fmt.Errorf("architecture must be x86-64 or aarch64")
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@+-]*$`).MatchString(c.CockroachImage) {
+		return fmt.Errorf("invalid cockroach_image")
+	}
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$`).MatchString(c.K3sExtensionVersion) {
+		return fmt.Errorf("pin k3s_extension_version to an exact K3s release")
+	}
+	for _, m := range []string{c.Cache(), c.SQLMemory()} {
+		if !regexp.MustCompile(`^[1-9][0-9]*(KiB|MiB|GiB|TiB)$`).MatchString(m) {
+			return fmt.Errorf("Cockroach memory limits must be positive byte quantities")
+		}
+	}
+	if c.CockroachStorage != "" && c.CockroachStorage != "persistent" && c.CockroachStorage != "azure-temporary" {
+		return fmt.Errorf("unsupported cockroach_storage")
+	}
+	if c.MinDiskGiB() < 1 || c.MinDiskGiB() > 1<<20 {
+		return fmt.Errorf("cockroach_min_disk_gib must be positive and bounded")
+	}
+	for _, san := range c.TLSSANs {
+		if !ValidSAN(san) {
+			return fmt.Errorf("invalid TLS SAN %q", san)
+		}
+	}
+	if hostname := c.APITailnetHostname; hostname != "" {
+		if !strings.HasPrefix(hostname, "k8s-api.") || !strings.HasSuffix(hostname, ".ts.net") ||
+			len(strings.Split(hostname, ".")) < 4 || !ValidSAN(hostname) || hostname != strings.ToLower(hostname) {
+			return fmt.Errorf("api_tailnet_hostname must be k8s-api.<tailnet>.ts.net")
+		}
+	}
+	expected := c.RequiredServers()
+	if c.SmokeTest && (c.SingleNodeLab || len(c.Nodes) != 3 || len(c.Servers()) != 2 || len(c.Databases()) != 3) {
+		return fmt.Errorf("smoke_test requires two API servers and one worker, all hosting CockroachDB")
+	}
+	servers := len(c.Servers())
+	if len(c.Nodes) == 0 || (servers != 0 && ((!surge && servers != expected) || (surge && servers < expected))) {
+		return fmt.Errorf("exactly %d servers are required (or workers only)", expected)
+	}
+	names, ips := map[string]bool{}, map[string]bool{}
+	for _, n := range c.Nodes {
+		if n.Role != "" && n.Role != "server" && n.Role != "worker" {
+			return fmt.Errorf("invalid role for %s", n.Name)
+		}
+		if n.DNSName != "" && !ValidSAN(n.DNSName) {
+			return fmt.Errorf("invalid node DNS name")
+		}
+		addr, err := netip.ParseAddr(n.IP)
+		if err != nil {
+			return fmt.Errorf("invalid IP for %s", n.Name)
+		}
+		if !label.MatchString(n.Name) || names[n.Name] || ips[addr.String()] {
+			return fmt.Errorf("node names must be DNS labels; names and IPs must be distinct")
+		}
+		names[n.Name] = true
+		ips[addr.String()] = true
+		if n.Locality != "" && !locality.MatchString(n.Locality) {
+			return fmt.Errorf("invalid locality for %s", n.Name)
+		}
+		if n.ClusterMAC != "" && !regexp.MustCompile(`^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$`).MatchString(n.ClusterMAC) {
+			return fmt.Errorf("invalid cluster_mac")
+		}
+		if n.DatastoreHost != "" {
+			if _, err := netip.ParseAddr(n.DatastoreHost); err != nil {
+				return fmt.Errorf("invalid datastore_host")
+			}
+		}
+		if n.Worker() {
+			if n.DatastoreHost != "" {
+				return fmt.Errorf("workers join an API server, not datastore_host")
+			}
+			if len(c.Servers()) == 0 && n.ServerURL == "" {
+				return fmt.Errorf("workers-only configurations require server_url")
+			}
+			if n.ServerURL != "" {
+				u, err := url.Parse(n.ServerURL)
+				if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+					return fmt.Errorf("server_url must be an HTTPS API URL")
+				}
+				if port := u.Port(); port != "" {
+					number, err := strconv.Atoi(port)
+					if err != nil || number < 1 || number > 65535 {
+						return fmt.Errorf("invalid server_url port")
+					}
+				}
+			}
+		} else if !n.Database() && n.DatastoreHost == "" {
+			return fmt.Errorf("servers without CockroachDB require datastore_host")
+		}
+	}
+	return nil
+}
