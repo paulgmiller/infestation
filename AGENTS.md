@@ -11,7 +11,11 @@ Infestation is one Go module at this repository root. Read README.md first.
 - CockroachDB runs as a TLS-enabled host Docker service, outside Kubernetes.
   Servers run the K3s control plane through Kine/CockroachDB; workers run agents.
   Database hosting defaults on for both roles. Cilium is installed after the API
-  is ready, with kube-proxy disabled and Cilium Service routing enabled. Do not substitute Flannel or SQLite/etcd.
+  is ready, with kube-proxy disabled and Cilium Service routing enabled in the
+  current profiles. The selected replacement in docs/networking-plan.md installs
+  host-level Tailscale on every Flatcar server/worker, uses K3s's native
+  Tailscale/Flannel extension integration, retires Cilium, and restores kube-proxy.
+  Do not substitute VXLAN, a separate WireGuard overlay, or SQLite/etcd.
 - Azure uses SLB ingress/egress, three-zone placement and optional temporary
   Cockroach data disks. QEMU uses private NAT and persistent qcow2 overlays.
 - PKI is generated with Go crypto; Ignition uses official v3.3 types/validation.

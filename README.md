@@ -162,8 +162,11 @@ See [Tailscale Services](https://tailscale.com/docs/features/tailscale-services)
 [TCP forwarding](https://tailscale.com/docs/reference/tailscale-cli/serve#use-a-tcp-forwarder),
 and [route selection](https://tailscale.com/docs/features/route-selection).
 
-The [networking checkpoint](docs/networking-plan.md) records the proposed
-Tailscale pod network and Cloudflare ingress transition. Those changes remain
+The [networking checkpoint](docs/networking-plan.md) records the selected
+egress-only design: host-level Tailscale on every Flatcar node, K3s's native
+Tailscale/Flannel extension integration replacing Cilium, kube-proxy restored,
+and Cloudflare Tunnel replicas for public web ingress. No shared VNet/VPC or
+inbound node connectivity is required by that target design. Those changes remain
 planned: current Cilium, kube-proxy replacement, and provider networking defaults
 are preserved. The API TailVIP option is independent of that transition.
 

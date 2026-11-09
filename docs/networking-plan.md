@@ -1,6 +1,6 @@
 # Egress-only K3s networking checkpoint
 
-Last updated: 2026-11-08. This records the agreed design and investigation;
+Last updated: 2026-11-09. This records the agreed design and investigation;
 replacement networking and the API TailVIP have **not been deployed or verified**.
 
 After merging origin/master's Go migration, `internal/cluster` accepts optional
@@ -15,16 +15,43 @@ current deployed configuration. Removing Cilium and changing provider defaults
 remain separate implementation work. The original Python scaffold is retired;
 its existing local state is preserved and ignored.
 
+## VM enrollment secret handling
+
+The in-progress static VM renderer accepts either an inventory
+`tailscale.auth_key_file`, `ignition --tailscale-auth-key-file PATH`, or
+`ignition --tailscale-auth-key KEY`. Supply exactly one source. The raw argument
+is render-only: it is not saved in the cluster inventory or node bootstrap JSON.
+Validation and PKI generation do not require the enrollment key.
+
+Use a short-lived, reusable, preauthorized key whose tags identify lab nodes.
+The key is embedded in private Ignition as `/etc/infestation/tailscale-authkey`
+(mode `0600`). The host helper passes a file reference to `tailscale up` and
+deletes that guest file after successful enrollment and identity validation.
+Reboots reuse `/var/lib/tailscale`; they do not reset or reenroll a running node.
+Deleting the guest file does not remove copies retained in Ignition, provisioning
+storage or backups. Generated Ignition must remain private. Literal command-line
+keys may also be retained in shell history or visible in process arguments.
+
+Unit tests cover enrollment, identity mismatch, durable identity reuse and
+render-only argument handling. After merging origin/master's `azurecheck` and
+public smoke checks, the CLI builds and `go test ./...` passes. CLI tests exercise
+both auth flags through private Ignition generation with disposable test keys.
+No new VM has been booted/enrolled; these checks do not establish live tailnet or
+cross-node pod connectivity.
+
 ## Goal and component ownership
 
-Three Flatcar nodes must be able to form a cluster without a shared private LAN,
-public node IPs, inbound port forwarding, or a self-managed external load balancer.
+Every Flatcar node, both API servers and workers, must be able to join and run
+with outbound connectivity only. Nodes need not share a VNet/VPC, private LAN,
+or mutually routable underlay addresses. Do not require public node IPs, inbound
+port forwarding, or a self-managed external load balancer. Responses to outbound
+connections/NAT mappings are expected; this is not an air-gapped cluster.
 Outbound connectivity, DNS, and time synchronization remain required.
 
 | Component | Responsibility |
 | --- | --- |
-| Host-level Tailscale | Node connectivity and encrypted cross-node pod routing |
-| K3s Tailscale/Flannel integration, under evaluation | PodCIDR assignment plumbing, local CNI setup, and subnet advertisements |
+| Host-level Tailscale on every Flatcar server and worker | Node connectivity and encrypted cross-node pod routing |
+| K3s's native Tailscale/Flannel extension integration, selected | PodCIDR assignment plumbing, local CNI setup, and subnet advertisements |
 | kube-proxy and CoreDNS | Standard Kubernetes Services and discovery |
 | kube-network-policies | Kubernetes pod ingress/egress policy |
 | Tailscale Service/TailVIP | One private Kubernetes API address across three server hosts |
@@ -79,19 +106,27 @@ Prerequisites still outstanding: identify/enroll the three actual server hosts,
 confirm local API listeners and certificate SANs, and define/approve the Service.
 The management host is not an API backend.
 
-## Reuse K3s before writing a custom networking agent
+## Pod networking: native K3s integration selected
+
+Decision: use K3s's native Tailscale integration and retire Cilium. Restore
+kube-proxy for Services and keep CoreDNS. Do not build a custom PodCIDR agent.
+This replaces the original blanket no-Flannel constraint: Flannel supplies the
+local CNI/subnet orchestration, while Tailscale supplies the encrypted transport.
+Do not select Flannel VXLAN or its separate native WireGuard backend.
+
+Install and run `tailscaled` as a host service on **every** Flatcar API server and
+worker, with durable identity/state. Install/enroll it before starting services
+that depend on tailnet addresses, including CockroachDB peer networking. Do not
+implement the node network using Kubernetes pods or rely on an in-cluster operator
+for bootstrap. Only API servers additionally advertise `svc:k8s-api`.
 
 K3s has experimental Tailscale integration via `--vpn-auth`/`--vpn-auth-file`.
 Our pinned K3s v1.35.8+k3s1 configures upstream Flannel's generic `extension`
 backend to run `tailscale set --accept-routes --advertise-routes=<subnets>`.
 This delegates transport to Tailscale rather than adding VXLAN over it.
-Allowing Flannel for this orchestration role revisits the original no-Flannel
-constraint; do not silently enable its default VXLAN backend.
-
-Investigate this integration before implementing a custom PodCIDR reconciler.
-If it cannot satisfy host-network independence, use bridge CNI plus host-local
-IPAM and a small host agent that reads the node's assigned PodCIDR and reconciles
-local CNI configuration and advertisements.
+Validate the selected integration's lifecycle in disposable VMs. If it cannot
+preserve independently managed host connectivity, record the specific blocker
+and revisit the design rather than silently substituting a custom controller.
 
 K3s emits `ShutdownCommand: tailscale down`, but its pinned upstream Flannel
 v0.28.4 extension parser has no such field. Source inspection indicates that
@@ -134,13 +169,15 @@ Persist node identity and IPAM state; reconcile stale routes on replacement.
 
 1. Save this checkpoint; update README and agent instructions to reflect it.
    Completed, including migration of the optional API TailVIP configuration to Go.
-2. Retire the Go bootstrap Cilium chart and related active setup instructions as
-   part of the networking transition. Re-enable kube-proxy in coordination with
-   installing replacement networking; retain generic DNS, Service, cross-node,
-   and datastore smoke checks. Label prior Cilium validation historical. Until
-   a replacement CNI is installed, new nodes may remain NotReady.
-3. Validate the native K3s/Tailscale path in a disposable profile and choose it
-   over custom glue if restart and source-IP behavior meet the requirements.
+2. Implement pinned host-level Tailscale installation/enrollment and durable
+   state on all Flatcar node roles. Configure K3s's native Tailscale integration,
+   retire the Go bootstrap Cilium chart, and restore kube-proxy together. Retain
+   generic DNS, Service, cross-node, and datastore smoke checks. Label previous
+   Cilium validation historical; do not claim replacement networking verified.
+3. Validate native K3s/Tailscale restart and source-IP behavior in a disposable
+   profile without a shared private node network. Separately replace Azure's
+   inbound API/gateway LB dependence and verify outbound access remains possible;
+   preserve existing infrastructure/state until an explicit deployment migration.
 4. Configure and verify the host-level API TailVIP described above.
 5. Add standard namespace NetworkPolicy enforcement, then Cloudflare replicas
    spread across nodes. Pin component versions/digests after compatibility checks.

@@ -7,12 +7,21 @@ import (
 	"os/signal"
 	"syscall"
 
+	"infestation/internal/executil"
 	"infestation/internal/nodebootstrap"
+	"infestation/internal/tailnet"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) > 1 && os.Args[1] == "tailnet" {
+		if err := tailnet.Prepare(ctx, "/", executil.OSRunner{}); err != nil {
+			fmt.Fprintln(os.Stderr, "host tailnet:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	config, err := nodebootstrap.Load("/etc/infestation/bootstrap.json")
 	if err == nil {
 		if len(os.Args) > 1 && os.Args[1] == "prepare" {

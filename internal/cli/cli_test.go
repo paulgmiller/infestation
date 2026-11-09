@@ -10,8 +10,56 @@ import (
 
 	"infestation/internal/blobstore"
 	"infestation/internal/bootstrap"
+	"infestation/internal/cluster"
 	"infestation/internal/testutil"
 )
+
+func TestIgnitionTailscaleAuthFlags(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	state := t.TempDir()
+	c := testutil.Config()
+	c.Tailscale = &cluster.Tailscale{Version: "v1.104.2", Domain: "example.ts.net"}
+	config := filepath.Join(state, "cluster.json")
+	testutil.JSON(t, config, c)
+	helper := filepath.Join(state, "node-helper")
+	keyfile := filepath.Join(state, "authkey")
+	key := "tskey-auth-DISPOSABLE-CLI-TEST"
+	for path, data := range map[string]string{helper: "fake-helper", keyfile: key} {
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"pki", "--config", config, "--state-dir", state}, &out); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"ignition", "--config", config, "--state-dir", state, "--node-helper", helper}
+	for _, auth := range [][]string{
+		{"--tailscale-auth-key", key},
+		{"--tailscale-auth-key-file", keyfile},
+	} {
+		args := append(append([]string{}, base...), auth...)
+		if err := Run(context.Background(), args, &out); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out.String(), key) {
+			t.Fatal("key exposed in CLI output")
+		}
+		for _, n := range c.Nodes {
+			info, err := os.Stat(filepath.Join(state, "output", n.Name+".ign"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0600 {
+				t.Fatal("Ignition is not private")
+			}
+		}
+	}
+	args := append(base, "--tailscale-auth-key", key, "--tailscale-auth-key-file", keyfile)
+	if err := Run(context.Background(), args, &out); err == nil || strings.Contains(err.Error(), key) {
+		t.Fatal("ambiguous auth sources accepted or exposed", err)
+	}
+}
 
 func TestLocalCommandsWithoutExternalTools(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())

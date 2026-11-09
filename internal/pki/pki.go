@@ -145,7 +145,7 @@ func Create(c cluster.Config, state string) error {
 		}
 		dst := filepath.Join(dir, n.Name)
 		if n.Database() {
-			if err = issue(dst, "node", "node", []string{n.IP, n.Name, "localhost", "127.0.0.1", "::1"}, true); err != nil {
+			if err = issue(dst, "node", "node", []string{n.IP, n.Name, c.NodeAddress(n), "localhost", "127.0.0.1", "::1"}, true); err != nil {
 				return err
 			}
 		}

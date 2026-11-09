@@ -15,6 +15,8 @@ import (
 )
 
 type Bootstrap struct {
+	// Render-only secret: never serialize into the node's bootstrap inventory.
+	TailscaleAuthKey                                 string `json:"-"`
 	Account, HelperSHA256, DeploymentID, APIEndpoint string
 	LocalHelper                                      string
 	Credential                                       []byte
@@ -40,7 +42,11 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 		add(nodebootstrap.BootstrapCredentialDir+"/client.root.crt", string(credential.Certificate), 0600)
 		add(nodebootstrap.BootstrapCredentialDir+"/client.root.key", string(credential.Key), 0600)
 	}
-	config, err := json.Marshal(nodebootstrap.Config{Cluster: c, Node: n.Name, Account: b.Account, DeploymentID: b.DeploymentID, APIEndpoint: b.APIEndpoint, Azure: b.Pool})
+	endpoint := b.APIEndpoint
+	if c.Tailscale != nil {
+		endpoint = "https://" + net.JoinHostPort(c.NodeAddress(n), "6443")
+	}
+	config, err := json.Marshal(nodebootstrap.Config{Cluster: c, Node: n.Name, Account: b.Account, DeploymentID: b.DeploymentID, APIEndpoint: endpoint, Azure: b.Pool})
 	if err != nil {
 		return err
 	}
@@ -51,7 +57,9 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 		if err != nil {
 			return err
 		}
-		doc.Storage.Files = append(doc.Storage.Files, File(executable, binary, 0755))
+		if c.Tailscale == nil {
+			doc.Storage.Files = append(doc.Storage.Files, File(executable, binary, 0755))
+		}
 	} else {
 		if !regexp.MustCompile(`^[a-z0-9]{3,24}$`).MatchString(b.Account) || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(b.HelperSHA256) {
 			return fmt.Errorf("invalid node helper storage or checksum")
@@ -79,7 +87,7 @@ exec /opt/infestation/infestation-node "$@"
 	unit := "[Unit]\nDescription=Infestation node-local bootstrap\nWants=network-online.target docker.service\nAfter=network-online.target docker.service\nStartLimitIntervalSec=0\n\n[Service]\nStandardOutput=journal+console\nStandardError=journal+console\nType=oneshot\nTimeoutStartSec=0\nExecStart=" + executable + "\nRestart=on-failure\nRestartSec=15s\n\n[Install]\nWantedBy=multi-user.target\n"
 	timer := "[Unit]\nDescription=Refresh Infestation kubeconfig publication\n[Timer]\nOnBootSec=5min\nOnUnitInactiveSec=5min\nUnit=infestation-bootstrap.service\n[Install]\nWantedBy=timers.target\n"
 	doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: "infestation-bootstrap.service", Enabled: ptr(true), Contents: &unit}, types.Unit{Name: "infestation-bootstrap.timer", Enabled: ptr(true), Contents: &timer})
-	if n.Worker() {
+	if n.Worker() || c.Tailscale != nil {
 		return nil
 	}
 	host, port, err := ciliumAPIEndpoint(c, b)

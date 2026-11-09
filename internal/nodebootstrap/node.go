@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"syscall"
 
 	"infestation/internal/blobstore"
 	"infestation/internal/bootstrap"
@@ -91,7 +92,7 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 				return true
 			}
 		}
-		if !ready(ctx, n.Address()) {
+		if !ready(ctx, w.Config.Cluster.NodeAddress(n)) {
 			return "", fmt.Errorf("database listener on %s is not ready", n.Name)
 		}
 	}
@@ -114,7 +115,7 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 	}
 	id := ""
 	for _, n := range w.Config.Cluster.Databases() {
-		id, err = bootstrap.ParseIdentity(w.sql(ctx, n.Address(), "SELECT crdb_internal.cluster_id()"))
+		id, err = bootstrap.ParseIdentity(w.sql(ctx, w.Config.Cluster.NodeAddress(n), "SELECT crdb_internal.cluster_id()"))
 		if err != nil {
 			return "", err
 		}
@@ -133,8 +134,8 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 		if err := w.Store.Create(ctx, w.location("bootstrap-state.json"), intent); err != nil {
 			return "", err
 		}
-		w.command(ctx, "docker", "exec", "--user", "0", "cockroachdb", "/cockroach/cockroach", "init", "--certs-dir="+RuntimeCredentialDir, "--host="+net.JoinHostPort(initializer.Address(), "26257"))
-		id, err = bootstrap.ParseIdentity(w.sql(ctx, initializer.Address(), "SELECT crdb_internal.cluster_id()"))
+		w.command(ctx, "docker", "exec", "--user", "0", "cockroachdb", "/cockroach/cockroach", "init", "--certs-dir="+RuntimeCredentialDir, "--host="+net.JoinHostPort(w.Config.Cluster.NodeAddress(initializer), "26257"))
+		id, err = bootstrap.ParseIdentity(w.sql(ctx, w.Config.Cluster.NodeAddress(initializer), "SELECT crdb_internal.cluster_id()"))
 		if err != nil || id == "" {
 			return "", fmt.Errorf("initialization outcome requires an existing database identity; init will not be repeated")
 		}
@@ -152,7 +153,7 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 	if err := w.Store.Put(ctx, w.location("bootstrap-state.json"), data); err != nil {
 		return "", err
 	}
-	r := w.sql(ctx, initializer.Address(), bootstrap.BootstrapSQL)
+	r := w.sql(ctx, w.Config.Cluster.NodeAddress(initializer), bootstrap.BootstrapSQL)
 	if r.Code != 0 {
 		return "", fmt.Errorf("database SQL bootstrap is not ready")
 	}
@@ -246,6 +247,9 @@ func (w Worker) Run(ctx context.Context) error {
 	if err := w.Store.Put(ctx, w.location("kubeconfig.json"), data); err != nil {
 		return err
 	}
+	if w.Config.Cluster.Tailscale != nil && w.Config.Azure == nil {
+		if err := publishVMAccess(data); err != nil { return err }
+	}
 	// Operator access must remain available when a worker cannot register or
 	// Cilium is unhealthy. Role reconciliation gates readiness, not publication.
 	if err := w.labelWorkers(ctx, local); err != nil {
@@ -255,7 +259,7 @@ func (w Worker) Run(ctx context.Context) error {
 		return nil
 	}
 	for _, n := range w.Config.Cluster.Databases() {
-		actual, err := bootstrap.ParseIdentity(w.sql(ctx, n.Address(), "SELECT crdb_internal.cluster_id()"))
+		actual, err := bootstrap.ParseIdentity(w.sql(ctx, w.Config.Cluster.NodeAddress(n), "SELECT crdb_internal.cluster_id()"))
 		if err != nil || actual != id {
 			return fmt.Errorf("database identity on %s is not ready", n.Name)
 		}
@@ -315,4 +319,19 @@ func Load(path string) (Config, error) {
 	}
 	err = json.Unmarshal(raw, &config)
 	return config, err
+}
+
+// Publish access only through the explicit private VM-to-host channel, never
+// serial console logs. Plain files are rejected to avoid accidental disclosure.
+func publishVMAccess(data []byte) error {
+	path := "/dev/virtio-ports/org.infestation.access"
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) { return nil } // Non-QEMU hosts need not expose a channel.
+	if err != nil { return err }
+	if info.Mode()&os.ModeCharDevice == 0 { return fmt.Errorf("VM access channel is not a character device") }
+	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	if err != nil { return err }
+	defer f.Close()
+	_, err = f.Write(append(data, '\n'))
+	return err
 }

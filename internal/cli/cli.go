@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"infestation/internal/azurecheck"
 	"infestation/internal/azureplan"
@@ -25,6 +26,7 @@ import (
 	"infestation/internal/kubeconfigstore"
 	"infestation/internal/pki"
 	"infestation/internal/smoke"
+	"infestation/internal/vm"
 )
 
 type list []string
@@ -33,14 +35,14 @@ func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *list) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop, validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
 		return nil
 	}
 	command := args[0]
 	args = args[1:]
-	if command == "azure" {
+	if command == "azure" || command == "vm" {
 		if len(args) == 0 {
-			return fmt.Errorf("expected azure plan, azure deploy, azure kubeconfig or azure check")
+			return fmt.Errorf("expected a %s subcommand; run --help", command)
 		}
 		command += " " + args[0]
 		args = args[1:]
@@ -53,6 +55,35 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		flags.StringVar(&state, "state-dir", state, "private local state directory")
 	}
 	switch command {
+	case "vm create", "vm start", "vm status", "vm stop":
+		o := vm.Options{}
+		flags.StringVar(&o.Name, "name", "", "unique VM name (required)")
+		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
+		if command == "vm create" {
+			flags.StringVar(&o.AuthKey, "tailscale-auth-key", "", "Tailscale auth key for tagged VMs (default: TAILSCALE_AUTH_KEY)")
+			flags.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private file containing the auth key")
+			flags.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar qcow2 (default: download and SHA512-verify pinned release)")
+			flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow software emulation with tcg")
+		}
+		if command == "vm create" || command == "vm start" {
+			flags.DurationVar(&o.Wait, "wait", 10*time.Minute, "wait for enrollment confirmation; 0 starts in background")
+		}
+		if err := parse(flags, args); err != nil {
+			return help(err)
+		}
+		if o.Wait < 0 {
+			return fmt.Errorf("--wait must not be negative")
+		}
+		switch command {
+		case "vm create":
+			return vm.Create(ctx, o, out)
+		case "vm start":
+			return vm.Start(ctx, o, out)
+		case "vm status":
+			return vm.Status(ctx, o, out)
+		default:
+			return vm.Stop(ctx, o, out)
+		}
 	case "azure kubeconfig":
 		outputs := flags.String("outputs", "", "deployment outputs JSON containing kubeconfigBlob and apiEndpoint")
 		account := flags.String("account", "", "storage account from Azure portal (alternative to --outputs)")
@@ -89,9 +120,11 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return nil
 	case "validate", "pki", "ignition":
 		portable()
-		var helper string
+		var helper, tailscaleAuthKey, tailscaleAuthKeyFile string
 		if command == "ignition" {
 			flags.StringVar(&helper, "node-helper", "bin/infestation-node", "Linux node bootstrap executable to embed for local VMs")
+			flags.StringVar(&tailscaleAuthKey, "tailscale-auth-key", "", "Tailscale enrollment key (secret; embedded in private Ignition)")
+			flags.StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "private file containing the Tailscale enrollment key")
 		}
 		if err := parse(flags, args); err != nil {
 			return help(err)
@@ -103,12 +136,29 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if command == "ignition" {
+			if tailscaleAuthKey == "" && tailscaleAuthKeyFile == "" && c.Tailscale != nil && c.Tailscale.AuthKeyFile == "" {
+				tailscaleAuthKey = os.Getenv("TAILSCALE_AUTH_KEY")
+			}
+			if tailscaleAuthKey != "" && tailscaleAuthKeyFile != "" {
+				return fmt.Errorf("use --tailscale-auth-key or --tailscale-auth-key-file, not both")
+			}
+			if tailscaleAuthKey != "" || tailscaleAuthKeyFile != "" {
+				if c.Tailscale == nil {
+					return fmt.Errorf("Tailscale auth flags require a tailscale networking profile")
+				}
+				if c.Tailscale.AuthKeyFile != "" {
+					return fmt.Errorf("use a Tailscale auth flag or inventory auth_key_file, not both")
+				}
+				c.Tailscale.AuthKeyFile = tailscaleAuthKeyFile
+			}
+		}
 		switch command {
 		case "pki":
 			err = pki.Create(c, state)
 		case "ignition":
 			if len(c.Servers()) == 0 {
-				err = ignition.Generate(c, state)
+				err = ignition.Generate(c, state, ignition.Bootstrap{LocalHelper: helper, TailscaleAuthKey: tailscaleAuthKey})
 				break
 			}
 			binary, readErr := os.ReadFile(helper)
@@ -120,7 +170,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			if credErr != nil {
 				return credErr
 			}
-			err = ignition.Generate(c, state, ignition.Bootstrap{LocalHelper: helper, DeploymentID: fmt.Sprintf("%x", id), APIEndpoint: "https://" + net.JoinHostPort(c.Servers()[0].IP, "6443"), Credential: credential})
+			err = ignition.Generate(c, state, ignition.Bootstrap{LocalHelper: helper, TailscaleAuthKey: tailscaleAuthKey, DeploymentID: fmt.Sprintf("%x", id), APIEndpoint: "https://" + net.JoinHostPort(c.Servers()[0].IP, "6443"), Credential: credential})
 		}
 		if err == nil {
 			fmt.Fprintln(out, command+": complete")
@@ -232,7 +282,7 @@ func parse(f *flag.FlagSet, args []string) error {
 		return err
 	}
 	if f.NArg() != 0 {
-		return fmt.Errorf("unexpected arguments: %v", f.Args())
+		return fmt.Errorf("unexpected positional arguments")
 	}
 	return nil
 }

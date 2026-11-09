@@ -35,18 +35,35 @@ func (n Node) Worker() bool   { return n.Role == "worker" }
 func (n Node) Database() bool { return n.CockroachDB == nil || *n.CockroachDB }
 
 type Config struct {
-	CockroachImage      string   `json:"cockroach_image"`
-	K3sExtensionVersion string   `json:"k3s_extension_version"`
-	Architecture        string   `json:"architecture"`
-	SingleNodeLab       bool     `json:"single_node_lab,omitempty"`
-	SmokeTest           bool     `json:"smoke_test,omitempty"`
-	TLSSANs             []string `json:"tls_sans,omitempty"`
-	APITailnetHostname  string   `json:"api_tailnet_hostname,omitempty"`
-	CockroachStorage    string   `json:"cockroach_storage,omitempty"`
-	CockroachMinDiskGiB int      `json:"cockroach_min_disk_gib,omitempty"`
-	CockroachCache      string   `json:"cockroach_cache,omitempty"`
-	CockroachSQLMemory  string   `json:"cockroach_sql_memory,omitempty"`
-	Nodes               []Node   `json:"nodes"`
+	Tailscale           *Tailscale `json:"tailscale,omitempty"`
+	CockroachImage      string     `json:"cockroach_image"`
+	K3sExtensionVersion string     `json:"k3s_extension_version"`
+	Architecture        string     `json:"architecture"`
+	SingleNodeLab       bool       `json:"single_node_lab,omitempty"`
+	SmokeTest           bool       `json:"smoke_test,omitempty"`
+	TLSSANs             []string   `json:"tls_sans,omitempty"`
+	APITailnetHostname  string     `json:"api_tailnet_hostname,omitempty"`
+	CockroachStorage    string     `json:"cockroach_storage,omitempty"`
+	CockroachMinDiskGiB int        `json:"cockroach_min_disk_gib,omitempty"`
+	CockroachCache      string     `json:"cockroach_cache,omitempty"`
+	CockroachSQLMemory  string     `json:"cockroach_sql_memory,omitempty"`
+	Nodes               []Node     `json:"nodes"`
+}
+
+// Tailscale enables the VM-first, host-managed K3s VPN profile. AuthKeyFile is a
+// optional workstation path read only when rendering private Ignition, never a
+// raw key. Alternatively the renderer receives a transient command-line key.
+type Tailscale struct {
+	Version     string `json:"version"`
+	Domain      string `json:"domain"`
+	AuthKeyFile string `json:"auth_key_file,omitempty"`
+}
+
+func (c Config) NodeAddress(n Node) string {
+	if c.Tailscale != nil {
+		return n.Name + "." + c.Tailscale.Domain
+	}
+	return n.Address()
 }
 
 func Load(path string) (Config, error) {
@@ -153,6 +170,16 @@ func (c Config) RequiredServers() int {
 func (c Config) ValidateDiscovered() error { return c.validate(true) }
 
 func (c Config) validate(surge bool) error {
+	if ts := c.Tailscale; ts != nil {
+		if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(ts.Version) ||
+			!ValidSAN(ts.Domain) || !strings.HasSuffix(ts.Domain, ".ts.net") ||
+			len(strings.Split(ts.Domain, ".")) != 3 || ts.Domain != strings.ToLower(ts.Domain) {
+			return fmt.Errorf("tailscale requires an exact version and <tailnet>.ts.net domain")
+		}
+		if c.CockroachStorage == "azure-temporary" {
+			return fmt.Errorf("Tailscale is currently supported by the disposable VM profile only; Azure migration is pending")
+		}
+	}
 	if c.Architecture != "x86-64" && c.Architecture != "aarch64" {
 		return fmt.Errorf("architecture must be x86-64 or aarch64")
 	}

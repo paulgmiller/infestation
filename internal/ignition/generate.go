@@ -160,15 +160,20 @@ func Render(c cluster.Config, n cluster.Node, state, token string, options ...Bo
 			if len(servers) == 0 {
 				return doc, fmt.Errorf("worker requires server URL")
 			}
-			server = "https://" + net.JoinHostPort(servers[0].IP, "6443")
+			server = "https://" + net.JoinHostPort(c.NodeAddress(servers[0]), "6443")
 		}
 		conf += "server: " + quoted(server) + "\n"
 	} else {
 		// This is a server-only flag. Agents receive the setting from the server.
-		conf += "disable-kube-proxy: true\n"
+		if c.Tailscale == nil {
+			conf += "disable-kube-proxy: true\n"
+		}
 		conf += "advertise-address: " + quoted(n.IP) + "\ntls-san:\n"
 		seen := map[string]bool{}
 		sans := append([]string{n.IP}, c.TLSSANs...)
+		if c.Tailscale != nil {
+			sans = append(sans, c.NodeAddress(n))
+		}
 		if c.APITailnetHostname != "" {
 			sans = append(sans, c.APITailnetHostname)
 		}
@@ -185,12 +190,21 @@ func Render(c cluster.Config, n cluster.Node, state, token string, options ...Bo
 		conf += fmt.Sprintf("datastore-endpoint: %s\n", quoted("postgres://kine@"+net.JoinHostPort(host, "26257")+"/kubernetes?sslmode=verify-full"))
 		conf += "datastore-cafile: /etc/cockroach/certs/ca.crt\ndatastore-certfile: /etc/cockroach/certs/client.kine.crt\ndatastore-keyfile: /etc/cockroach/certs/client.kine.key\nflannel-backend: none\ndisable-network-policy: true\ndisable:\n  - traefik\n  - servicelb\n"
 	}
+	if c.Tailscale != nil {
+		conf = strings.ReplaceAll(conf, "flannel-backend: none", "flannel-backend: tailscale")
+		conf += "vpn-auth-file: /etc/rancher/k3s/vpn-auth\nflannel-iface: tailscale0\n"
+	}
 	add("/etc/rancher/k3s/config.yaml", conf, 0600)
+	if c.Tailscale != nil {
+		if err := tailnetProfile(&doc, c, n, options); err != nil {
+			return doc, err
+		}
+	}
 	service := "k3s.service"
 	if n.Worker() {
 		service = "k3s-agent.service"
 	}
-	doc.Storage.Links = []types.Link{{Node: types.Node{Path: "/etc/systemd/system/multi-user.target.wants/" + service, Overwrite: ptr(true)}, LinkEmbedded1: types.LinkEmbedded1{Target: ptr("/usr/local/lib/systemd/system/" + service)}}}
+	doc.Storage.Links = append(doc.Storage.Links, types.Link{Node: types.Node{Path: "/etc/systemd/system/multi-user.target.wants/" + service, Overwrite: ptr(true)}, LinkEmbedded1: types.LinkEmbedded1{Target: ptr("/usr/local/lib/systemd/system/" + service)}})
 	restart := "[Service]\nRestart=always\nRestartSec=15s\n"
 	dropin := "10-restart.conf"
 	if n.Database() {
@@ -199,7 +213,15 @@ func Render(c cluster.Config, n cluster.Node, state, token string, options ...Bo
 		restart = "[Unit]\nAfter=cockroachdb.service\nWants=cockroachdb.service\n" + restart
 		dropin = "10-cockroach-dependency.conf"
 	}
-	doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: service, Dropins: []types.Dropin{{Name: dropin, Contents: &restart}}})
+	if c.Tailscale != nil {
+		restart = "[Unit]\nRequires=infestation-tailnet.service\nAfter=infestation-tailnet.service\n" + restart
+	}
+	k3sUnit := types.Unit{Name: service, Dropins: []types.Dropin{{Name: dropin, Contents: &restart}}}
+	if c.Tailscale != nil {
+		pre := "[Service]\nExecStartPre=/opt/infestation/infestation-node tailnet\n"
+		k3sUnit.Dropins = append(k3sUnit.Dropins, types.Dropin{Name: "20-tailnet-check.conf", Contents: &pre})
+	}
+	doc.Systemd.Units = append(doc.Systemd.Units, k3sUnit)
 	if !n.Worker() && c.APITailnetHostname != "" {
 		unit := `[Unit]
 Description=Advertise this K3s server through the private API TailVIP
@@ -234,7 +256,7 @@ func CockroachUnit(c cluster.Config, n cluster.Node) string {
 	}
 	var seeds []string
 	for _, node := range c.Databases() {
-		seeds = append(seeds, net.JoinHostPort(node.IP, "26257"))
+		seeds = append(seeds, net.JoinHostPort(c.NodeAddress(node), "26257"))
 	}
 	join := ""
 	if !c.SingleNodeLab {
@@ -250,9 +272,13 @@ func CockroachUnit(c cluster.Config, n cluster.Node) string {
 		dependency = " waagent.service"
 		check = "ExecStartPre=/opt/infestation/check-cockroach-storage\n"
 	}
+	tailnetDependency := ""
+	if c.Tailscale != nil {
+		tailnetDependency = "Requires=infestation-tailnet.service\nAfter=infestation-tailnet.service\n"
+	}
 	return fmt.Sprintf(`[Unit]
 Description=CockroachDB host datastore
-Wants=network-online.target
+%sWants=network-online.target
 After=network-online.target docker.service%s
 Requires=docker.service%s
 StartLimitIntervalSec=0
@@ -271,5 +297,5 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-`, dependency, dependency, check, store, store, c.CockroachImage, command, net.JoinHostPort(n.IP, "26257"), join, locality, c.Cache(), c.SQLMemory())
+`, tailnetDependency, dependency, dependency, check, store, store, c.CockroachImage, command, net.JoinHostPort(c.NodeAddress(n), "26257"), join, locality, c.Cache(), c.SQLMemory())
 }
