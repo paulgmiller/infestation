@@ -21,8 +21,20 @@ PKI = HERE / 'pki'
 OUT = HERE / 'output'
 
 
+def api_tailnet_hostname(data):
+    hostname = data.get('api_tailnet_hostname')
+    if hostname is not None:
+        if (not isinstance(hostname, str) or len(hostname) > 253 or len(hostname.split('.')) < 4
+                or not hostname.startswith('k8s-api.') or not hostname.endswith('.ts.net')
+                or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                           for label in hostname.split('.'))):
+            raise ValueError('api_tailnet_hostname must be k8s-api.<tailnet>.ts.net')
+    return hostname
+
+
 def config():
     data = json.loads(CONFIG.read_text())
+    api_tailnet_hostname(data)
     nodes = data['nodes']
     count = 1 if data.get('single_node_lab', False) else 3
     if len(nodes) != count or len({x['name'] for x in nodes}) != count or len({x['ip'] for x in nodes}) != count:
@@ -123,6 +135,7 @@ WantedBy=multi-user.target
 
 
 def ignition(data):
+    api_hostname = api_tailnet_hostname(data)
     OUT.mkdir(exist_ok=True)
     OUT.chmod(0o700)
     token_file = PKI / 'k3s-token'
@@ -161,6 +174,8 @@ def ignition(data):
             if uid:
                 f['user'] = {'id': uid}
             files.append(f)
+        # Every node generated here runs k3s server, including nodes without local SQL.
+        api_san = f'  - "{api_hostname}"\n' if api_hostname else ''
         # Using certificates instead of SQL passwords for Kine's PostgreSQL client.
         k3s_conf = f'''token: "{token}"
 node-name: "{name}"
@@ -168,7 +183,7 @@ node-ip: "{ip}"
 advertise-address: "{ip}"
 tls-san:
   - "{ip}"
-datastore-endpoint: "postgres://kine@{node.get('datastore_host', '127.0.0.1')}:26257/kubernetes?sslmode=verify-full"
+{api_san}datastore-endpoint: "postgres://kine@{node.get('datastore_host', '127.0.0.1')}:26257/kubernetes?sslmode=verify-full"
 datastore-cafile: /etc/cockroach/certs/ca.crt
 datastore-certfile: /etc/cockroach/certs/client.kine.crt
 datastore-keyfile: /etc/cockroach/certs/client.kine.key
@@ -205,6 +220,26 @@ disable:
                 'name': '10-restart.conf',
                 'contents': '[Service]\nRestart=always\nRestartSec=15s\n',
             }]}]
+        if api_hostname:
+            doc['systemd']['units'].append({
+                'name': 'tailscale-api.service', 'enabled': True,
+                'contents': '''[Unit]
+Description=Advertise this K3s server through the private API TailVIP
+Wants=tailscaled.service k3s.service
+After=tailscaled.service k3s.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/tailscale serve --service=svc:k8s-api --tcp=443 tcp://127.0.0.1:6443
+Restart=on-failure
+RestartSec=15s
+
+[Install]
+WantedBy=multi-user.target
+''',
+            })
         outpath = OUT / f'{name}.ign'
         outpath.write_text(json.dumps(doc, indent=2) + '\n')
         outpath.chmod(0o600)

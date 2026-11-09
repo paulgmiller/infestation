@@ -27,6 +27,17 @@ class GeneratorTests(unittest.TestCase):
                 path.write_text(json.dumps(data))
                 self.assertEqual(len(generate.config()['nodes']), 1)
 
+    def test_api_tailnet_hostname_validation(self):
+        self.assertIsNone(generate.api_tailnet_hostname({}))
+        self.assertIsNone(generate.api_tailnet_hostname({'api_tailnet_hostname': None}))
+        valid = 'k8s-api.example.ts.net'
+        self.assertEqual(generate.api_tailnet_hostname({'api_tailnet_hostname': valid}), valid)
+        for hostname in ('', 42, 'other.example.ts.net', 'k8s-api.example.com', 'k8s-api.ts.net',
+                         'k8s-api..ts.net', 'k8s-api.-bad.ts.net',
+                         'k8s-api.example.ts.net\nextra: value'):
+            with self.subTest(hostname=hostname), self.assertRaises(ValueError):
+                generate.api_tailnet_hostname({'api_tailnet_hostname': hostname})
+
     def test_generated_credentials_and_service_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -50,10 +61,24 @@ class GeneratorTests(unittest.TestCase):
                 conf = base64.b64decode(files['/etc/rancher/k3s/config.yaml']['contents']['source'].split(',')[1]).decode()
                 self.assertIn('sslmode=verify-full', conf)
                 self.assertIn('flannel-backend: none', conf)
+                self.assertFalse(any(u['name'] == 'tailscale-api.service' for u in doc['systemd']['units']))
                 unit = doc['systemd']['units'][0]['contents']
                 self.assertIn(' start --certs-dir', unit)
                 self.assertIn('--join=', unit)
                 self.assertNotIn('--insecure', unit)
+                data['api_tailnet_hostname'] = 'k8s-api.example.ts.net'
+                generate.ignition(data)
+                for node in data['nodes']:
+                    api_doc = json.loads((root / 'output' / f'{node["name"]}.ign').read_text())
+                    api_files = {f['path']: f for f in api_doc['storage']['files']}
+                    api_conf = base64.b64decode(api_files['/etc/rancher/k3s/config.yaml']['contents']['source'].split(',')[1]).decode()
+                    self.assertIn(f'  - "{node["ip"]}"\n  - "k8s-api.example.ts.net"\n', api_conf)
+                    self.assertNotIn('disable-kube-proxy', api_conf)
+                    api_unit = next(u for u in api_doc['systemd']['units'] if u['name'] == 'tailscale-api.service')
+                    self.assertTrue(api_unit['enabled'])
+                    self.assertIn('--service=svc:k8s-api --tcp=443 tcp://127.0.0.1:6443', api_unit['contents'])
+                    self.assertNotIn('PartOf=', api_unit['contents'])
+                    self.assertNotIn('tailscale down', api_unit['contents'])
                 data.update(single_node_lab=True, nodes=data['nodes'][:1])
                 generate.ignition(data)
                 unit = json.loads((root / 'output/kube1.ign').read_text())['systemd']['units'][0]['contents']
@@ -67,6 +92,7 @@ class GeneratorTests(unittest.TestCase):
                 self.assertNotIn('/etc/cockroach/certs/node.key', files)
                 self.assertIn('/etc/cockroach/certs/client.kine.key', files)
                 self.assertNotIn('cockroachdb.service', json.dumps(doc['systemd']))
+                self.assertTrue(any(u['name'] == 'tailscale-api.service' for u in doc['systemd']['units']))
                 decode = lambda path: base64.b64decode(files[path]['contents']['source'].split(',')[1]).decode()
                 self.assertIn('postgres://kine@192.168.100.11:26257/', decode('/etc/rancher/k3s/config.yaml'))
                 self.assertIn('Address=192.168.100.12/24', decode('/etc/systemd/network/10-lab-cluster.network'))

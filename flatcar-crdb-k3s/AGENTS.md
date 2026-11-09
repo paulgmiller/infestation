@@ -14,8 +14,13 @@ specific behavior.
 - K3s runs as a control-plane server on each machine; all three use the same
   logical CockroachDB datastore via Kine, with local SQL endpoints initially.
 - No embedded etcd, SQLite, or Flannel. kube-proxy stays enabled initially.
-- Cilium will be installed after Kubernetes bootstrap; do not substitute a
-  different CNI. Leave Tailscale out of scope for now.
+- The approved networking transition is recorded in NETWORKING-PLAN.md. Cilium
+  is being retired; evaluate K3s's Tailscale/Flannel extension integration before
+  writing custom PodCIDR glue. The generator still leaves Flannel disabled until
+  that integration is implemented and verified.
+- Private API access uses one host-level Tailscale Service/TailVIP advertised by
+  API servers only, forwarding raw TCP to localhost:6443, never to a ClusterIP.
+  Workers must not advertise it. Keep host networking independent of Kubernetes.
 - Flatcar provisioning is declarative and repeatable via generated Ignition
   configurations. Keep host networking independent of Kubernetes.
 
@@ -34,10 +39,10 @@ specific behavior.
    checks requiring Flatcar VMs.
 5. Document a repeatable disposable-VM smoke test that starts three nodes,
    initializes CockroachDB once, starts all K3s servers, then checks cluster
-   readiness after a later Cilium install. Never claim it passed unless run.
-6. Preserve the small/simple architecture. Do not add HAProxy, load balancers,
-   Tailscale, cloud networking, or auto-reboot management yet; record these
-   as future enhancements instead.
+   readiness after replacement networking is installed. Never claim it passed unless run.
+6. Preserve the small/simple architecture. Implement the networking checkpoint
+   in stages; distinguish saved plans, generated configuration, and live verified
+   deployment. Do not add unrelated HAProxy or auto-reboot management.
 
 ## Safety and working conventions
 - Treat this repository as a prototype; **no machine provisioning, disk

@@ -10,6 +10,10 @@ then migrates the existing store into a three-node replicated cluster.
 
 ## Resulting layout
 
+The networking transition and private API TailVIP design are recorded in
+[NETWORKING-PLAN.md](NETWORKING-PLAN.md). Replacement pod networking is not yet
+implemented; historical Cilium validation does not validate that design.
+
 On each node:
 
 - Flatcar Linux, using existing host networking (e.g., DHCP reservations).
@@ -27,6 +31,51 @@ On each node:
 3. The Flatcar machines have network connectivity and unique stable IPv4 addresses. Configure DHCP reservations or host networking independently; the `node-ip` setting **does not configure host IP addresses**.
 4. Allow node-to-node communication: TCP 26257 (CockroachDB), TCP 6443/9345 as needed (K3s), TCP 10250 (kubelet), plus the Cilium-specific traffic when you install it. Firewall the services to trusted networks.
 5. Configure a real SSH public key in `cluster.json`.
+
+## Optional private API TailVIP
+
+The generator supports an opt-in top-level `api_tailnet_hostname` setting in
+`cluster.json`, for example `"api_tailnet_hostname": "k8s-api.example.ts.net"`.
+Replace `example.ts.net` with the real tailnet suffix. Omit the field (or set it
+to null) to leave API TailVIP provisioning disabled.
+
+When enabled, each generated K3s **server** gets the shared hostname in its
+`tls-san` list and an enabled host-level `tailscale-api.service` that runs:
+
+```sh
+/usr/bin/tailscale serve --service=svc:k8s-api --tcp=443 tcp://127.0.0.1:6443
+```
+
+All nodes in this generator run `k3s server`; `cockroachdb: false` only removes
+the local database, not the API server. Future worker-only profiles must not
+advertise this Service.
+
+**Prerequisites are external to this generator:** install the Tailscale binary
+at `/usr/bin/tailscale` and its `tailscaled.service`, enroll each server using a
+tag-based identity, and define `svc:k8s-api` with endpoint `tcp:443` in the tailnet.
+Approve each host advertisement (or configure scoped auto-approval) and grant
+administrative clients access to the Service on TCP 443. The unit retries failed
+configuration every 15 seconds; it does not install Tailscale, enroll hosts, or
+create the tailnet Service/policy. Do not enable the option without those steps.
+
+After verifying the shared certificate SAN on every server, clients on the
+tailnet can use `https://k8s-api.<tailnet>.ts.net:443` in kubeconfig with the
+existing Kubernetes CA and client credentials. Serve forwards raw TCP, preserving
+Kubernetes TLS and authentication. It targets the local API, not a ClusterIP.
+Keep direct server endpoints for bootstrap and recovery.
+
+Serve configuration persists in Tailscale state and is not withdrawn when K3s or
+the oneshot unit stops. This avoids tying host networking to Kubernetes lifecycle,
+but means a live Tailscale host with a failed local API may still receive traffic.
+There is no readiness-aware withdrawal yet. Removing the option affects future
+Ignition only; retiring an existing host advertisement requires an explicit
+`tailscale serve drain svc:k8s-api` (then clearing its configuration after draining).
+Default routing provides active/passive failover, not per-request balancing.
+
+No live API TailVIP has been provisioned or tested by these changes.
+See [Tailscale Services](https://tailscale.com/docs/features/tailscale-services),
+[TCP forwarding](https://tailscale.com/docs/reference/tailscale-cli/serve#use-a-tcp-forwarder),
+and [route selection](https://tailscale.com/docs/features/route-selection).
 
 ## Generate profiles
 
