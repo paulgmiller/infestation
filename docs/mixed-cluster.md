@@ -3,7 +3,8 @@
 The 2026-11-10 test reached three Ready K3s servers and three healthy CockroachDB
 members: two independent local QEMU/SLIRP VMs and one Azure VM. Application
 communication uses Tailscale; no connected underlay between the sites is needed.
-The cluster is currently running for inspection. This was a repaired prototype
+Teardown was requested after collecting evidence; see the teardown checkpoint
+below for its verified state. This was a repaired prototype
 run, not a verified unattended fresh deployment or failure-recovery test.
 
 ## Access the running test
@@ -70,7 +71,11 @@ into Azure default outbound access; it uses Azure-provided egress NAT and is not
 an isolated network without internet. The NSG denies unsolicited inbound traffic,
 including VNet traffic. A successful direct Tailscale path uses NAT traversal and
 stateful return traffic, not an inbound API/SSH listener on a public address.
-This outbound mechanism is an explicit prototype assumption to review.
+This outbound mechanism is an explicit prototype shortcut to replace. See the
+[prioritized egress TODO](networking-todo.md#before-calling-deployment-unattended)
+and [Azure retirement scope](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/default-outbound-access).
+New-subnet defaults changed; existing default outbound access is not subject to
+a blanket shutdown. No load balancer was used in this test.
 
 Azure requires an OS login credential in this VM creation API. The CLI generates
 an RSA public key, supplies it in the OS profile, and never serializes the private
@@ -147,6 +152,9 @@ availability guarantees. Ten-sample nearest-rank p95 equals the maximum.
 
 ## Stop here for the simplification and resilience review
 
+The consolidated [review TODO list](networking-todo.md) tracks the work below,
+including explicit Azure egress.
+
 The node-0 initialization marker is on its persistent disk, not Blob Storage or
 a distributed guard. No initializer replacement, multi-disk-loss recovery or
 quorum-loss/reinitialization scenario was tested. Preserve that state. Removing
@@ -170,3 +178,14 @@ bin/infestation vm cluster stop --name mix-1110 --state-dir state/vms
 
 This stops both local VMs and deallocates Azure compute. The Azure resource group
 and managed disk remain until explicitly removed.
+
+
+## Teardown checkpoint
+
+At the owner's request, both local QEMU VMs were gracefully shut down and their
+processes verified absent. Azure resource group `mix-1110-rg` was deleted;
+`az group exists` returned false after its resource list became empty. The Azure
+VM, managed OS disk, NIC, VNet/subnet and NSG have been removed. Local disks,
+PKI, kubeconfigs and raw latency/verification reports remain private for reference.
+Tailnet device/Service registration cleanup is a separate TODO; do not resume
+old local nodes into the reused Service without reviewing those advertisements.

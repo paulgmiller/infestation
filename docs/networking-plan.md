@@ -577,3 +577,15 @@ Cockroach container DNS to Quad100 in Tailscale profiles. This is a repaired
 prototype, not a clean unattended bootstrap or recovery proof. The former lab
 remains stopped. See [the full runbook and findings](mixed-cluster.md) before
 reusing either cluster. Stop feature expansion here for the requested review.
+
+
+The consolidated follow-up list is [networking-todo.md](networking-todo.md),
+including replacement of the prototype Azure default outbound access with an
+explicit egress design. Do not interpret the mixed-test success as selecting
+default outbound access for future deployments.
+
+
+Teardown completed after the mixed test: both local QEMU processes stopped and
+Azure group `mix-1110-rg` no longer exists. The Azure managed disk was deleted
+with the group; local disks, credentials and test evidence remain preserved.
+See the consolidated TODO list for explicit egress and resilience follow-up.
