@@ -35,7 +35,7 @@ func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *list) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop, validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/start/wait/status/stop, validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
 		return nil
 	}
 	command := args[0]
@@ -43,6 +43,14 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	if command == "azure" || command == "vm" {
 		if len(args) == 0 {
 			return fmt.Errorf("expected a %s subcommand; run --help", command)
+		}
+		command += " " + args[0]
+		args = args[1:]
+	}
+	if command == "vm cluster" {
+		if len(args) == 0 || args[0] == "--help" {
+			fmt.Fprintln(out, "Usage: infestation vm cluster create|start|wait|status|stop --name NAME\nRun a subcommand with --help for its flags.")
+			return nil
 		}
 		command += " " + args[0]
 		args = args[1:]
@@ -55,7 +63,53 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		flags.StringVar(&state, "state-dir", state, "private local state directory")
 	}
 	switch command {
-	case "vm create", "vm start", "vm status", "vm stop":
+	case "vm artifact-server":
+		flags.StringVar(&state, "state-dir", "", "owned private cluster state")
+		if err := parse(flags, args); err != nil {
+			return help(err)
+		}
+		if state == "" {
+			return fmt.Errorf("--state-dir is required")
+		}
+		return vm.ServeArtifacts(ctx, state)
+	case "vm cluster create", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop":
+		o := vm.ClusterOptions{}
+		flags.StringVar(&o.Name, "name", "", "cluster name (required; creates NAME-0/1/2)")
+		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
+		if command == "vm cluster create" {
+			flags.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS suffix, such as example.ts.net")
+			flags.StringVar(&o.NodeHelper, "node-helper", "bin/infestation-node", "static Linux node helper to embed")
+			flags.StringVar(&o.AuthKey, "tailscale-auth-key", "", "tagged auth key (default: TAILSCALE_AUTH_KEY)")
+			flags.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private auth key file")
+			flags.StringVar(&o.BaseImage, "base-image", "", "trusted Flatcar base (default: download verified image)")
+			flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow tcg")
+			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
+		}
+		if command == "vm cluster create" || command == "vm cluster start" || command == "vm cluster wait" {
+			flags.DurationVar(&o.Wait, "wait", 30*time.Minute, "readiness deadline; 0 starts in background")
+		}
+		if command == "vm cluster start" {
+			flags.StringVar(&o.Accel, "accel", "", "override stored accelerator for this start (kvm or tcg)")
+		}
+		if err := parse(flags, args); err != nil {
+			return help(err)
+		}
+		if o.Wait < 0 {
+			return fmt.Errorf("--wait must not be negative")
+		}
+		switch command {
+		case "vm cluster create":
+			return vm.CreateCluster(ctx, o, out)
+		case "vm cluster wait":
+			return vm.WaitCluster(ctx, o.Options, out)
+		case "vm cluster start":
+			return vm.ClusterAction(ctx, o.Options, "start", out)
+		case "vm cluster status":
+			return vm.ClusterAction(ctx, o.Options, "status", out)
+		default:
+			return vm.ClusterAction(ctx, o.Options, "stop", out)
+		}
+	case "vm create", "vm start", "vm status", "vm stop", "vm netcheck":
 		o := vm.Options{}
 		flags.StringVar(&o.Name, "name", "", "unique VM name (required)")
 		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
@@ -66,7 +120,11 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow software emulation with tcg")
 		}
 		if command == "vm create" || command == "vm start" {
+			flags.StringVar(&o.Network, "network", "", "network backend: slirp (default) or passt; start overrides for this run only")
 			flags.DurationVar(&o.Wait, "wait", 10*time.Minute, "wait for enrollment confirmation; 0 starts in background")
+		}
+		if command == "vm start" {
+			flags.StringVar(&o.Accel, "accel", "", "override stored accelerator for this start (kvm or tcg)")
 		}
 		if err := parse(flags, args); err != nil {
 			return help(err)
@@ -81,6 +139,8 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			return vm.Start(ctx, o, out)
 		case "vm status":
 			return vm.Status(ctx, o, out)
+		case "vm netcheck":
+			return vm.Netcheck(ctx, o, out)
 		default:
 			return vm.Stop(ctx, o, out)
 		}

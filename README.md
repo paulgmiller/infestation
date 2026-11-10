@@ -20,6 +20,21 @@ resource groups and evidence. Local QEMU VMs remain stopped with storage preserv
 
 ## Build and test
 
+For a single Tailscale VM, see [Create a VM on a friend's tailnet](docs/friend-vm.md).
+The [three-node cluster runbook](docs/isolated-vm-cluster.md) creates independent
+NAT VMs running CockroachDB and K3s over Tailscale. The 2026-11-09 test verified
+three Ready nodes, three healthy database members and all six directed
+DNS/Service checks after approving the pod routes.
+With the binary and QEMU installed, the enrollment command is:
+
+```sh
+# Supply a tagged auth key through TAILSCALE_AUTH_KEY first.
+infestation vm create --name alice-node
+```
+
+The single-VM command creates an enrollment-only Flatcar VM. `vm cluster create`
+creates the three-node cluster; Azure retains its existing networking.
+
 Requires Go **1.26.6 or newer**:
 
 ```sh

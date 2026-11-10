@@ -1,7 +1,8 @@
 # Egress-only K3s networking checkpoint
 
-Last updated: 2026-11-09. This records the agreed design and investigation;
-replacement networking and the API TailVIP have **not been deployed or verified**.
+Last updated: 2026-11-09 (local date). The isolated three-VM Tailscale cluster is
+now **deployed and verified** as described below. Azure migration and the API
+TailVIP remain unverified.
 
 After merging origin/master's Go migration, `internal/cluster` accepts optional
 `api_tailnet_hostname`. `internal/ignition` adds the shared SAN and a host-level
@@ -9,10 +10,10 @@ Serve unit on server profiles only, including API pools. Worker profiles never
 advertise the API. This does not install/enroll Tailscale or define/approve a
 Service in its control plane.
 
-Current provider profiles still use Cilium, disable kube-proxy, and retain Azure
-load-balancer networking. The architecture below is the **target**, not the
-current deployed configuration. Removing Cilium and changing provider defaults
-remain separate implementation work. The original Python scaffold is retired;
+Existing Azure/libvirt provider defaults still use Cilium and disable
+kube-proxy; Azure retains its load-balancer networking. The new direct-VM
+cluster command uses native K3s Tailscale/Flannel, kube-proxy and CoreDNS without
+Cilium. Azure migration remains separate. The original Python scaffold is retired;
 its existing local state is preserved and ignored.
 
 ## VM enrollment secret handling
@@ -36,8 +37,193 @@ Unit tests cover enrollment, identity mismatch, durable identity reuse and
 render-only argument handling. After merging origin/master's `azurecheck` and
 public smoke checks, the CLI builds and `go test ./...` passes. CLI tests exercise
 both auth flags through private Ignition generation with disposable test keys.
-No new VM has been booted/enrolled; these checks do not establish live tailnet or
-cross-node pod connectivity.
+The VM tests below establish enrollment and peer connectivity, but do not
+establish Kubernetes cross-node pod connectivity.
+
+### 2026-11-09 VM boot check
+
+Added `infestation vm create/start/status/stop`; see the
+[friend setup guide](friend-vm.md). Creation supports an auth-key argument,
+`TAILSCALE_AUTH_KEY`, or a private key file, downloads a SHA512-verified Flatcar
+image by default, and uses a separate QEMU user-mode NAT per VM with no inbound
+port forwarding. It does not configure Kubernetes or CockroachDB yet.
+
+Booted a new disposable `enroll-smoke-1109` VM using TCG (the initial sandbox
+device check missed the host's available KVM device),
+the previously cached Flatcar 4757.2.2 base and an intentionally invalid auth key.
+The cached archive matches its recorded vendor SHA512 digest. Ignition fetched
+the Tailscale v1.104.2 sysext; the guest reported
+`1.104.2-tc3430f0d2-g598b63867`, kernel TUN mode, and `NeedsLogin` over a private
+virtio status channel. The CLI correctly refused to label this enrolled.
+Graceful QMP shutdown completed and restart reused the existing overlay.
+Existing lab disks were preserved.
+
+With a supplied auth key, the opt-in `TestLiveEnrollmentAndRestart` then passed
+in **201.123 seconds** under TCG. A fresh VM reported a running, tagged identity
+in kernel TUN mode. After graceful shutdown and restart, the test verified the
+same stable node ID, DNS name, tailnet IPs and VM disk. The host's Tailscale client
+also saw the new peer. The test requested shutdown and retained private artifacts
+under `/tmp/inf-vm-*`; no existing lab VM was changed. Normal tests skip this
+provisioning test. A tailnet API management key is not required.
+
+A further CLI start succeeded without an auth key. From the host, three
+`tailscale ping` discovery probes received replies through Seattle DERP in
+**17 ms, 10 ms, and 10 ms**. A direct path was not established; the default ping
+command exited nonzero because its direct-path criterion was not satisfied.
+These are peer discovery timings, not pod-to-pod or application latency tests.
+Graceful shutdown was requested after the probes.
+
+Host `tailscale netcheck` reported UDP available, endpoint-independent mapping
+(`MappingVariesByDestIP: false`), IPv4 available and IPv6 unavailable. This does
+not characterize the guest's additional SLIRP layer or prove why this host/guest
+pair used DERP. The initial three-ping sample was too short to conclude that
+SLIRP prevented a direct connection: the subsequent comparison below reached a
+direct path. A private TAP/kernel-NAT network is another option at the cost of
+privileged host setup.
+
+Those initial checks covered standalone enrollment. The later three-VM cluster
+test below verifies Cockroach and K3s cross-node connectivity.
+
+### 2026-11-09 isolated three-VM cluster: verified
+
+Created `tail3-1109-0`, `tail3-1109-1` and `tail3-1109-2`, each with its own
+QEMU SLIRP backend and one NIC. There is no shared bridge, TAP, hub, socket
+network or host port forward. Every VM has the same private underlay address
+`10.0.2.15` inside its separate NAT, and a distinct Tailscale address. Node
+diagnostics confirmed peer names resolve to tailnet IPs and peer routes use
+`tailscale0`. The three VMs are left running; original lab storage was preserved.
+
+| Node | Tailnet node IP | Assigned PodCIDR |
+| --- | --- | --- |
+| tail3-1109-0 | 100.82.228.1 | 10.42.0.0/24 |
+| tail3-1109-1 | 100.122.250.100 | 10.42.1.0/24 |
+| tail3-1109-2 | 100.65.35.80 | 10.42.2.0/24 |
+
+Actual verification after the user approved the three pod routes:
+
+- Three K3s **v1.35.8+k3s1** control-plane nodes Ready, each private API
+  `/readyz` successful through Tailscale.
+- Host CockroachDB **v26.2.7**: three live/available members advertising tailnet
+  DNS endpoints, 95 ranges, **zero unavailable or under-replicated ranges**.
+  A local client container used workstation admin credentials read-only; no
+  long-lived admin key or CA signing key was delivered to a VM.
+- Native Flannel backend annotations report **extension**. CoreDNS, local-path
+  provisioner and metrics-server are running. No Cilium chart/agent is installed;
+  kube-proxy is enabled.
+- All **six directed DNS/ClusterIP HTTP smoke checks passed**, matching the
+  expected remote node's HTTP response. The successful run ID is
+  `6fab8ea6-8a60-41ff-b0a5-60dc7ed4dbc1` (generated manifests are in private state).
+  The earlier attempt before route approval failed; fresh jobs were used for
+  the successful rerun.
+- `go test ./...` passed; source/build checks do not themselves provision VMs.
+
+Private cluster state is `state/vms/tail3-1109`; its `kubeconfig` is mode `0600`.
+See [the create/resume runbook](isolated-vm-cluster.md) for commands. Node Ready
+alone is not a successful pod-network check: route approval and policy must
+permit pod traffic as the smoke test established here.
+
+Boot fixes made during this experiment: the initial device check ran inside
+the tool sandbox and missed accessible host KVM. The first attempts used TCG;
+the successful cluster runs with KVM, two vCPUs and 3072 MiB per VM. The original
+14 MB firmware-fed Ignition documents also stalled in `ignition-fetch-offline`.
+Moving only the 10 MB non-secret helper to a loopback HTTP server with a pinned
+SHA512 reduced the profiles to 20–25 KB and cleared that wait. PKI, token and
+the existing overlays were preserved. The temporary artifact server stopped
+after API readiness; credentials/profiles were never served by it.
+
+For future automatic pod-route approval, merge this **proposed policy fragment**
+into the existing tailnet policy once (the auth key uses `tag:roach`):
+
+```json
+"autoApprovers": {
+  "routes": {
+    "10.42.0.0/16": ["tag:roach"]
+  }
+}
+```
+
+Tailscale's [auto-approver rules](https://tailscale.com/docs/reference/syntax/policy-file#auto-approvers)
+permit contained subnets, covering each future node's `/24`. K3s assigns those
+subnets; the tailnet access rules separately govern their traffic. New rules
+apply to new advertisements; existing pending routes must be re-advertised or
+approved manually. The current routes were approved manually; automatic approval
+of a future node has not been exercised. Separate clusters need disjoint pod
+address blocks.
+
+Remaining work includes NetworkPolicy enforcement, public ingress, API TailVIP
+provisioning, failure/recovery drills, and Azure migration. This one-host test
+establishes isolated-underlay connectivity, not WAN performance or production
+reliability across sites.
+
+### 2026-11-09 passt versus SLIRP comparison
+
+Tested QEMU **10.2.1**, Flatcar **4757.2.2**, Tailscale **v1.104.2** and passt
+**0.0~git20260120.386b5f5-1**, using TCG. The same VM disk and enrolled identity
+were started first with `--network slirp`, then `--network passt`. No inbound
+port forwards were configured; passt explicitly used
+`tcp-ports=none,udp-ports=none`. QEMU's monitor confirmed the active passt helper.
+
+New profiles run the actual guest `tailscale netcheck --format=json` after
+enrollment and every five minutes. `infestation vm netcheck --name NAME`
+displays the latest complete guest report through a private virtio channel,
+without SSH. These were guest results, not the host's netcheck output.
+
+| Check | SLIRP | passt |
+| --- | --- | --- |
+| Implementation | libslirp inside QEMU | Separate helper using native host sockets |
+| Extra host prerequisite | None beyond QEMU | Installed passt package; namespace sandbox allowed |
+| Guest UDP / IPv4 | Both available | Both available |
+| Usable public IPv6 | Unavailable | Unavailable |
+| `MappingVariesByDestIP` | `false` | `false` |
+| Guest UPnP / NAT-PMP / PCP | All undetected | All undetected |
+| WireGuard-level TSMP probe | Succeeded, initial probe 49 ms | Succeeded, initial probe 45 ms |
+| Discovery route to VM | Direct, observed 1 ms | Seattle DERP after 10 + 20 probes |
+
+SLIRP's guest report was timestamped `2026-11-09T22:56:23Z`; passt's was
+`2026-11-09T23:00:57Z`. Passt discovery replies were typically 9–13 ms, with
+outliers up to 78 ms. Its discovery commands exited nonzero solely because no
+direct path was established. The private passt report was retained at
+`state/vms/passt-check-1109/netcheck-passt.json`. Graceful shutdown was requested
+after testing; existing lab VMs and disks were untouched.
+
+No SLIRP networking option was changed to obtain the direct result: it remained
+`-netdev user,id=egress` without host forwarding. The comparison used a fresh VM
+session, waited for enrollment/guest netcheck, sent a TSMP probe first, and then
+allowed up to ten discovery probes rather than the earlier three. Additional
+time and traffic may have helped Tailscale discover a direct endpoint; that is
+an inference, not an isolated causal result. The earlier short sample did not
+justify blaming SLIRP for relaying.
+
+**Decision: keep SLIRP as the default; retain passt as an opt-in backend.**
+Passt did not improve direct connectivity in this run. These observations are
+for one local host/VM pair, not different friends' networks, a throughput
+benchmark, or proof of the cause of passt's relaying. Initial TSMP timings are
+not steady-state latency comparisons. The upstream
+[QEMU networking docs](https://www.qemu.org/docs/master/system/devices/net.html)
+describe passt's performance and IPv6 advantages; neither was demonstrated here.
+
+The locally unpacked passt binary initially failed before VM boot with
+`Failed to detach isolating namespaces: Operation not permitted`. Installing
+Ubuntu's package, including its AppArmor profile, let the same backend launch.
+Use the packaged helper rather than recommending a global relaxation of host
+namespace restrictions. The QEMU build must list `passt` in `-netdev help`.
+
+#### MiniUPnP as a possible optimization
+
+[MiniUPnP](https://github.com/miniupnp/miniupnp) supplies an IGD client
+(`miniupnpc`) and a gateway daemon (`miniupnpd`). Tailscale already attempts
+automatic port mapping where supported; see its
+[NAT traversal explanation](https://tailscale.com/blog/nat-traversal-improvements-pt-1).
+The host detected UPnP, NAT-PMP and PCP, while neither guest detected them.
+
+A host-side MiniUPnP client could be an optional explicit mapping mechanism,
+but would need to coordinate an upstream router mapping with the VM backend's
+UDP endpoint/forwarding. Simply installing it in the guest would not guarantee
+both layers are mapped. Running miniupnpd would add a gateway service and
+backend integration. No MiniUPnP mappings or daemons were configured in this
+experiment. Do not make them a requirement for the egress-only design; retain
+Tailscale's relay fallback. SLIRP already obtained a direct path without a
+guest-visible port-mapping service.
 
 ## Goal and component ownership
 

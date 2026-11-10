@@ -24,7 +24,9 @@ func main() {
 	}
 	config, err := nodebootstrap.Load("/etc/infestation/bootstrap.json")
 	if err == nil {
-		if len(os.Args) > 1 && os.Args[1] == "prepare" {
+		if len(os.Args) > 1 && os.Args[1] == "diagnose" {
+			err = nodebootstrap.Diagnose(ctx, config)
+		} else if len(os.Args) > 1 && os.Args[1] == "prepare" {
 			err = nodebootstrap.PrepareAzure(ctx, config, "/")
 		} else if len(os.Args) > 1 && os.Args[1] == "join" {
 			err = nodebootstrap.JoinAzure(ctx, config, "/")

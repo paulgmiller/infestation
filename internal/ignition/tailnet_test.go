@@ -168,3 +168,47 @@ func TestTailnetProfilesKeepHostsIndependentAndUseNativeBackend(t *testing.T) {
 		}
 	}
 }
+
+func TestTailnetRemoteHelperIsChecksumPinnedAndKeepsIgnitionSmall(t *testing.T) {
+	c := testutil.Config()
+	c.Tailscale = &cluster.Tailscale{Version: "v1.104.2", Domain: "example.ts.net"}
+	noDB := false
+	n := cluster.Node{Name: "worker-0", IP: "192.0.2.4", Role: "worker", CockroachDB: &noDB}
+	c.Nodes = append(c.Nodes, n)
+	state := t.TempDir()
+	helper := filepath.Join(state, "helper")
+	if err := os.WriteFile(helper, []byte(strings.Repeat("large executable data", 10000)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	b := Bootstrap{LocalHelper: helper, TailscaleAuthKey: "tskey-auth-TEST", LocalHelperURL: "http://10.0.2.2:12345/infestation-node", LocalHelperSHA512: strings.Repeat("a", 128)}
+	doc, err := Render(c, n, state, "test-token", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, report, err := config.Parse(raw); err != nil {
+		t.Fatal(err, report)
+	}
+	if len(raw) > 50000 {
+		t.Fatal("large helper still embedded in firmware profile")
+	}
+	found := false
+	for _, f := range doc.Storage.Files {
+		if f.Path == "/opt/infestation/infestation-node" {
+			found = true
+			if f.Contents.Source == nil || *f.Contents.Source != b.LocalHelperURL || f.Contents.Verification.Hash == nil || *f.Contents.Verification.Hash != "sha512-"+b.LocalHelperSHA512 {
+				t.Fatal("helper is not integrity pinned")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("helper missing")
+	}
+	b.LocalHelperSHA512 = ""
+	if _, err := Render(c, n, state, "test-token", b); err == nil {
+		t.Fatal("unverified remote helper accepted")
+	}
+}

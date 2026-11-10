@@ -28,10 +28,15 @@ const FlatcarVersion = "4757.2.2"
 const TailscaleVersion = "v1.104.2"
 
 type Options struct {
-	Name, StateDir, AuthKey, AuthKeyFile, BaseImage, Accel string
-	Wait                                                   time.Duration
+	Name, StateDir, AuthKey, AuthKeyFile, BaseImage, Accel, Network string
+	Wait                                                            time.Duration
+	profile                                                         []byte // private rendered cluster profile; never persisted in metadata
+	MemoryMiB                                                       int
 }
-type machine struct{ Name, BaseImage, Accel string }
+type machine struct {
+	Name, BaseImage, Accel, Network string
+	MemoryMiB                       int `json:"memoryMiB,omitempty"`
+}
 
 func DefaultStateDir() string {
 	base := os.Getenv("XDG_DATA_HOME")
@@ -113,6 +118,7 @@ report
 rm -f /etc/infestation/tailscale-authkey
 `
 	add("/opt/infestation/enroll", script, 0700)
+	addNetcheck(&doc)
 	unit := `[Unit]
 Description=Enroll this Flatcar VM in Tailscale
 Wants=network-online.target
@@ -176,17 +182,29 @@ func Create(ctx context.Context, o Options, out io.Writer) error {
 	if err = validateHost(o.Accel); err != nil {
 		return err
 	}
-	key, err := authKey(o)
-	if err != nil {
+	if err = validateNetwork(o.Network); err != nil {
 		return err
 	}
-	// Reserve a new directory before generating secrets or disks. Never overwrite
-	// another VM's Ignition, identity, base image or overlay, including on retries.
-	if err = os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
-		return err
+	raw := o.profile
+	if len(raw) == 0 {
+		key, err := authKey(o)
+		if err != nil {
+			return err
+		}
+		raw, err = Profile(o.Name, key)
+		if err != nil {
+			return err
+		}
 	}
-	if err = os.Mkdir(dir, 0700); err != nil {
-		return fmt.Errorf("create VM state (use a new --name, or vm start for an existing VM): %w", err)
+	if o.MemoryMiB != 0 && (o.MemoryMiB < 512 || o.MemoryMiB > 32768) {
+		return fmt.Errorf("VM memory must be between 512 and 32768 MiB")
+	}
+	// Refuse existing state before downloads; reserve atomically after preflight
+	// so a transient download failure can be retried with the same command.
+	if _, err = os.Lstat(dir); err == nil {
+		return fmt.Errorf("VM state already exists; use vm start or a new --name")
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	base := o.BaseImage
 	if base == "" {
@@ -214,9 +232,11 @@ func Create(ctx context.Context, o Options, out io.Writer) error {
 	if json.Unmarshal([]byte(result.Stdout), &info) != nil || info.Format != "qcow2" || info.Backing != "" {
 		return fmt.Errorf("base image must be a standalone qcow2")
 	}
-	raw, err := Profile(o.Name, key)
-	if err != nil {
+	if err = os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
 		return err
+	}
+	if err = os.Mkdir(dir, 0700); err != nil {
+		return fmt.Errorf("reserve new VM state: %w", err)
 	}
 	if err = fsutil.CreatePrivateFile(filepath.Join(dir, "config.ign"), raw); err != nil {
 		return err
@@ -229,7 +249,7 @@ func Create(ctx context.Context, o Options, out io.Writer) error {
 	if err = os.Chmod(disk, 0600); err != nil {
 		return err
 	}
-	if err = fsutil.WriteJSON(filepath.Join(dir, "machine.json"), machine{o.Name, base, o.Accel}); err != nil {
+	if err = fsutil.WriteJSON(filepath.Join(dir, "machine.json"), machine{Name: o.Name, BaseImage: base, Accel: o.Accel, Network: o.Network, MemoryMiB: o.MemoryMiB}); err != nil {
 		return err
 	}
 	return Start(ctx, o, out)
@@ -240,7 +260,27 @@ func arguments(dir string, m machine) []string {
 	if m.Accel == "tcg" {
 		cpu = "max"
 	}
-	return []string{"-name", m.Name, "-machine", "q35,accel=" + m.Accel, "-cpu", cpu, "-smp", "2", "-m", "1024", "-display", "none", "-daemonize", "-pidfile", filepath.Join(dir, "qemu.pid"), "-qmp", "unix:" + filepath.Join(dir, "qmp.sock") + ",server=on,wait=off", "-serial", "file:" + filepath.Join(dir, "console.log"), "-drive", "file=" + filepath.Join(dir, "disk.qcow2") + ",format=qcow2,if=virtio", "-fw_cfg", "name=opt/org.flatcar-linux/config,file=" + filepath.Join(dir, "config.ign"), "-netdev", "user,id=egress", "-device", "virtio-net-pci,netdev=egress", "-device", "virtio-serial-pci", "-chardev", "file,id=enrollment,path=" + filepath.Join(dir, "enrollment.json"), "-device", "virtserialport,chardev=enrollment,name=org.infestation.enrollment"}
+	netdev := "user,id=egress"
+	if m.Network == "passt" {
+		netdev = "passt,id=egress,tcp-ports=none,udp-ports=none"
+	}
+	memory := m.MemoryMiB
+	if memory == 0 {
+		memory = 1024
+	}
+	return []string{
+		"-name", m.Name, "-machine", "q35,accel=" + m.Accel, "-cpu", cpu, "-smp", "2", "-m", fmt.Sprint(memory),
+		"-display", "none", "-daemonize", "-pidfile", filepath.Join(dir, "qemu.pid"),
+		"-qmp", "unix:" + filepath.Join(dir, "qmp.sock") + ",server=on,wait=off",
+		"-serial", "file:" + filepath.Join(dir, "console.log"),
+		"-drive", "file=" + filepath.Join(dir, "disk.qcow2") + ",format=qcow2,if=virtio",
+		"-fw_cfg", "name=opt/org.flatcar-linux/config,file=" + filepath.Join(dir, "config.ign"),
+		"-netdev", netdev, "-device", "virtio-net-pci,netdev=egress", "-device", "virtio-serial-pci",
+		"-chardev", "file,id=enrollment,path=" + filepath.Join(dir, "enrollment.json"), "-device", "virtserialport,chardev=enrollment,name=org.infestation.enrollment",
+		"-chardev", "file,id=netcheck,path=" + filepath.Join(dir, "netcheck.json"), "-device", "virtserialport,chardev=netcheck,name=org.infestation.netcheck",
+		"-chardev", "file,id=access,path=" + filepath.Join(dir, "access.json"), "-device", "virtserialport,chardev=access,name=org.infestation.access",
+		"-chardev", "file,id=diagnostics,path=" + filepath.Join(dir, "diagnostics.json"), "-device", "virtserialport,chardev=diagnostics,name=org.infestation.diagnostics",
+	}
 }
 
 func load(o Options) (string, machine, error) {
@@ -267,14 +307,23 @@ func Start(ctx context.Context, o Options, out io.Writer) error {
 	}
 	lock.Close()
 	defer os.Remove(filepath.Join(dir, "start.lock"))
+	if o.Accel != "" {
+		m.Accel = o.Accel
+	}
 	if err = validateHost(m.Accel); err != nil {
+		return err
+	}
+	if o.Network != "" {
+		m.Network = o.Network
+	}
+	if err = validateNetwork(m.Network); err != nil {
 		return err
 	}
 	// QMP socket ownership/liveness is authoritative; never kill a bare PID.
 	if _, err = os.Lstat(filepath.Join(dir, "qmp.sock")); err == nil {
 		return fmt.Errorf("VM QMP socket exists; use vm status/stop before starting again")
 	}
-	for _, name := range []string{"console.log", "enrollment.json"} {
+	for _, name := range []string{"console.log", "enrollment.json", "netcheck.json", "access.json", "diagnostics.json"} {
 		f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 		if err != nil {
 			return err
@@ -294,14 +343,19 @@ func Start(ctx context.Context, o Options, out io.Writer) error {
 	defer cancel()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	lastState := "waiting for guest report"
 	for {
-		if s, err := enrollment(dir, m.Name); err == nil {
+		s, err := enrollment(dir, m.Name)
+		if s.BackendState != "" {
+			lastState = s.BackendState
+		}
+		if err == nil {
 			fmt.Fprintf(out, "Enrolled: %s %s\n", strings.TrimSuffix(s.Self.DNSName, "."), strings.Join(s.TailscaleIPs, ", "))
 			return nil
 		}
 		select {
 		case <-deadline.Done():
-			return fmt.Errorf("enrollment not confirmed: %w; VM remains running; use vm status --name %s and inspect private console.log", deadline.Err(), o.Name)
+			return fmt.Errorf("enrollment not confirmed (%s): %w; VM remains running; use vm status --name %s and inspect private console.log", lastState, deadline.Err(), o.Name)
 		case <-ticker.C:
 		}
 	}
@@ -327,7 +381,7 @@ func enrollment(dir, name string) (tailnet.Status, error) {
 	if !found {
 		return s, fmt.Errorf("guest has not reported Tailscale status yet")
 	}
-	if s.BackendState != "Running" || s.Self.HostName != name || len(s.Self.Tags) == 0 || len(s.TailscaleIPs) == 0 {
+	if s.BackendState != "Running" || !s.TUN || s.Self.HostName != name || s.Self.DNSName == "" || len(s.Self.Tags) == 0 || len(s.TailscaleIPs) == 0 {
 		return s, fmt.Errorf("VM has not reported the expected running, tagged Tailscale identity")
 	}
 	return s, nil
@@ -385,6 +439,9 @@ func Status(ctx context.Context, o Options, out io.Writer) error {
 	s, err := enrollment(dir, m.Name)
 	if err != nil {
 		fmt.Fprintln(out, "Enrollment not confirmed")
+		if s.BackendState != "" {
+			fmt.Fprintln(out, "Tailscale state:", s.BackendState)
+		}
 		return err
 	}
 	fmt.Fprintf(out, "Tailnet: %s %s\n", strings.TrimSuffix(s.Self.DNSName, "."), strings.Join(s.TailscaleIPs, ", "))
@@ -399,6 +456,6 @@ func Stop(ctx context.Context, o Options, out io.Writer) error {
 	if _, err = qmp(ctx, dir, "system_powerdown"); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "Graceful shutdown requested; disk and Tailscale identity are preserved.")
+	fmt.Fprintln(out, "Graceful shutdown requested; disk and any enrolled Tailscale identity are preserved.")
 	return nil
 }

@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"time"
 	"syscall"
+	"time"
 
 	"infestation/internal/blobstore"
 	"infestation/internal/bootstrap"
@@ -248,7 +248,9 @@ func (w Worker) Run(ctx context.Context) error {
 		return err
 	}
 	if w.Config.Cluster.Tailscale != nil && w.Config.Azure == nil {
-		if err := publishVMAccess(data); err != nil { return err }
+		if err := publishVMAccess(data); err != nil {
+			return err
+		}
 	}
 	// Operator access must remain available when a worker cannot register or
 	// Cilium is unhealthy. Role reconciliation gates readiness, not publication.
@@ -326,11 +328,19 @@ func Load(path string) (Config, error) {
 func publishVMAccess(data []byte) error {
 	path := "/dev/virtio-ports/org.infestation.access"
 	info, err := os.Stat(path)
-	if os.IsNotExist(err) { return nil } // Non-QEMU hosts need not expose a channel.
-	if err != nil { return err }
-	if info.Mode()&os.ModeCharDevice == 0 { return fmt.Errorf("VM access channel is not a character device") }
+	if os.IsNotExist(err) {
+		return nil
+	} // Non-QEMU hosts need not expose a channel.
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("VM access channel is not a character device")
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer f.Close()
 	_, err = f.Write(append(data, '\n'))
 	return err

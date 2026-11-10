@@ -30,7 +30,9 @@ type Config struct {
 type Status struct {
 	BackendState string
 	TailscaleIPs []string
+	TUN          bool
 	Self         struct {
+		ID                string
 		HostName, DNSName string
 		Tags              []string
 	}

@@ -92,6 +92,13 @@ func TestKeySourcesAndSanitizedErrors(t *testing.T) {
 }
 
 func TestExistingVMAndUnsafePathsAreNeverOverwritten(t *testing.T) {
+	tools := t.TempDir()
+	for _, name := range []string{"qemu-system-x86_64", "qemu-img"} {
+		if err := os.WriteFile(filepath.Join(tools, name), []byte("#!/bin/sh\nexit 77\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", tools)
 	for _, name := range []string{"../escape", "bad,name", "BadName", ""} {
 		if _, err := directory(Options{Name: name, StateDir: t.TempDir()}); err == nil {
 			t.Fatal("unsafe name", name)
@@ -106,10 +113,8 @@ func TestExistingVMAndUnsafePathsAreNeverOverwritten(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("existing state"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Host preflight may fail when QEMU isn't installed; neither outcome may
-	// mutate or truncate an existing VM disk or identity.
-	if err := Create(context.Background(), o, io.Discard); err == nil {
-		t.Fatal("existing VM accepted")
+	if err := Create(context.Background(), o, io.Discard); err == nil || !strings.Contains(err.Error(), "VM state already exists") {
+		t.Fatal("did not reject existing VM before invoking QEMU", err)
 	}
 	data, err := os.ReadFile(sentinel)
 	if err != nil || string(data) != "existing state" {
@@ -119,7 +124,7 @@ func TestExistingVMAndUnsafePathsAreNeverOverwritten(t *testing.T) {
 
 func TestEnrollmentRequiresCompleteRunningTaggedIdentity(t *testing.T) {
 	dir := t.TempDir()
-	good := tailnet.Status{BackendState: "Running", TailscaleIPs: []string{"100.100.1.2"}}
+	good := tailnet.Status{BackendState: "Running", TUN: true, TailscaleIPs: []string{"100.100.1.2"}}
 	good.Self.HostName = "friend-node"
 	good.Self.DNSName = "friend-node.example.ts.net."
 	good.Self.Tags = []string{"tag:lab"}
@@ -128,6 +133,7 @@ func TestEnrollmentRequiresCompleteRunningTaggedIdentity(t *testing.T) {
 		func(s *tailnet.Status) { s.Self.Tags = nil },
 		func(s *tailnet.Status) { s.Self.HostName = "another-node" },
 		func(s *tailnet.Status) { s.TailscaleIPs = nil },
+		func(s *tailnet.Status) { s.TUN = false },
 	} {
 		s := good
 		change(&s)
@@ -150,5 +156,17 @@ func TestEnrollmentRequiresCompleteRunningTaggedIdentity(t *testing.T) {
 	}
 	if _, err := enrollment(dir, "friend-node"); err == nil {
 		t.Fatal("partial guest report accepted")
+	}
+	// A failed attempt followed by a successful retry must use the latest
+	// complete report, even while another report is being written.
+	bad := good
+	bad.BackendState = "NeedsLogin"
+	old, _ := json.Marshal(bad)
+	combined := append(append(old, raw...), raw[:len(raw)/2]...)
+	if err := os.WriteFile(filepath.Join(dir, "enrollment.json"), combined, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enrollment(dir, "friend-node"); err != nil {
+		t.Fatal("latest complete report lost", err)
 	}
 }
