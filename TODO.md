@@ -33,6 +33,10 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Data safety and maintenance
 
+- [ ] Investigate removing redundant CockroachDB inter-node TLS when all peer
+  communication is enforced over Tailscale/WireGuard. Confirm a supported
+  configuration and its interaction with SQL client authentication; scope this
+  change to database peer traffic, preserving Kubernetes API TLS.
 - [ ] Preserve initialization intent and cluster identity across initializer
   replacement/disk loss; test partial joins, lost marker and lost quorum without
   ambiguous reinitialization or new PKI/token. [Bootstrap](docs/bootstrap.md).
