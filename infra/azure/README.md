@@ -13,3 +13,11 @@ The tested VM CLI provisions through ARM and the Azure CLI. Pulumi is the
 preferred common provider layer, and the infrastructure package has project ID
 `flatcar-k3s-azure`. Keep that ID and saved stack ownership stable during
 consolidation. See [architecture](../../docs/architecture.md) and [TODO.md](../../TODO.md).
+
+
+Azure commands take explicit `--region` and `--sku` inputs, defaulting to `westus2`
+and `Standard_B2s`. `vm cluster create --azure` enables the mixed topology with
+those defaults. The deployment/check commands use the same defaults; there is no
+separate planning command or price/quota/SKU discovery. Azure reports unsupported
+sizes or capacity failures during provisioning rather than silently choosing a
+different size.

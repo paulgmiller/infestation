@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"infestation/internal/azureplan"
+	"infestation/internal/azureconfig"
 	"infestation/internal/blobstore"
 	"infestation/internal/bootstrap"
 	"infestation/internal/cluster"
@@ -40,7 +40,7 @@ func BuildNode(ctx context.Context, repo, destination, architecture string) erro
 	return r.Err("build node-local bootstrap helper")
 }
 
-func prepareNode(ctx context.Context, repo, state, binary string, plan azureplan.Plan, c cluster.Config) (nodeAssets, error) {
+func prepareNode(ctx context.Context, repo, state, binary string, configuration azureconfig.Configuration, c cluster.Config) (nodeAssets, error) {
 	var a nodeAssets
 	if _, err := c.Initializer(); err != nil {
 		return a, err
@@ -57,21 +57,21 @@ func prepareNode(ctx context.Context, repo, state, binary string, plan azureplan
 	}
 	digest := sha256.Sum256(data)
 	hash := hex.EncodeToString(digest[:])
-	name, ok := plan.PulumiConfig["name"].(string)
+	name, ok := configuration.Parameters["name"].(string)
 	if !ok || name == "" {
-		return a, fmt.Errorf("plan is missing its resource name")
+		return a, fmt.Errorf("deployment is missing its resource name")
 	}
-	location, _ := plan.PulumiConfig["location"].(string)
+	location, _ := configuration.Parameters["location"].(string)
 	encoded, _ := json.Marshal(c)
 	identity := sha256.Sum256(append(encoded, digest[:]...))
-	account := blobstore.AccountName(plan.SubscriptionID, name+"-rg")
+	account := blobstore.AccountName(configuration.SubscriptionID, name+"-rg")
 	credential, err := pki.BootstrapCredential(state)
 	if err != nil {
 		return a, err
 	}
 	a.Profile = ignition.Bootstrap{Account: account, HelperSHA256: hash, DeploymentID: hex.EncodeToString(identity[:]), APIEndpoint: "https://" + name + "-api." + location + ".cloudapp.azure.com:6443", Credential: credential}
-	if uniform, _ := plan.PulumiConfig["uniform"].(bool); uniform {
-		zone, _ := plan.PulumiConfig["privateDNSZone"].(string)
+	if uniform, _ := configuration.Parameters["uniform"].(bool); uniform {
+		zone, _ := configuration.Parameters["privateDNSZone"].(string)
 		workerDB := true
 		workers := 0
 		for _, n := range c.Nodes {
@@ -83,7 +83,7 @@ func prepareNode(ctx context.Context, repo, state, binary string, plan azureplan
 		a.Profile.Pool = &nodebootstrap.AzurePool{Name: name, Role: "api", Zone: zone, Location: location, Subnet: "192.168.1.0/24", APICount: c.RequiredServers(), SmokeTest: c.SmokeTest, WorkerCount: workers, WorkerDatabase: workerDB}
 	}
 	a.Binary = data
-	a.Location = blobstore.Location{Account: account, Container: "bootstrap-assets", Blob: "infestation-node-" + hash, SubscriptionID: plan.SubscriptionID}
+	a.Location = blobstore.Location{Account: account, Container: "bootstrap-assets", Blob: "infestation-node-" + hash, SubscriptionID: configuration.SubscriptionID}
 	return a, nil
 }
 

@@ -4,7 +4,6 @@ package cli
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,7 +14,7 @@ import (
 	"time"
 
 	"infestation/internal/azurecheck"
-	"infestation/internal/azureplan"
+	"infestation/internal/azureconfig"
 	"infestation/internal/blobstore"
 	"infestation/internal/bootstrap"
 	"infestation/internal/cluster"
@@ -35,7 +34,7 @@ func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *list) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/start/wait/status/stop/api, validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/resume/start/wait/status/stop/api, validate, pki, ignition, image, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
 		return nil
 	}
 	command := args[0]
@@ -49,7 +48,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	if command == "vm cluster" {
 		if len(args) == 0 || args[0] == "--help" {
-			fmt.Fprintln(out, "Usage: infestation vm cluster create|start|wait|status|stop|api --name NAME\nRun a subcommand with --help for its flags.")
+			fmt.Fprintln(out, "Usage: infestation vm cluster create|resume|start|wait|status|stop|api --name NAME\nRun a subcommand with --help for its flags.")
 			return nil
 		}
 		command += " " + args[0]
@@ -74,10 +73,12 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return vm.ServeArtifacts(ctx, state)
 	case "vm cluster create", "vm cluster resume", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop", "vm cluster api":
 		o := vm.ClusterOptions{}
+		var mixedAzure bool
+		var region string
 		flags.StringVar(&o.Name, "name", "", "cluster name (required; creates NAME-0/1/2)")
 		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
 		if command == "vm cluster resume" {
-			flags.StringVar(&o.AzureVMSize, "azure-vm-size", "Standard_B2s", "Azure VM size for mixed-test retry")
+			flags.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU for mixed-test retry")
 			flags.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image")
 			flags.StringVar(&o.Accel, "accel", "kvm", "local VM accelerator")
 			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "local VM memory MiB")
@@ -86,8 +87,9 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			flags.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS suffix, such as example.ts.net")
 			flags.StringVar(&o.NodeHelper, "node-helper", "bin/infestation-node", "static Linux node helper to embed")
 			flags.StringVar(&o.HelperSourceRef, "helper-source-ref", "", "build helper on each guest from this GitHub tag or commit instead of local binary")
-			flags.StringVar(&o.AzureLocation, "azure-location", "", "place the third node in Azure instead of QEMU (mixed test)")
-			flags.StringVar(&o.AzureVMSize, "azure-vm-size", "Standard_B2s", "Azure VM size for mixed test")
+			flags.BoolVar(&mixedAzure, "azure", false, "place the third node in Azure instead of QEMU")
+			flags.StringVar(&region, "region", azureconfig.DefaultRegion, "Azure region when --azure is enabled")
+			flags.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
 			flags.StringVar(&o.HelperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "versioned multiarch golang builder image")
 			flags.StringVar(&o.AuthKey, "tailscale-auth-key", "", "tagged auth key (default: TAILSCALE_AUTH_KEY)")
 			flags.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private auth key file")
@@ -106,6 +108,20 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		}
 		if o.Wait < 0 {
 			return fmt.Errorf("--wait must not be negative")
+		}
+		if command == "vm cluster create" {
+			if mixedAzure && o.AzureLocation == "" {
+				o.AzureLocation = region
+			}
+			var regionSet bool
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name == "region" {
+					regionSet = true
+				}
+			})
+			if regionSet && o.AzureLocation == "" {
+				return fmt.Errorf("--region requires --azure")
+			}
 		}
 		switch command {
 		case "vm cluster create":
@@ -276,67 +292,34 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			fmt.Fprintln(out, "Verified base image:", path)
 		}
 		return err
-	case "azure plan":
-		o := azureplan.Options{ClusterPath: config, Location: "westus2", Constraints: azureplan.Constraints{MinVCPUs: 2, MinMemoryGiB: 8, MinUsableDiskGiB: 64, IncludeBurstable: true}}
-		flags.StringVar(&o.ClusterPath, "config", config, "cluster JSON inventory")
-		flags.StringVar(&o.Location, "location", o.Location, "Azure region")
-		flags.StringVar(&o.Name, "name", "", "resource name prefix")
-		flags.StringVar(&o.OutputDir, "output-dir", "", "new private plan directory (default state/<name>)")
-		flags.StringVar(&o.SKUsFile, "skus-file", "", "optional saved SKU inventory")
-		flags.StringVar(&o.RatesFile, "rates-file", "", "optional saved retail price inventory")
-		flags.IntVar(&o.Constraints.MinVCPUs, "min-vcpus", 2, "minimum CPUs")
-		flags.Float64Var(&o.Constraints.MinMemoryGiB, "min-memory-gib", 8, "minimum RAM GiB")
-		flags.IntVar(&o.Constraints.MinUsableDiskGiB, "min-disk-gib", 64, "minimum database filesystem GiB")
-		exclude := flags.Bool("exclude-burstable", false, "exclude B-series VMs")
-		var admin, api list
-		flags.Var(&admin, "admin-cidr", "API/admin source CIDR (repeatable; default 0.0.0.0/0)")
-		flags.Var(&api, "api-cidr", "API source CIDR override (defaults to admin ranges)")
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		o.AdminCIDRs = admin
-		o.APICIDRs = api
-		o.Constraints.IncludeBurstable = !*exclude
-		var err error
-		o, err = o.LocalDefaults()
-		if err != nil {
-			return err
-		}
-		p, err := azureplan.Create(ctx, executil.OSRunner{}, o)
-		if err == nil {
-			data, _ := json.MarshalIndent(p.Selected, "", "  ")
-			fmt.Fprintln(out, string(data))
-			fmt.Fprintln(out, "Pinned plan saved:", o.OutputDir)
-			fmt.Fprintln(out, "No cloud resources created; prices exclude disks and networking.")
-		}
-		return err
 	case "azure check":
-		o := azurecheck.Options{RepoRoot: ".", StateDir: "state", Location: "westus2", Log: out}
+		o := azurecheck.Options{RepoRoot: ".", StateDir: "state", Region: azureconfig.DefaultRegion, SKU: azureconfig.DefaultSKU, Log: out}
 		flags.StringVar(&o.RepoRoot, "repo", o.RepoRoot, "Infestation checkout root")
 		flags.StringVar(&o.StateDir, "state-dir", o.StateDir, "private parent directory for fresh check state")
-		flags.StringVar(&o.Location, "location", o.Location, "Azure region")
+		flags.StringVar(&o.Region, "region", azureconfig.DefaultRegion, "Azure region")
+		flags.StringVar(&o.SKU, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
 		flags.StringVar(&o.FlatcarVersion, "flatcar-version", azurecheck.DefaultFlatcarVersion, "pinned Flatcar image release")
 		flags.StringVar(&o.CockroachVersion, "cockroach-version", azurecheck.DefaultCockroachVersion, "pinned CockroachDB release")
 		flags.StringVar(&o.K3sVersion, "k3s-version", azurecheck.DefaultK3sVersion, "pinned K3s extension release")
-		flags.StringVar(&o.SKUsFile, "skus-file", "", "optional saved SKU inventory")
-		flags.StringVar(&o.RatesFile, "rates-file", "", "optional saved retail prices")
 		if err := parse(flags, args); err != nil {
 			return help(err)
 		}
 		return azurecheck.Run(ctx, o)
 	case "azure deploy":
 		o := deploy.Options{RepoRoot: ".", Log: out}
-		flags.StringVar(&o.RepoRoot, "repo", o.RepoRoot, "Infestation checkout root")
-		flags.StringVar(&o.PlanDir, "plan-dir", "", "pinned plan directory")
-		flags.StringVar(&o.Stack, "stack", "", "local Pulumi stack name")
-		flags.StringVar(&o.FlatcarVersion, "flatcar-version", "", "pinned image release")
-		flags.BoolVar(&o.PreviewOnly, "preview-only", false, "prepare local state and preview; do not provision")
-		flags.BoolVar(&o.Yes, "yes", false, "approve the reviewed Pulumi plan without prompting")
+		flags.StringVar(&o.RepoRoot, "repo", ".", "Infestation checkout root")
+		flags.StringVar(&o.ClusterPath, "config", config, "cluster JSON inventory")
+		flags.StringVar(&o.StateDir, "state-dir", "", "private state directory (default state/NAME)")
+		flags.StringVar(&o.Name, "name", "infestation", "Azure resource name prefix")
+		flags.StringVar(&o.Stack, "stack", "", "Pulumi stack (default NAME)")
+		flags.StringVar(&o.Region, "region", azureconfig.DefaultRegion, "Azure region")
+		flags.StringVar(&o.SKU, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
+		flags.StringVar(&o.SubscriptionID, "subscription", "", "Azure subscription (default selected account)")
+		flags.StringVar(&o.FlatcarVersion, "flatcar-version", vm.FlatcarVersion, "pinned Flatcar image release")
+		flags.BoolVar(&o.PreviewOnly, "preview-only", false, "prepare state and preview without provisioning")
+		flags.BoolVar(&o.Yes, "yes", false, "approve the reviewed Pulumi preview without prompting")
 		if err := parse(flags, args); err != nil {
 			return help(err)
-		}
-		if o.PlanDir == "" || o.Stack == "" || o.FlatcarVersion == "" {
-			return fmt.Errorf("--plan-dir, --stack and --flatcar-version are required")
 		}
 		return deploy.Azure(ctx, o)
 	case "smoke":

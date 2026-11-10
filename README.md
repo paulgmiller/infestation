@@ -51,6 +51,9 @@ bin/infestation vm cluster create --name lab --state-dir state/vms \
   --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
 ```
 
+Add `--azure` to place the third node in Azure. `--region` defaults to `westus2`
+and `--sku` defaults to `Standard_B2s`; set either directly when needed.
+
 The renderer resolves a tag before provisioning. Credentials stay outside the
 source/build container. Native arm64 execution remains unverified.
 

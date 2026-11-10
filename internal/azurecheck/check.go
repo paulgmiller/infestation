@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"infestation/internal/azureplan"
+	"infestation/internal/azureconfig"
 	"infestation/internal/cluster"
 	"infestation/internal/deploy"
 	"infestation/internal/executil"
@@ -73,20 +73,13 @@ func Run(ctx context.Context, o Options) (err error) {
 	if err := fsutil.WriteJSON(input, c); err != nil {
 		return err
 	}
-	planDir := filepath.Join(state, "plan")
-	plan, err := azureplan.Create(ctx, quiet, azureplan.Options{
-		Name: name, Location: o.Location, ClusterPath: input, OutputDir: planDir, SKUsFile: o.SKUsFile, RatesFile: o.RatesFile,
-		Constraints: azureplan.Constraints{MinVCPUs: 2, MinMemoryGiB: 8, MinUsableDiskGiB: 64, IncludeBurstable: true},
-	})
+	deploymentDir := filepath.Join(state, "deployment")
+	subscription, err := azureconfig.Subscription(ctx, quiet)
 	if err != nil {
 		return err
 	}
-	plan.PulumiConfig["checkID"] = id
-	if err := fsutil.WriteJSON(filepath.Join(planDir, "plan.json"), plan); err != nil {
-		return err
-	}
 	group := name + "-rg"
-	exists, err := groupExists(ctx, quiet, plan.SubscriptionID, group)
+	exists, err := groupExists(ctx, quiet, subscription, group)
 	if err != nil {
 		return err
 	}
@@ -95,18 +88,18 @@ func Run(ctx context.Context, o Options) (err error) {
 	}
 	return cycle(ctx, func(ctx context.Context) error {
 		fmt.Fprintln(o.Log, "Provision:", group, "(two API nodes, one worker; all three host CockroachDB)")
-		return deploy.Azure(ctx, deploy.Options{RepoRoot: o.RepoRoot, PlanDir: planDir, Stack: "check" + strings.ReplaceAll(id[:12], "-", ""), FlatcarVersion: o.FlatcarVersion, Yes: true, Log: o.Log})
+		return deploy.Azure(ctx, deploy.Options{RepoRoot: o.RepoRoot, StateDir: deploymentDir, ClusterPath: input, Name: name, Region: o.Region, SKU: o.SKU, SubscriptionID: subscription, CheckID: id, Stack: "check" + strings.ReplaceAll(id[:12], "-", ""), FlatcarVersion: o.FlatcarVersion, Yes: true, Log: o.Log})
 	}, func(ctx context.Context) error {
 		fmt.Fprintln(o.Log, "Smoke: internal DNS and cross-node ClusterIP HTTP")
-		kube := filepath.Join(planDir, "kubeconfig")
-		c, err := cluster.Load(filepath.Join(planDir, "cluster.json"))
+		kube := filepath.Join(deploymentDir, "kubeconfig")
+		c, err := cluster.Load(filepath.Join(deploymentDir, "cluster.json"))
 		if err != nil {
 			return err
 		}
-		return smoke.Run(ctx, runner, c, planDir, kube, smoke.Options{Log: o.Log})
+		return smoke.Run(ctx, runner, c, deploymentDir, kube, smoke.Options{Log: o.Log})
 	}, func(ctx context.Context) error {
 		fmt.Fprintln(o.Log, "Teardown:", group)
-		if err := cleanup(ctx, quiet, plan.SubscriptionID, group, id); err != nil {
+		if err := cleanup(ctx, quiet, subscription, group, id); err != nil {
 			return fmt.Errorf("teardown incomplete for %s: %w", group, err)
 		}
 		fmt.Fprintln(o.Log, "Teardown verified:", group, "is absent. Local state/evidence retained:", state)

@@ -2,6 +2,7 @@ package azurecheck
 
 import (
 	"fmt"
+	"infestation/internal/azureconfig"
 	"io"
 	"regexp"
 	"strings"
@@ -15,12 +16,17 @@ const (
 )
 
 type Options struct {
-	RepoRoot, StateDir, Location, SKUsFile, RatesFile string
-	FlatcarVersion, CockroachVersion, K3sVersion      string
-	Log                                               io.Writer
+	RepoRoot, StateDir, Region, SKU              string
+	FlatcarVersion, CockroachVersion, K3sVersion string
+	Log                                          io.Writer
 }
 
 func (o Options) withDefaults() (Options, error) {
+	inputs, err := (azureconfig.Inputs{Region: o.Region, SKU: o.SKU}).Defaults()
+	if err != nil {
+		return o, err
+	}
+	o.Region, o.SKU = inputs.Region, inputs.SKU
 	if o.FlatcarVersion == "" {
 		o.FlatcarVersion = DefaultFlatcarVersion
 	}

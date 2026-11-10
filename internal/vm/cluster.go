@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"infestation/internal/azureconfig"
 	"infestation/internal/bootstrap"
 	"infestation/internal/cluster"
 	"infestation/internal/executil"
@@ -45,6 +46,13 @@ func clusterConfig(o ClusterOptions) cluster.Config {
 // CreateCluster renders all credentials once, then boots three distinct QEMU
 // user NAT backends. No network, TAP, bridge, hostfwd or underlay peer IP is shared.
 func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
+	if o.AzureLocation != "" {
+		in, err := (azureconfig.Inputs{Region: o.AzureLocation, SKU: o.AzureVMSize}).Defaults()
+		if err != nil {
+			return err
+		}
+		o.AzureLocation, o.AzureVMSize = in.Region, in.SKU
+	}
 	dir, err := directory(o.Options)
 	if err != nil {
 		return err

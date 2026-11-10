@@ -107,7 +107,7 @@ func TestAzureKubeconfigNeedsOnlyAzureLoginAndDiscovery(t *testing.T) {
 	}
 }
 func TestHelpAndInvalidArguments(t *testing.T) {
-	for _, args := range [][]string{{}, {"--help"}, {"azure", "plan", "--help"}, {"azure", "kubeconfig", "--help"}, {"azure", "check", "--help"}, {"smoke", "--help"}} {
+	for _, args := range [][]string{{}, {"--help"}, {"azure", "deploy", "--help"}, {"azure", "kubeconfig", "--help"}, {"azure", "check", "--help"}, {"smoke", "--help"}} {
 		var out bytes.Buffer
 		if err := Run(context.Background(), args, &out); err != nil {
 			t.Fatal(err)
@@ -130,11 +130,35 @@ func TestAzureCheckRejectsUnpinnedImageBeforeDiscovery(t *testing.T) {
 }
 
 func TestRetiredPublicGatewayFlagsFailBeforeSideEffects(t *testing.T) {
-	for _, args := range [][]string{{"azure", "plan", "--gateway"}, {"smoke", "--public-url", "http://example.test"}} {
+	for _, args := range [][]string{{"smoke", "--public-url", "http://example.test"}} {
 		var out bytes.Buffer
 		err := Run(context.Background(), args, &out)
 		if err == nil || !strings.Contains(out.String()+err.Error(), "flag provided but not defined") {
 			t.Fatalf("retired flag accepted: %v: %v", args, err)
+		}
+	}
+}
+
+func TestAzurePlanningRemovedAndDirectFlagsAvailable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"azure", "plan"}, &out); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatal("planning command still accepted", err)
+	}
+	for _, command := range [][]string{{"azure", "deploy"}, {"azure", "check"}, {"vm", "cluster", "create"}} {
+		out.Reset()
+		if err := Run(context.Background(), append(command, "--help"), &out); err != nil {
+			t.Fatal(err)
+		}
+		text := out.String()
+		if !strings.Contains(text, "-region") || !strings.Contains(text, "westus2") || !strings.Contains(text, "-sku") || !strings.Contains(text, "Standard_B2s") {
+			t.Fatal("direct defaults missing", text)
+		}
+	}
+	for _, args := range [][]string{{"azure", "deploy", "--plan-dir", "unused"}, {"azure", "check", "--skus-file", "unused"}, {"azure", "check", "--rates-file", "unused"}} {
+		out.Reset()
+		if err := Run(context.Background(), args, &out); err == nil {
+			t.Fatal("removed planning flag accepted", args)
 		}
 	}
 }

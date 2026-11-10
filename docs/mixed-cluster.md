@@ -54,11 +54,13 @@ bin/infestation vm cluster create --name UNIQUE-NAME --state-dir state/vms \
   --tailnet-domain quoll-duck.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref 138c5676d497f665517d6fc67c1d5a0712e7a15e \
-  --azure-location westus2 --azure-vm-size Standard_B2s \
+  --azure \
   --memory-mib 3072 --wait 30m
 ```
 
-Node suffixes 0 and 1 are local; suffix 2 is Azure. Only node 0 receives the
+Node suffixes 0 and 1 are local; `--azure` places suffix 2 in Azure. Region and
+SKU default to `westus2` and `Standard_B2s`; override them directly with `--region`
+and `--sku`. No price, quota or SKU-selection step is performed. Only node 0 receives the
 one-hour SQL bootstrap credential and can initialize the database. All nodes
 build their helper from the pinned GitHub commit in the same digest-pinned,
 multiarchitecture Go container. No workstation artifact server is used.

@@ -3,7 +3,6 @@ package azurecheck
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +36,7 @@ func TestOptionalVersionDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-func TestResolvedVersionsReachPlanningInputWithoutProvisioning(t *testing.T) {
+func TestVersionsAndDirectInputsDoNotTriggerDiscovery(t *testing.T) {
 	for _, override := range []bool{false, true} {
 		t.Run(map[bool]string{false: "defaults", true: "overrides"}[override], func(t *testing.T) {
 			root := t.TempDir()
@@ -47,9 +46,9 @@ func TestResolvedVersionsReachPlanningInputWithoutProvisioning(t *testing.T) {
 			testutil.JSON(t, filepath.Join(root, "examples", "cluster.json"), testutil.Config())
 			tools := filepath.Join(root, "tools")
 			os.Mkdir(tools, 0700)
-			// Only local account discovery is faked. A missing SKU file stops planning
-			// before prices, provisioning, or teardown can run.
-			script := "#!/bin/sh\nif [ \"$1\" = account ] && [ \"$2\" = show ]; then printf '{\"id\":\"fixture\"}'; exit 0; fi\nexit 1\n"
+			// A failed account lookup stops before provisioning. No SKU, price or
+			// quota discovery command is accepted by this executable.
+			script := "#!/bin/sh\nexit 17\n"
 			if err := os.WriteFile(filepath.Join(tools, "az"), []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -60,7 +59,7 @@ func TestResolvedVersionsReachPlanningInputWithoutProvisioning(t *testing.T) {
 			}
 			t.Setenv("PATH", tools)
 			var log bytes.Buffer
-			o := Options{RepoRoot: root, StateDir: filepath.Join(root, "state"), Location: "westus2", SKUsFile: filepath.Join(root, "missing-skus.json"), Log: &log}
+			o := Options{RepoRoot: root, StateDir: filepath.Join(root, "state"), Region: "westus2", SKU: "Standard_B2s", Log: &log}
 			if override {
 				o.FlatcarVersion = "4757.2.2"
 				o.CockroachVersion = "v26.2.8"
@@ -70,8 +69,8 @@ func TestResolvedVersionsReachPlanningInputWithoutProvisioning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := Run(context.Background(), o); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("expected local SKU-file failure, got %v", err)
+			if err := Run(context.Background(), o); err == nil || !strings.Contains(err.Error(), "read Azure subscription") {
+				t.Fatalf("expected account failure before provisioning, got %v", err)
 			}
 			paths, _ := filepath.Glob(filepath.Join(o.StateDir, "infcheck-*", "cluster-input.json"))
 			if len(paths) != 1 {
@@ -91,7 +90,7 @@ func TestResolvedVersionsReachPlanningInputWithoutProvisioning(t *testing.T) {
 	}
 }
 
-func TestMissingPrerequisitesFailBeforePlanningOrState(t *testing.T) {
+func TestMissingPrerequisitesFailBeforeState(t *testing.T) {
 	for _, missing := range []string{"az", "pulumi", "go", "kubectl"} {
 		t.Run(missing, func(t *testing.T) {
 			root := t.TempDir()

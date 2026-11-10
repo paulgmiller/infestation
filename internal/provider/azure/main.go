@@ -10,6 +10,7 @@ import (
 	"github.com/pulumi/pulumi-azure-native-sdk/resources/v3"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
+	"infestation/internal/azureconfig"
 )
 
 func Run() {
@@ -26,8 +27,8 @@ func Run() {
 		}
 		s := Settings{
 			Uniform: cfg.GetBool("uniform"), PrivateDNSZone: cfg.Get("privateDNSZone"), APICount: cfg.GetInt("apiCount"), WorkerCount: cfg.GetInt("workerCount"),
-			Name: get("name", "flatcar-"+ctx.Stack()), Location: get("location", "westus2"),
-			FlatcarVersion: cfg.Require("flatcarVersion"), VMSize: cfg.Require("vmSize"),
+			Name: get("name", "flatcar-"+ctx.Stack()), Location: get("location", azureconfig.DefaultRegion),
+			FlatcarVersion: cfg.Require("flatcarVersion"), VMSize: get("vmSize", azureconfig.DefaultSKU),
 			ClusterPath: get("clusterPath", "cluster.local.json"), IgnitionDir: get("ignitionDir", "state/output"),
 			VNetCIDR: get("vnetCIDR", "192.168.0.0/16"), SubnetCIDR: get("subnetCIDR", "192.168.1.0/24"),
 			OSDiskSizeGB:             32,

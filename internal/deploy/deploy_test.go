@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"infestation/internal/azureplan"
 	"infestation/internal/fsutil"
 	"infestation/internal/testutil"
 )
@@ -31,18 +30,15 @@ exit 1
 `
 	os.WriteFile(filepath.Join(tools, "pulumi"), []byte(script), 0700)
 	t.Setenv("PATH", tools)
-	state := filepath.Join(root, "plan")
+	state := filepath.Join(root, "deployment")
 	os.Mkdir(state, 0700)
 	c := testutil.Config()
 	var err error
 	if err = fsutil.WriteJSON(filepath.Join(state, "cluster.json"), c); err != nil {
 		t.Fatal(err)
 	}
-	if err = fsutil.WriteJSON(filepath.Join(state, "plan.json"), azureplan.Plan{SubscriptionID: "fixture", PulumiConfig: map[string]any{"name": "fixture"}}); err != nil {
-		t.Fatal(err)
-	}
 	os.WriteFile(filepath.Join(root, "node-helper"), []byte("fixture-node-binary"), 0700)
-	o := Options{RepoRoot: root, PlanDir: state, Stack: "fixture", NodeBinary: filepath.Join(root, "node-helper"), FlatcarVersion: "4757.2.1", PreviewOnly: true, Log: io.Discard}
+	o := Options{RepoRoot: root, StateDir: state, ClusterPath: filepath.Join(state, "cluster.json"), Stack: "fixture", SubscriptionID: "fixture", NodeBinary: filepath.Join(root, "node-helper"), FlatcarVersion: "4757.2.1", PreviewOnly: true, Log: io.Discard}
 	if err = Azure(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +52,21 @@ exit 1
 		got, _ := os.ReadFile(filepath.Join(state, path))
 		if string(got) != string(want) {
 			t.Fatal("existing identity changed:", path)
+		}
+	}
+	savedCluster, _ := os.ReadFile(filepath.Join(state, "cluster.json"))
+	savedConfiguration, _ := os.ReadFile(filepath.Join(state, "configuration.json"))
+	for _, change := range []Options{
+		func() Options { x := o; x.SKU = "Standard_B2ms"; return x }(),
+		func() Options { x := o; x.Region = "eastus2"; return x }(),
+	} {
+		if err := Azure(context.Background(), change); err == nil {
+			t.Fatal("changed region/SKU accepted into existing state")
+		}
+		clusterNow, _ := os.ReadFile(filepath.Join(state, "cluster.json"))
+		configurationNow, _ := os.ReadFile(filepath.Join(state, "configuration.json"))
+		if string(clusterNow) != string(savedCluster) || string(configurationNow) != string(savedConfiguration) {
+			t.Fatal("rejected input change overwrote saved configuration")
 		}
 	}
 	o.FlatcarVersion = "4757.2.2"

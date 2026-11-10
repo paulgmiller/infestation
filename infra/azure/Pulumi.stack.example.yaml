@@ -1,5 +1,5 @@
-# Advanced/manual configuration. Prefer infestation azure plan/deploy for automatic SKU,
-# zone, TLS SAN, and bootstrap setup. Copy these settings into an initialized stack.
+# Explicit configuration. Region and SKU default to westus2 and Standard_B2s.
+# Copy these settings into an initialized stack; availability is checked by Azure.
 config:
   azure-native:subscriptionId: 00000000-0000-0000-0000-000000000000
   flatcar-k3s-azure:name: flatcar-k3s-dev
@@ -9,8 +9,8 @@ config:
   flatcar-k3s-azure:ignitionDir: state/output
   flatcar-k3s-azure:vnetCIDR: 192.168.0.0/16
   flatcar-k3s-azure:subnetCIDR: 192.168.1.0/24
-  # Use the size/placement resolved by infestation azure plan; availability and quotas vary.
-  flatcar-k3s-azure:vmSize: REPLACE_WITH_RESOLVED_SKU
+  # Choose a SKU explicitly when overriding the default.
+  flatcar-k3s-azure:vmSize: Standard_B2s
   flatcar-k3s-azure:osDiskSizeGB: 32
   flatcar-k3s-azure:osDiskStorageAccountType: StandardSSD_LRS
   flatcar-k3s-azure:outboundPortsPerNode: 1024

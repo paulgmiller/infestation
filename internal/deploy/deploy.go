@@ -1,4 +1,4 @@
-// Package deploy orchestrates a pinned Azure plan without subprocess generators.
+// Package deploy provisions Azure from explicit region and SKU inputs.
 package deploy
 
 import (
@@ -15,7 +15,7 @@ import (
 	"regexp"
 
 	"gopkg.in/yaml.v3"
-	"infestation/internal/azureplan"
+	"infestation/internal/azureconfig"
 	"infestation/internal/bootstrap"
 	"infestation/internal/cluster"
 	"infestation/internal/executil"
@@ -25,15 +25,16 @@ import (
 )
 
 type Options struct {
-	RepoRoot, PlanDir, Stack, FlatcarVersion, NodeBinary string
-	PreviewOnly, Yes                                     bool
-	Log                                                  io.Writer
+	RepoRoot, StateDir, ClusterPath, Stack, Name, Region, SKU, SubscriptionID, CheckID string
+	FlatcarVersion, NodeBinary                                                         string
+	PreviewOnly, Yes                                                                   bool
+	Log                                                                                io.Writer
 }
 type owner struct {
 	Stack          string `json:"stack"`
 	ConfigPath     string `json:"configPath"`
 	FlatcarVersion string `json:"flatcarVersion"`
-	PlanSHA256     string `json:"planSHA256"`
+	ConfigSHA256   string `json:"configSHA256"`
 }
 
 func setEnv(env []string, key, value string) []string {
@@ -48,13 +49,35 @@ func setEnv(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 func Azure(ctx context.Context, o Options) error {
+	if o.Name == "" {
+		o.Name = o.Stack
+	}
+	if o.Name == "" {
+		o.Name = "infestation"
+	}
+	if o.Stack == "" {
+		o.Stack = o.Name
+	}
+	if o.StateDir == "" {
+		o.StateDir = filepath.Join("state", o.Name)
+	}
+	if o.RepoRoot == "" {
+		o.RepoRoot = "."
+	}
+	if o.ClusterPath == "" {
+		o.ClusterPath = "examples/cluster.json"
+	}
+	if o.FlatcarVersion == "" {
+		o.FlatcarVersion = "4757.2.2"
+	}
+
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`).MatchString(o.Stack) {
 		return fmt.Errorf("use a simple local stack name")
 	}
 	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(o.FlatcarVersion) {
 		return fmt.Errorf("pin an exact Flatcar image version")
 	}
-	state, err := filepath.Abs(o.PlanDir)
+	state, err := filepath.Abs(o.StateDir)
 	if err != nil {
 		return err
 	}
@@ -67,15 +90,25 @@ func Azure(ctx context.Context, o Options) error {
 		return fmt.Errorf("--repo must locate the infestation checkout: %w", err)
 	}
 	clusterPath := filepath.Join(state, "cluster.json")
-	c, err := cluster.Load(clusterPath)
+	c, err := cluster.Load(o.ClusterPath)
 	if err != nil {
 		return err
 	}
-	planPath := filepath.Join(state, "plan.json")
-	var plan azureplan.Plan
-	if err = fsutil.ReadJSON(planPath, &plan); err != nil {
+	c, settings, err := azureconfig.Configure(c, o.Name, azureconfig.Inputs{Region: o.Region, SKU: o.SKU})
+	if err != nil {
 		return err
 	}
+	subscription := o.SubscriptionID
+	if subscription == "" {
+		subscription, err = azureconfig.Subscription(ctx, executil.OSRunner{})
+		if err != nil {
+			return err
+		}
+	}
+	if o.CheckID != "" {
+		settings["checkID"] = o.CheckID
+	}
+	configuration := azureconfig.Configuration{SubscriptionID: subscription, Parameters: settings}
 	for _, tool := range []string{"pulumi", "go"} {
 		if o.NodeBinary != "" && tool == "go" {
 			continue
@@ -109,20 +142,20 @@ func Azure(ctx context.Context, o Options) error {
 	run := func(args ...string) error { return runner.Run(ctx, "pulumi", args...).Err("Pulumi") }
 	cfgPath := filepath.Join(project, "Pulumi."+o.Stack+".yaml")
 	ownerPath := filepath.Join(state, "stack-owner.json")
-	planRaw, err := os.ReadFile(planPath)
+	configurationRaw, err := json.Marshal(configuration)
 	if err != nil {
 		return err
 	}
-	clusterRaw, err := os.ReadFile(clusterPath)
+	clusterRaw, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	hash := sha256.Sum256(append(planRaw, clusterRaw...))
+	hash := sha256.Sum256(append(configurationRaw, clusterRaw...))
 	identity := owner{o.Stack, cfgPath, o.FlatcarVersion, hex.EncodeToString(hash[:])}
 	var old owner
 	if err = fsutil.ReadJSON(ownerPath, &old); os.IsNotExist(err) {
 		if _, err = os.Stat(cfgPath); !os.IsNotExist(err) {
-			return fmt.Errorf("stack config already exists outside this plan; choose another stack")
+			return fmt.Errorf("stack config already exists outside this deployment; choose another stack")
 		}
 		if err = run("stack", "init", o.Stack, "--non-interactive"); err != nil {
 			return err
@@ -135,8 +168,8 @@ func Azure(ctx context.Context, o Options) error {
 		if err = yaml.Unmarshal(data, &settings); err != nil {
 			return err
 		}
-		values := map[string]any{"azure-native:subscriptionId": plan.SubscriptionID}
-		for k, v := range plan.PulumiConfig {
+		values := map[string]any{"azure-native:subscriptionId": configuration.SubscriptionID}
+		for k, v := range configuration.Parameters {
 			values["flatcar-k3s-azure:"+k] = v
 		}
 		values["flatcar-k3s-azure:flatcarVersion"] = o.FlatcarVersion
@@ -156,7 +189,13 @@ func Azure(ctx context.Context, o Options) error {
 	} else if err != nil {
 		return err
 	} else if old != identity {
-		return fmt.Errorf("pinned plan, image or stack changed; review a deliberate update")
+		return fmt.Errorf("deployment inputs, image or stack changed; review a deliberate update")
+	}
+	if err = fsutil.WriteJSON(clusterPath, c); err != nil {
+		return err
+	}
+	if err = fsutil.WriteJSON(filepath.Join(state, "configuration.json"), configuration); err != nil {
+		return err
 	}
 	if _, err = os.Stat(filepath.Join(state, "pki")); os.IsNotExist(err) {
 		if err = pki.Create(c, state); err != nil {
@@ -165,7 +204,7 @@ func Azure(ctx context.Context, o Options) error {
 	} else if err != nil {
 		return err
 	}
-	assets, err := prepareNode(ctx, repo, state, o.NodeBinary, plan, c)
+	assets, err := prepareNode(ctx, repo, state, o.NodeBinary, configuration, c)
 	if err != nil {
 		return err
 	}
