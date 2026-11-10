@@ -54,6 +54,7 @@ type Config struct {
 // optional workstation path read only when rendering private Ignition, never a
 // raw key. Alternatively the renderer receives a transient command-line key.
 type Tailscale struct {
+	SSH         bool   `json:"ssh,omitempty"`
 	Version     string `json:"version"`
 	Domain      string `json:"domain"`
 	AuthKeyFile string `json:"auth_key_file,omitempty"`

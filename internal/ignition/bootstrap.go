@@ -15,6 +15,7 @@ import (
 )
 
 type Bootstrap struct {
+	HelperSourceCommit, HelperBuilderImage string
 	// Render-only secret: never serialize into the node's bootstrap inventory.
 	TailscaleAuthKey                                 string `json:"-"`
 	LocalHelperURL, LocalHelperSHA512                string
@@ -53,7 +54,9 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 	}
 	add("/etc/infestation/bootstrap.json", string(config), 0600)
 	executable := "/opt/infestation/infestation-node"
-	if b.LocalHelper != "" {
+	if b.HelperSourceCommit != "" {
+		// The Ignition-installed build service supplies the executable before bootstrap.
+	} else if b.LocalHelper != "" {
 		binary, err := os.ReadFile(b.LocalHelper)
 		if err != nil {
 			return err

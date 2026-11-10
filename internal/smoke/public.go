@@ -11,11 +11,12 @@ import (
 	"infestation/internal/cluster"
 )
 
-// Options adds a workstation-to-public-LB check to the internal network checks.
-// Gateway API and Cilium host-network Gateway support must already be enabled.
+// Options adds optional public HTTP and host Tailscale latency measurements.
+// The public check requires Gateway API and Cilium host-network Gateway support.
 type Options struct {
-	PublicURL string
-	Log       io.Writer
+	PublicURL      string
+	TailnetLatency bool
+	Log            io.Writer
 }
 
 func publicURL(raw string) (*url.URL, error) {

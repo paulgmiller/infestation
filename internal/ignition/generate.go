@@ -245,7 +245,11 @@ WantedBy=multi-user.target
 		if err := bootstrapProfile(&doc, c, n, options[0]); err != nil {
 			return doc, err
 		}
+		if err := helperBuildProfile(&doc, options[0]); err != nil {
+			return doc, err
+		}
 	}
+	accessProfile(&doc, c, n)
 	return doc, nil
 }
 
@@ -272,6 +276,10 @@ func CockroachUnit(c cluster.Config, n cluster.Node) string {
 		dependency = " waagent.service"
 		check = "ExecStartPre=/opt/infestation/check-cockroach-storage\n"
 	}
+	containerDNS := ""
+	if c.Tailscale != nil {
+		containerDNS = " --dns=100.100.100.100"
+	}
 	tailnetDependency := ""
 	if c.Tailscale != nil {
 		tailnetDependency = "Requires=infestation-tailnet.service\nAfter=infestation-tailnet.service\n"
@@ -290,12 +298,12 @@ TimeoutStopSec=120
 %sExecStartPre=/usr/bin/install -d -o 1000 -g 1000 -m 0700 %s
 ExecStartPre=/usr/bin/install -d -o 0 -g 0 -m 0700 /run/infestation
 ExecStartPre=-/usr/bin/docker rm -f cockroachdb
-ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=%s,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --mount type=bind,src=/run/infestation,dst=/run/infestation,readonly --entrypoint=/cockroach/cockroach %s %s --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr=%s --http-addr=127.0.0.1:8080%s%s --cache=%s --max-sql-memory=%s --logtostderr=INFO
+ExecStart=/usr/bin/docker run --rm --name cockroachdb --network host%s --user 1000:1000 --pull=missing --log-driver=journald --mount type=bind,src=%s,dst=/cockroach/cockroach-data --mount type=bind,src=/etc/cockroach/certs,dst=/cockroach/certs,readonly --mount type=bind,src=/run/infestation,dst=/run/infestation,readonly --entrypoint=/cockroach/cockroach %s %s --certs-dir=/cockroach/certs --store=/cockroach/cockroach-data --listen-addr=0.0.0.0:26257 --advertise-addr=%s --http-addr=127.0.0.1:8080%s%s --cache=%s --max-sql-memory=%s --logtostderr=INFO
 ExecStop=/usr/bin/docker stop --time 90 cockroachdb
 Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-`, tailnetDependency, dependency, dependency, check, store, store, c.CockroachImage, command, net.JoinHostPort(c.NodeAddress(n), "26257"), join, locality, c.Cache(), c.SQLMemory())
+`, tailnetDependency, dependency, dependency, check, store, containerDNS, store, c.CockroachImage, command, net.JoinHostPort(c.NodeAddress(n), "26257"), join, locality, c.Cache(), c.SQLMemory())
 }

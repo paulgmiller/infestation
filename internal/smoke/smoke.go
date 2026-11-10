@@ -65,6 +65,9 @@ func Run(ctx context.Context, runner executil.Runner, c cluster.Config, state, k
 	if len(options) > 0 {
 		opt = options[0]
 	}
+	if opt.TailnetLatency && c.Tailscale == nil {
+		return fmt.Errorf("--tailnet-latency requires Tailscale cluster configuration")
+	}
 	if opt.PublicURL != "" {
 		if _, err := publicURL(opt.PublicURL); err != nil {
 			return err
@@ -94,6 +97,11 @@ func Run(ctx context.Context, runner executil.Runner, c cluster.Config, state, k
 			return err
 		}
 		if err := run("-n", Namespace, "logs", "-l", "job-name="+job, "--all-containers", "--prefix"); err != nil {
+			return err
+		}
+	}
+	if opt.TailnetLatency {
+		if err := recordLatency(ctx, runner, c, state, kubeconfig, runID, opt.Log); err != nil {
 			return err
 		}
 	}

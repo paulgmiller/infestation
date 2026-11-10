@@ -166,3 +166,51 @@ The live `tail3-1109` kubeconfig has been switched to
 and node listing succeeded through this endpoint with TLS validation enabled.
 The console confirms two online Service hosts; acceptance of the third host
 and failover behavior remain unverified. See the networking checkpoint for details.
+
+
+## Build the helper on Flatcar (prototype)
+
+Instead of supplying `--node-helper`, opt into a native guest build:
+
+```sh
+bin/infestation vm cluster create --name source-lab \
+  --tailnet-domain YOUR-TAILNET.ts.net \
+  --tailscale-auth-key-file secrets/tsauth \
+  --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
+```
+
+The source must already be available in `paulgmiller/infestation` on GitHub.
+The CLI resolves tags to a commit before generating profiles. Each VM uses the
+same source commit and official multiarchitecture Go image, currently Go 1.26.10
+Bookworm pinned by manifest digest. Docker selects the node's native architecture;
+no Go installation or custom Flatcar image is required. The container builds
+`./cmd/infestation-node` with CGO disabled, then the host installs the executable
+atomically. The container mounts only a temporary output directory, with no
+host credentials or Docker socket. The executable and build identity/checksum
+are cached across boots. The builder runs before enrollment and needs ordinary
+outbound access to the registry, GitHub, and Go module services.
+
+The same flags are accepted by `infestation ignition`. A versioned official
+builder override is available as `--helper-builder-image`; preserve a multiarch
+manifest digest when pinning it. This path does not migrate existing VMs or
+remove the existing Azure Blob bootstrap implementation. Cold builds and artifact
+lifecycle are explicit improvement items after the mixed-cloud test. Only native
+amd64 container compilation has been exercised so far; arm64 profile generation
+is tested, but arm64 execution and a new Flatcar first boot remain unverified.
+
+## Record node-to-node Tailscale latency
+
+```sh
+bin/infestation smoke --config state/vms/tail3-1109/cluster.json \
+  --state-dir state/vms/tail3-1109 \
+  --kubeconfig state/vms/tail3-1109/kubeconfig --tailnet-latency
+```
+
+In addition to DNS and Service checks, this creates six fresh host-CLI ping Jobs
+for three nodes. Each makes ten DISCO pings and continues after finding a direct
+path. `tailnet-latency-RUN-ID.json` retains raw output, paths, timestamps, sample
+counts and RTT summaries. Failed or unrecognized samples are recorded and make
+the measurement step fail; the report is saved before returning that error.
+The Jobs temporarily access each host's Tailscale API socket, expire after an
+hour, and do not mount Tailscale identity files. These are host-overlay timings,
+not pod-network or database latency measurements.

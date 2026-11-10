@@ -12,8 +12,8 @@ import (
 )
 
 func tailnetProfile(doc *types.Config, c cluster.Config, n cluster.Node, options []Bootstrap) error {
-	if len(options) == 0 || options[0].LocalHelper == "" || options[0].Pool != nil {
-		return fmt.Errorf("Tailscale currently requires a static VM profile and a local node helper; Azure support is pending")
+	if len(options) == 0 || (options[0].LocalHelper == "" && options[0].HelperSourceCommit == "") || options[0].Pool != nil {
+		return fmt.Errorf("Tailscale currently requires a static VM profile and a node helper; Azure support is pending")
 	}
 	keyText := options[0].TailscaleAuthKey
 	if keyText != "" && c.Tailscale.AuthKeyFile != "" {
@@ -33,21 +33,23 @@ func tailnetProfile(doc *types.Config, c cluster.Config, n cluster.Node, options
 	if !strings.HasPrefix(keyText, "tskey-auth-") || strings.ContainsAny(keyText, " \t\r\n") {
 		return fmt.Errorf("invalid Tailscale auth key")
 	}
-	var helperFile types.File
-	if options[0].LocalHelperURL != "" {
-		if len(options[0].LocalHelperSHA512) != 128 {
-			return fmt.Errorf("remote local bootstrap helper requires a SHA512 digest")
+	if options[0].HelperSourceCommit == "" {
+		var helperFile types.File
+		if options[0].LocalHelperURL != "" {
+			if len(options[0].LocalHelperSHA512) != 128 {
+				return fmt.Errorf("remote local bootstrap helper requires a SHA512 digest")
+			}
+			helperFile = types.File{Node: types.Node{Path: "/opt/infestation/infestation-node", Overwrite: ptr(true)}, FileEmbedded1: types.FileEmbedded1{Mode: ptr(0755), Contents: types.Resource{Source: ptr(options[0].LocalHelperURL), Verification: types.Verification{Hash: ptr("sha512-" + options[0].LocalHelperSHA512)}}}}
+		} else {
+			helper, err := os.ReadFile(options[0].LocalHelper)
+			if err != nil {
+				return err
+			}
+			helperFile = File("/opt/infestation/infestation-node", helper, 0755)
 		}
-		helperFile = types.File{Node: types.Node{Path: "/opt/infestation/infestation-node", Overwrite: ptr(true)}, FileEmbedded1: types.FileEmbedded1{Mode: ptr(0755), Contents: types.Resource{Source: ptr(options[0].LocalHelperURL), Verification: types.Verification{Hash: ptr("sha512-" + options[0].LocalHelperSHA512)}}}}
-	} else {
-		helper, err := os.ReadFile(options[0].LocalHelper)
-		if err != nil {
-			return err
-		}
-		helperFile = File("/opt/infestation/infestation-node", helper, 0755)
+		doc.Storage.Files = append(doc.Storage.Files, helperFile)
 	}
 	doc.Storage.Files = append(doc.Storage.Files,
-		helperFile,
 		File(tailnet.AuthPath, []byte(keyText+"\n"), 0600),
 		File("/etc/rancher/k3s/vpn-auth", []byte("name=tailscale,joinKey=host-managed-no-enrollment\n"), 0600),
 		File("/etc/sysctl.d/70-infestation-tailnet.conf", []byte("net.ipv4.ip_forward=1\nnet.bridge.bridge-nf-call-iptables=1\n"), 0644),
@@ -78,6 +80,9 @@ RestartSec=15s
 [Install]
 WantedBy=multi-user.target
 `
+	if c.Tailscale.SSH {
+		unit = strings.Replace(unit, "ExecStart=/opt/infestation/infestation-node tailnet\n", "ExecStart=/opt/infestation/infestation-node tailnet\nExecStartPost=/usr/bin/tailscale set --ssh=true\n", 1)
+	}
 	doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: "infestation-tailnet.service", Enabled: ptr(true), Contents: &unit})
 	return nil
 }

@@ -154,6 +154,9 @@ func TestTailnetProfilesKeepHostsIndependentAndUseNativeBackend(t *testing.T) {
 		if !strings.Contains(k3sUnit, "Requires=infestation-tailnet.service") || !strings.Contains(k3sUnit, "ExecStartPre=") {
 			t.Fatal(k3sUnit)
 		}
+		if !strings.Contains(dbUnit, "--network host --dns=100.100.100.100") {
+			t.Fatal("host container bypasses tailnet DNS", dbUnit)
+		}
 		if !strings.Contains(dbUnit, "Requires=infestation-tailnet.service") || !strings.Contains(dbUnit, "--advertise-addr="+n.Name+".example.ts.net:26257") {
 			t.Fatal("underlay DB dependency", dbUnit)
 		}

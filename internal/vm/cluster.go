@@ -22,13 +22,22 @@ import (
 
 type ClusterOptions struct {
 	Options
-	Domain, NodeHelper string
+	Domain, NodeHelper                  string
+	HelperSourceRef, HelperBuilderImage string
+	AzureLocation, AzureVMSize          string
 }
 
 func clusterConfig(o ClusterOptions) cluster.Config {
 	c := cluster.Config{CockroachImage: "cockroachdb/cockroach:v26.2.7", K3sExtensionVersion: "v1.35.8+k3s1", Architecture: "x86-64", CockroachStorage: "persistent", CockroachCache: "256MiB", CockroachSQLMemory: "256MiB", Tailscale: &cluster.Tailscale{Version: TailscaleVersion, Domain: o.Domain}}
 	for i := 0; i < 3; i++ {
 		c.Nodes = append(c.Nodes, cluster.Node{Name: fmt.Sprintf("%s-%d", o.Name, i), IP: fmt.Sprintf("192.0.2.%d", i+1), Locality: fmt.Sprintf("region=lab,zone=node%d", i)})
+	}
+	if o.AzureLocation != "" {
+		c.Tailscale.SSH = true
+		c.APITailnetHostname = "k8s-api." + o.Domain
+		c.Nodes[0].Locality = "region=local,zone=vm0"
+		c.Nodes[1].Locality = "region=local,zone=vm1"
+		c.Nodes[2].Locality = "region=azure,zone=" + o.AzureLocation
 	}
 	return c
 }
@@ -50,13 +59,27 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	if err = validateHost(o.Accel); err != nil {
 		return err
 	}
+	if o.AzureLocation != "" && o.HelperSourceRef == "" {
+		return fmt.Errorf("mixed test requires --helper-source-ref for cloud-independent guest builds")
+	}
 	key, err := authKey(o.Options)
 	if err != nil {
 		return err
 	}
-	helper, err := os.ReadFile(o.NodeHelper)
-	if err != nil {
-		return fmt.Errorf("build the Linux node helper first: %w", err)
+	var helper []byte
+	sourceCommit := ""
+	if o.HelperSourceRef != "" {
+		sourceCommit, err = ignition.ResolveHelperSource(ctx, o.HelperSourceRef)
+		if err != nil {
+			return err
+		}
+		helper = []byte(ignition.HelperBuildIdentity(sourceCommit, o.HelperBuilderImage))
+		fmt.Fprintln(out, "Guest helper source commit:", sourceCommit)
+	} else {
+		helper, err = os.ReadFile(o.NodeHelper)
+		if err != nil {
+			return fmt.Errorf("build the Linux node helper first: %w", err)
+		}
 	}
 	if _, err = os.Lstat(dir); err == nil {
 		return fmt.Errorf("cluster state already exists; use vm cluster wait/status/start/stop")
@@ -88,9 +111,15 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	if err = pki.Create(c, dir); err != nil {
 		return err
 	}
-	artifact, err := startArtifacts(ctx, dir, o.NodeHelper)
-	if err != nil {
-		return err
+	b := ignition.Bootstrap{HelperSourceCommit: sourceCommit, HelperBuilderImage: o.HelperBuilderImage, TailscaleAuthKey: key}
+	if sourceCommit == "" {
+		artifact, err := startArtifacts(ctx, dir, o.NodeHelper)
+		if err != nil {
+			return err
+		}
+		b.LocalHelper = o.NodeHelper
+		b.LocalHelperURL = fmt.Sprintf("http://10.0.2.2:%d/infestation-node", artifact.Port)
+		b.LocalHelperSHA512 = artifact.SHA512
 	}
 	// Issue the one-hour SQL credential after image acquisition, immediately
 	// before first boot. Existing PKI/token/state are never regenerated on resume.
@@ -99,13 +128,23 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 		return err
 	}
 	id := sha256.Sum256(helper)
-	if err = ignition.Generate(c, dir, ignition.Bootstrap{LocalHelper: o.NodeHelper, LocalHelperURL: fmt.Sprintf("http://10.0.2.2:%d/infestation-node", artifact.Port), LocalHelperSHA512: artifact.SHA512, Credential: credential, TailscaleAuthKey: key, DeploymentID: fmt.Sprintf("%x", id)}); err != nil {
+	b.Credential = credential
+	b.DeploymentID = fmt.Sprintf("%x", id)
+	if err = ignition.Generate(c, dir, b); err != nil {
 		return err
 	}
 	if err = fsutil.WriteJSON(filepath.Join(dir, "cluster.json"), c); err != nil {
 		return err
 	}
-	for _, n := range c.Nodes {
+	if o.AzureLocation != "" {
+		if err := createAzureNode(ctx, o, dir, c.Nodes[2].Name, out); err != nil {
+			return err
+		}
+	}
+	for i, n := range c.Nodes {
+		if o.AzureLocation != "" && i == 2 {
+			continue
+		}
 		raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
 		if err != nil {
 			return err
@@ -157,7 +196,19 @@ func ClusterAction(ctx context.Context, o Options, action string, out io.Writer)
 			}
 		}
 	}
+	azure, mixed := loadAzureNode(dir)
+	if mixed && (action == "start" || action == "stop") {
+		if err := azureAction(ctx, azure, action, out); err != nil {
+			return err
+		}
+	}
 	for _, n := range c.Nodes {
+		if mixed && n.Name == azure.Node {
+			if action == "status" {
+				fmt.Fprintln(out, n.Name, "Azure VM", azure.Group)
+			}
+			continue
+		}
 		node := Options{Name: n.Name, StateDir: dir, Accel: o.Accel}
 		switch action {
 		case "stop":

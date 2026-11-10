@@ -72,20 +72,30 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			return fmt.Errorf("--state-dir is required")
 		}
 		return vm.ServeArtifacts(ctx, state)
-	case "vm cluster create", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop", "vm cluster api":
+	case "vm cluster create", "vm cluster resume", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop", "vm cluster api":
 		o := vm.ClusterOptions{}
 		flags.StringVar(&o.Name, "name", "", "cluster name (required; creates NAME-0/1/2)")
 		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
+		if command == "vm cluster resume" {
+			flags.StringVar(&o.AzureVMSize, "azure-vm-size", "Standard_B2s", "Azure VM size for mixed-test retry")
+			flags.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image")
+			flags.StringVar(&o.Accel, "accel", "kvm", "local VM accelerator")
+			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "local VM memory MiB")
+		}
 		if command == "vm cluster create" {
 			flags.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS suffix, such as example.ts.net")
 			flags.StringVar(&o.NodeHelper, "node-helper", "bin/infestation-node", "static Linux node helper to embed")
+			flags.StringVar(&o.HelperSourceRef, "helper-source-ref", "", "build helper on each guest from this GitHub tag or commit instead of local binary")
+			flags.StringVar(&o.AzureLocation, "azure-location", "", "place the third node in Azure instead of QEMU (mixed test)")
+			flags.StringVar(&o.AzureVMSize, "azure-vm-size", "Standard_B2s", "Azure VM size for mixed test")
+			flags.StringVar(&o.HelperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "versioned multiarch golang builder image")
 			flags.StringVar(&o.AuthKey, "tailscale-auth-key", "", "tagged auth key (default: TAILSCALE_AUTH_KEY)")
 			flags.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private auth key file")
 			flags.StringVar(&o.BaseImage, "base-image", "", "trusted Flatcar base (default: download verified image)")
 			flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow tcg")
 			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
 		}
-		if command == "vm cluster create" || command == "vm cluster start" || command == "vm cluster wait" || command == "vm cluster api" {
+		if command == "vm cluster create" || command == "vm cluster resume" || command == "vm cluster start" || command == "vm cluster wait" || command == "vm cluster api" {
 			flags.DurationVar(&o.Wait, "wait", 30*time.Minute, "readiness deadline; 0 starts in background")
 		}
 		if command == "vm cluster start" {
@@ -100,6 +110,8 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		switch command {
 		case "vm cluster create":
 			return vm.CreateCluster(ctx, o, out)
+		case "vm cluster resume":
+			return vm.ResumeMixed(ctx, o, out)
 		case "vm cluster wait":
 			return vm.WaitCluster(ctx, o.Options, out)
 		case "vm cluster start":
@@ -182,9 +194,11 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return nil
 	case "validate", "pki", "ignition":
 		portable()
-		var helper, tailscaleAuthKey, tailscaleAuthKeyFile string
+		var helper, tailscaleAuthKey, tailscaleAuthKeyFile, helperSourceRef, helperBuilderImage string
 		if command == "ignition" {
 			flags.StringVar(&helper, "node-helper", "bin/infestation-node", "Linux node bootstrap executable to embed for local VMs")
+			flags.StringVar(&helperSourceRef, "helper-source-ref", "", "build helper on each guest from this GitHub tag or commit")
+			flags.StringVar(&helperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "versioned multiarch golang builder image")
 			flags.StringVar(&tailscaleAuthKey, "tailscale-auth-key", "", "Tailscale enrollment key (secret; embedded in private Ignition)")
 			flags.StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "private file containing the Tailscale enrollment key")
 		}
@@ -219,20 +233,33 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		case "pki":
 			err = pki.Create(c, state)
 		case "ignition":
-			if len(c.Servers()) == 0 {
-				err = ignition.Generate(c, state, ignition.Bootstrap{LocalHelper: helper, TailscaleAuthKey: tailscaleAuthKey})
-				break
+			b := ignition.Bootstrap{LocalHelper: helper, TailscaleAuthKey: tailscaleAuthKey}
+			var identity []byte
+			if helperSourceRef != "" {
+				b.HelperSourceCommit, err = ignition.ResolveHelperSource(ctx, helperSourceRef)
+				if err != nil {
+					return err
+				}
+				b.LocalHelper = ""
+				b.HelperBuilderImage = helperBuilderImage
+				identity = []byte(ignition.HelperBuildIdentity(b.HelperSourceCommit, b.HelperBuilderImage))
+				fmt.Fprintln(out, "Guest helper source commit:", b.HelperSourceCommit)
+			} else if len(c.Servers()) > 0 {
+				identity, err = os.ReadFile(helper)
+				if err != nil {
+					return fmt.Errorf("build the node helper first: %w", err)
+				}
 			}
-			binary, readErr := os.ReadFile(helper)
-			if readErr != nil {
-				return fmt.Errorf("build the node helper first with go build -o bin/infestation-node ./cmd/infestation-node: %w", readErr)
+			if len(c.Servers()) > 0 {
+				id := sha256.Sum256(identity)
+				b.DeploymentID = fmt.Sprintf("%x", id)
+				b.APIEndpoint = "https://" + net.JoinHostPort(c.Servers()[0].IP, "6443")
+				b.Credential, err = pki.BootstrapCredential(state)
+				if err != nil {
+					return err
+				}
 			}
-			id := sha256.Sum256(binary)
-			credential, credErr := pki.BootstrapCredential(state)
-			if credErr != nil {
-				return credErr
-			}
-			err = ignition.Generate(c, state, ignition.Bootstrap{LocalHelper: helper, TailscaleAuthKey: tailscaleAuthKey, DeploymentID: fmt.Sprintf("%x", id), APIEndpoint: "https://" + net.JoinHostPort(c.Servers()[0].IP, "6443"), Credential: credential})
+			err = ignition.Generate(c, state, b)
 		}
 		if err == nil {
 			fmt.Fprintln(out, command+": complete")
@@ -316,6 +343,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	case "smoke":
 		portable()
 		kube := flags.String("kubeconfig", "", "admin kubeconfig path")
+		tailnetLatency := flags.Bool("tailnet-latency", false, "record ten Tailscale pings per directed node pair, including path and latency")
 		publicURL := flags.String("public-url", "", "also test HTTP through the public LB and Cilium host-network Gateway")
 		if err := parse(flags, args); err != nil {
 			return help(err)
@@ -327,7 +355,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		if *kube == "" {
 			*kube = filepath.Join(state, "kubeconfig")
 		}
-		return smoke.Run(ctx, executil.OSRunner{Output: out}, c, state, *kube, smoke.Options{PublicURL: *publicURL, Log: out})
+		return smoke.Run(ctx, executil.OSRunner{Output: out}, c, state, *kube, smoke.Options{PublicURL: *publicURL, TailnetLatency: *tailnetLatency, Log: out})
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

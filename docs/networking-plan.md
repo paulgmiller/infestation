@@ -302,8 +302,10 @@ configure scoped service auto-approval. Grant the intended administrative client
 access to `svc:k8s-api` on TCP 443. Do not replace unrelated tailnet policy or
 Serve configurations.
 
-Add the actual shared DNS name to every K3s server's `tls-san` before using it in
-kubeconfig. Retain the Kubernetes CA and client credentials; do not terminate TLS
+For new profiles, add the shared DNS name to every K3s server's `tls-san`.
+Existing profiles can use the verified common certificate identity via
+`tls-server-name: kubernetes.default.svc.cluster.local`, as tested above.
+Retain the Kubernetes CA and client credentials; do not terminate TLS
 in Serve or disable certificate verification. The kubeconfig endpoint becomes
 `https://k8s-api.<tailnet>.ts.net:443`.
 
@@ -316,9 +318,49 @@ not a v1 requirement. Connections can break during failover. Tailscale host
 availability does not prove local API readiness: explicit `/readyz` monitoring
 and advertisement withdrawal are follow-up work, not a property to claim for v1.
 
-Prerequisites still outstanding: identify/enroll the three actual server hosts,
-confirm local API listeners and certificate SANs, and define/approve the Service.
-The management host is not an API backend.
+The owner now confirms all three lab hosts are connected to the Service. The
+management host is not an API backend.
+
+### Portable kubeconfig retrieval: selected, not implemented
+
+The tailnet is the chosen administrator trust boundary. Permit all tailnet
+members to SSH to cluster nodes through Tailscale SSH and retrieve kubeconfig;
+declare both network grants and SSH policy accordingly. This supersedes the
+earlier no-SSH design for the portable path. It does not require public port 22,
+Azure Run Command, or a cloud-specific remote execution service.
+
+An Ignition-installed host service on every control-plane node will configure
+the API Service forwarder and publish `/etc/infestation/kubeconfig` from K3s's
+managed `/etc/rancher/k3s/k3s.yaml`. Leave the original unchanged. The published
+copy will preserve the CA and client credentials, use the shared TailVIP URL,
+and retain verified TLS (the common certificate identity is supported for
+existing profiles). Write atomically with mode 0600 and refresh after source
+credential changes, including renewal on subsequent K3s starts. Publication
+must not wait for TailVIP reachability or Service approval.
+
+The workstation CLI will retrieve this prepared file over Tailscale SSH from
+any available server, save it privately, and verify API access. Root SSH access
+is acceptable within the selected tailnet trust boundary. QEMU's existing
+private virtio retrieval can remain a local bootstrap/debugging mechanism.
+
+Remove Blob Storage from kubeconfig delivery. Build the helper on each Flatcar node in a versioned, digest-pinned official
+Go container, using a GitHub source tag resolved to an immutable commit by the
+CLI. This avoids per-architecture helper release assets, a workstation artifact
+server, and Azure Blob Storage in the portable path. The builder runs before
+Tailscale enrollment, so it uses ordinary outbound connectivity. It installs a
+native static executable atomically and checks the cached identity/checksum on
+later boots. No compiler is installed on the host. Container image/source/module
+downloads, cold-build time and disk usage are accepted prototype costs. Revisit
+this after the mixed-cloud acceptance test; do not treat guest builds as a
+finished artifact/update strategy.
+No image or artifact may contain enrolled Tailscale state or node credentials.
+
+Removing the storage account entirely also requires replacing the durable
+Cockroach initialization marker and any Azure discovery/status uses. That
+recovery design is still open: do not replace the durable create-only init
+guard with a disposable single-VM file or permit automatic reinitialization
+after an ambiguous outcome. Current deployments still use their existing
+storage/bootstrap paths until this replacement is implemented and tested.
 
 ## Pod networking: native K3s integration selected
 
@@ -444,3 +486,75 @@ Before claiming the design reliable:
 - [Tailscale site-to-site routing](https://tailscale.com/docs/features/site-to-site)
 - [Network policy implementation](https://github.com/kubernetes-sigs/kube-network-policies)
 - [Cloudflare Tunnel redundancy](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/tunnel-availability/)
+
+
+## Next acceptance test: two local VMs and one Azure VM
+
+Create a fresh three-server cluster with two independent local QEMU NAT VMs
+and one Azure VM, all running Flatcar, CockroachDB and K3s. Their only shared
+network is Tailscale; Azure placement in a common VNet is optional and must not
+be relied upon for cluster communication. Azure still needs its ordinary NIC,
+VNet/subnet and outbound connectivity plumbing; the intended dependency budget
+excludes Blob Storage, Key Vault, managed databases, external ingress/load
+balancers and cloud-specific remote execution. Use persistent disks and compute,
+plus the required networking and the existing tailnet/source/container services.
+Preserve the existing local lab and its credentials.
+
+Use the source-container helper build and tailnet SSH/local kubeconfig delivery
+outlined above. Before provisioning, replace the cloud Blob bootstrap dependency
+with an explicitly reviewed durable initialization guard; the existing local
+single-initializer behavior is not evidence of replacement safety. Use a unique
+API Service and disjoint pod/service CIDRs when running alongside the current
+lab, so the test does not mix API backends or compete for subnet routes.
+
+Acceptance evidence: three Ready API nodes, healthy Cockroach members and zero
+unavailable/under-replicated ranges after convergence, all six directed pod DNS
+and ClusterIP HTTP checks, and API access through the test's shared Service with
+normal TLS validation. Save the inventory and infrastructure resource list to
+show that no storage account or external managed bootstrap service was used.
+
+Record ten Tailscale DISCO pings for every directed node pair (six pairs), with
+`--until-direct=false`, retaining first-ping behavior and per-reply path strings
+(direct endpoints, DERP or peer relay). Save raw output, timestamps, requested
+versus received sample counts, min/median/p95/max RTT and incomplete measurements.
+This measures tailscaled-to-tailscaled connectivity, not pod or SQL request
+latency; keep it alongside the application connectivity checks. A relay path is
+an observation, not a failed cluster test or an assumed direct connection.
+
+After the mixed cluster test, stop feature work and review what can be simplified
+and made more resilient. Do not automatically expand into further cloud support
+or failure-recovery implementation before that review.
+
+
+### 2026-11-10 implementation and local latency baseline
+
+Added opt-in `--helper-source-ref` to VM cluster creation and standalone Ignition
+rendering. It resolves GitHub tags/revisions to commits and generates a host
+container-build unit before enrollment/bootstrap. A real official Go 1.26.10
+Bookworm container fetched commit `138c5676d497f665517d6fc67c1d5a0712e7a15e`
+from GitHub and built the helper successfully with native amd64 and CGO disabled.
+The default builder uses its multiarch manifest digest. Generated amd64/arm64
+Ignition and bootstrap ordering tests pass; a fresh Flatcar boot of this path
+and arm64 execution have not yet been exercised. Existing VMs were not migrated.
+
+Added `smoke --tailnet-latency` and exercised it on the running three-local-VM
+lab before shutdown. All six DNS/ClusterIP checks passed, and all six directed
+ping jobs returned 10/10 samples. Every sample used `DERP(sea)` in this run.
+
+| Direction (tail3-1109 suffix) | Min ms | Median ms | p95/max ms |
+| --- | ---: | ---: | ---: |
+| 0 → 1 | 6 | 8.5 | 10 |
+| 0 → 2 | 6 | 8 | 155 |
+| 1 → 0 | 6 | 8 | 20 |
+| 1 → 2 | 6 | 8 | 21 |
+| 2 → 0 | 7 | 8.5 | 14 |
+| 2 → 1 | 6 | 7 | 13 |
+
+With ten samples, nearest-rank p95 equals the maximum; this is a short diagnostic
+baseline, not a performance characterization. Private raw evidence is retained
+in `state/vms/tail3-1109/tailnet-latency-b584d14c-5fab-407f-9ae4-5ee9561bf84b.json`.
+The mixed Azure/local acceptance test has not been provisioned yet.
+
+At the owner's request, the existing local lab and standalone enrollment test
+VMs were shut down after these checks. Preserve their disks, PKI, kubeconfig and
+reports. API reachability is not expected while the lab is stopped.
