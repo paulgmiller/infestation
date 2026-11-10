@@ -392,71 +392,6 @@ func TestAPILoadBalancer(t *testing.T) {
 	}
 }
 
-func TestGatewayLoadBalancer(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
-			s := fixture(t, true)
-			s.APILoadBalancer, s.GatewayEnabled = true, enabled
-			s.APIDNSLabel = "test-api"
-			s.APIAdminCIDRs = []string{"198.51.100.10/32"}
-			d, err := loadDeployment(s)
-			if err != nil {
-				t.Fatal(err)
-			}
-			mocks := &mockAzure{}
-			if err := pulumi.RunErr(func(ctx *pulumi.Context) error { return deploy(ctx, d) }, pulumi.WithMocks("test", "gateway", mocks)); err != nil {
-				t.Fatal(err)
-			}
-			ports, probes, firewall := map[int]bool{}, map[int]bool{}, false
-			for _, res := range mocks.resources {
-				switch res.TypeToken {
-				case "azure-native:network:LoadBalancer":
-					for _, v := range res.Inputs["loadBalancingRules"].ArrayValue() {
-						r := v.ObjectValue()
-						port := int(r["frontendPort"].NumberValue())
-						if port == 6443 {
-							continue
-						}
-						ports[port] = true
-						if (port != 80 && port != 443) || int(r["backendPort"].NumberValue()) != port || !strings.HasSuffix(r["backendAddressPool"].ObjectValue()["id"].StringValue(), "/backendAddressPools/egress") || !r["disableOutboundSnat"].BoolValue() {
-							t.Error("gateway must pass TCP 80/443 to the all-node pool without changing egress")
-						}
-					}
-					for _, v := range res.Inputs["probes"].ArrayValue() {
-						r := v.ObjectValue()
-						if port := int(r["port"].NumberValue()); port != 6443 {
-							probes[port] = true
-						}
-					}
-				case "azure-native:network:NetworkSecurityGroup":
-					for _, v := range res.Inputs["securityRules"].ArrayValue() {
-						r := v.ObjectValue()
-						if r["name"].StringValue() != "gateway-web" {
-							continue
-						}
-						firewall = true
-						p := r["destinationPortRanges"].ArrayValue()
-						if len(p) != 2 || p[0].StringValue() != "80" || p[1].StringValue() != "443" || r["protocol"].StringValue() != "Tcp" || r["sourceAddressPrefix"].StringValue() != "*" || r["access"].StringValue() != "Allow" || r["priority"].NumberValue() >= 200 {
-							t.Error("gateway firewall must allow only web ports before the deny rule")
-						}
-					}
-				}
-			}
-			want := 0
-			if enabled {
-				want = 2
-			}
-			if len(ports) != want || len(probes) != want || firewall != enabled {
-				t.Fatalf("ports=%v probes=%v firewall=%t", ports, probes, firewall)
-			}
-			s.APILoadBalancer, s.GatewayEnabled = false, true
-			if _, err := loadDeployment(s); err == nil {
-				t.Fatal("gateway without public frontend accepted")
-			}
-		})
-	}
-}
-
 func TestTemporaryDatabaseStorage(t *testing.T) {
 	s := fixture(t, true)
 	data, err := os.ReadFile(s.ClusterPath)
@@ -616,7 +551,7 @@ func TestThreeNodeSmokePoolCapacitiesAndOwnership(t *testing.T) {
 	}
 	path := filepath.Join(root, "cluster.json")
 	writeJSON(t, path, c)
-	s := Settings{Name: "test", Location: "westus2", VMSize: "Standard_D2d_v4", FlatcarVersion: "4757.2.1", ClusterPath: path, IgnitionDir: filepath.Join(root, "output"), VNetCIDR: "192.168.0.0/16", SubnetCIDR: "192.168.1.0/24", OSDiskSizeGB: 32, APILoadBalancer: true, APIDNSLabel: "test-api", APIAdminCIDRs: []string{"0.0.0.0/0"}, Uniform: true, PrivateDNSZone: pool.Zone, APICount: 2, WorkerCount: 1, GatewayEnabled: true, CheckID: "this-test"}
+	s := Settings{Name: "test", Location: "westus2", VMSize: "Standard_D2d_v4", FlatcarVersion: "4757.2.1", ClusterPath: path, IgnitionDir: filepath.Join(root, "output"), VNetCIDR: "192.168.0.0/16", SubnetCIDR: "192.168.1.0/24", OSDiskSizeGB: 32, APILoadBalancer: true, APIDNSLabel: "test-api", APIAdminCIDRs: []string{"0.0.0.0/0"}, Uniform: true, PrivateDNSZone: pool.Zone, APICount: 2, WorkerCount: 1, CheckID: "this-test"}
 	d, err := loadDeployment(s)
 	if err != nil {
 		t.Fatal(err)
@@ -637,5 +572,57 @@ func TestThreeNodeSmokePoolCapacitiesAndOwnership(t *testing.T) {
 	}
 	if !owned || seen["api-pool"] != 2 || seen["worker-pool"] != 1 {
 		t.Fatalf("ownership=%t capacities=%v", owned, seen)
+	}
+}
+
+func TestNoPublicWebIngressKeepsExistingEgress(t *testing.T) {
+	for _, api := range []bool{false, true} {
+		t.Run(fmt.Sprintf("api=%t", api), func(t *testing.T) {
+			s := fixture(t, true)
+			s.APILoadBalancer = api
+			s.APIDNSLabel = "test-api"
+			s.APIAdminCIDRs = []string{"198.51.100.10/32"}
+			d, err := loadDeployment(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mocks := &mockAzure{}
+			if err := pulumi.RunErr(func(ctx *pulumi.Context) error { return deploy(ctx, d) }, pulumi.WithMocks("test", "no-web", mocks)); err != nil {
+				t.Fatal(err)
+			}
+			egress := false
+			for _, res := range mocks.resources {
+				switch res.TypeToken {
+				case "azure-native:network:LoadBalancer":
+					egress = len(res.Inputs["outboundRules"].ArrayValue()) == 1
+					for _, field := range []string{"loadBalancingRules", "probes"} {
+						values := res.Inputs[resource.PropertyKey(field)]
+						if values.IsNull() {
+							continue
+						}
+						for _, value := range values.ArrayValue() {
+							properties := value.ObjectValue()
+							key := "frontendPort"
+							if field == "probes" {
+								key = "port"
+							}
+							if port := properties[resource.PropertyKey(key)].NumberValue(); port == 80 || port == 443 {
+								t.Fatal("retired web rule or probe still exposed")
+							}
+						}
+					}
+				case "azure-native:network:NetworkSecurityGroup":
+					for _, value := range res.Inputs["securityRules"].ArrayValue() {
+						rule := value.ObjectValue()
+						if rule["name"].StringValue() == "gateway-web" {
+							t.Fatal("retired web firewall rule still exists")
+						}
+					}
+				}
+			}
+			if !egress {
+				t.Fatal("web ingress cleanup removed required legacy egress")
+			}
+		})
 	}
 }

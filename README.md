@@ -1,22 +1,23 @@
 # Infestation
 
-Infestation provisions Flatcar VMs running host-level CockroachDB and K3s, with
-Cilium networking. It is one Go module with a shared configuration, PKI,
-Ignition, planning, and bootstrap implementation for Azure and local QEMU/KVM.
+Current priorities: [overall TODO](TODO.md); detailed [networking review](docs/networking-todo.md).
 
-Three server nodes run the Kubernetes API, backed by TLS CockroachDB through
-Kine. Additional workers run the K3s agent and host CockroachDB by default;
-`"cockroachdb": false` opts a node out. Cockroach starts independently of
-Kubernetes and stores its data outside pods. New profiles disable kube-proxy and use Cilium for Service routing; Flannel,
-Traefik, ServiceLB, embedded etcd, and SQLite are not used.
+Infestation provisions Flatcar VMs running host-level CockroachDB and K3s over
+Tailscale. The tested static path uses native K3s Tailscale/Flannel networking,
+kube-proxy and CoreDNS. Nodes need outbound connectivity, with no connected
+underlay or public ingress requirement. Cockroach runs outside Kubernetes and
+backs the API through Kine; SQLite and embedded etcd are not substitutes.
 
-This is a tested prototype, not a production-ready operations platform. The
-2026-10-27 Azure Uniform VMSS deployment completed fresh first boot through the
-CLI, scaled from one to two workers, and passed all 20 directed DNS/service
-checks across five nodes. Cockroach reported five live members in three zones
-with zero unavailable or under-replicated ranges. Fault/recovery drills remain
-untested. See the [Azure runbook](infra/azure/RUNBOOK.md) for test
-resource groups and evidence. Local QEMU VMs remain stopped with storage preserved.
+This is a tested prototype. The [mixed local/Azure test](docs/mixed-cluster.md)
+verified three Ready nodes, three healthy database members, all six directed
+DNS/HTTP checks and tailnet SSH kubeconfig retrieval after documented repairs.
+The test machines are torn down; private local disks and evidence are preserved.
+Unattended fresh provisioning and failure-recovery remain unverified.
+
+The older Pulumi Azure/VMSS workflow still uses Cilium, Blob-backed bootstrap,
+private DNS and public API/egress networking. Its remaining migration is tracked
+in [TODO.md](TODO.md). Public Cilium Gateway support has been removed. Existing
+Pulumi project IDs and state must be preserved during that cleanup.
 
 ## Build and test
 
@@ -93,14 +94,18 @@ docs/                       architecture, migration notes, historical lab record
 `internal/` is intentional: these packages are implementation details of the
 Infestation binary and its infrastructure programs, rather than a public Go SDK.
 
-Cilium bootstraps against the direct API endpoint instead of a Kubernetes
-Service IP. Azure profiles use the public API load balancer on TCP 6443.
-`azure plan --gateway` optionally adds TCP 80/443 forwarding to host-network
-Cilium Gateway listeners; see the [gateway example](infra/azure/README.md#optional-public-cilium-gateway).
-The 2026-10-27 gateway experiment verified four Ready nodes, all 12 directed
-DNS/Service checks and public HTTP 200 through Envoy. It required an in-place
-worker startup repair, so it does not establish unattended fresh bootstrap in
-this mode. See the [runbook](infra/azure/RUNBOOK.md#2026-10-27-cilium-replacement-and-public-httpbin-gateway).
+The tested egress-only path uses host Tailscale and K3s's native Tailscale/Flannel
+integration, with kube-proxy restored. The older Pulumi Azure profiles still use
+Cilium and a public API endpoint; their migration and Blob dependency removal
+are tracked in [TODO.md](TODO.md).
+
+The optional public Cilium Gateway path has been retired: `--gateway`,
+`smoke --public-url`, the Gateway examples and Azure web forwarding/probes are
+removed. Existing stacks with `gatewayEnabled: true` are rejected until that
+setting is deliberately removed after reviewing the resource changes. This
+source cleanup does not apply changes to existing cloud resources. The
+[2026-10-27 experiment](infra/azure/RUNBOOK.md#2026-10-27-cilium-replacement-and-public-httpbin-gateway)
+remains historical evidence, not a current deployment workflow.
 
 ## Shared node preparation
 
@@ -174,7 +179,8 @@ Ignition only; retiring an existing host advertisement requires an explicit
 `tailscale serve drain svc:k8s-api` (then clearing its configuration after draining).
 Default routing provides active/passive failover, not per-request balancing.
 
-No live API TailVIP has been provisioned or tested by these changes.
+The mixed local/Azure test verified this API Service endpoint with Kubernetes
+TLS validation. Readiness-aware withdrawal and failure/recovery remain untested.
 See [Tailscale Services](https://tailscale.com/docs/features/tailscale-services),
 [TCP forwarding](https://tailscale.com/docs/reference/tailscale-cli/serve#use-a-tcp-forwarder),
 and [route selection](https://tailscale.com/docs/features/route-selection).
@@ -183,9 +189,10 @@ The [networking checkpoint](docs/networking-plan.md) records the selected
 egress-only design: host-level Tailscale on every Flatcar node, K3s's native
 Tailscale/Flannel extension integration replacing Cilium, kube-proxy restored,
 and Cloudflare Tunnel replicas for public web ingress. No shared VNet/VPC or
-inbound node connectivity is required by that target design. Those changes remain
-planned: current Cilium, kube-proxy replacement, and provider networking defaults
-are preserved. The API TailVIP option is independent of that transition.
+inbound node connectivity is required. Host networking, kube-proxy and API access
+were verified in the static mixed test after repairs. Public web ingress is still
+planned. The older Pulumi provider retains Cilium and its networking until the
+remaining migration in [TODO.md](TODO.md) is completed.
 
 ## Deploy
 
@@ -239,13 +246,9 @@ pair of configured nodes. It is an explicit workload test, not a read-only check
 Each invocation creates fresh check jobs instead of reusing completed results;
 finished jobs expire after one hour.
 
-To include requests from the workstation through the public load balancer and
-Cilium Gateway, add `--public-url http://YOUR_LB_HOSTNAME`. This creates a smoke
-Gateway listening on host port 80 and one route to each node's existing test
-server, and checks HTTP 200 plus the exact node response. Gateway API CRDs,
-Cilium host-network Gateway support, and public LB port-80 forwarding must
-already be configured. Use a test cluster where another Gateway does not own
-host port 80. Test resources remain in `infestation-smoke` until removed.
+For a Tailscale cluster, add `--tailnet-latency` to record directed host RTTs and
+paths alongside the pod DNS/HTTP checks. Public Cilium Gateway checks have been
+removed; public ingress is a separate follow-up design.
 
 For a disposable Azure provision/smoke/teardown cycle:
 
@@ -259,8 +262,8 @@ The check defaults to Flatcar `4757.2.1`, CockroachDB `v26.2.7`, and K3s
 `--k3s-version`; omitted versions keep their pinned defaults.
 
 This opt-in command provisions **three VMs: two API nodes and one worker**, all
-hosting CockroachDB. It enables Gateway support, runs six directed internal
-checks and three public HTTP checks, then removes its own tagged resource group
+hosting CockroachDB. It runs six directed internal DNS/ClusterIP HTTP checks,
+then removes its own tagged resource group
 and verifies its absence. Cleanup is attempted on provisioning/test failure and
 cancellation with a separate ten-minute deadline; failures are returned along
 with the test error. Local private state and `check.log` remain under a fresh
@@ -284,5 +287,6 @@ is archived; its retired Python commands are not the current workflow.
 Still to design/test: coordinated Flatcar/database maintenance, backups and
 restore, replacement identities and K3s registration, repeated disk-loss recovery,
 application database persistence, and production sizing. Tailscale pod-network
-integration and managed AKS/GKE/EKS are outside the current implementation; the
-optional API TailVIP requires separately installed and enrolled Tailscale hosts.
+integration is verified only within the documented prototype limits. Managed
+AKS/GKE/EKS remain outside this implementation. See [TODO.md](TODO.md) for the
+current priorities and the remaining legacy-provider cleanup.

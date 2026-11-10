@@ -122,8 +122,9 @@ in every server certificate. New profiles disable K3s kube-proxy and enable
 Cilium's replacement, with Cilium connecting to that public DNS name on 6443.
 The NSG allows the cluster's outbound public IP to reach TCP 6443 independently
 of the operator CIDR allowlist. Cilium's bootstrap Helm job uses the local API
-and host networking. Add `--gateway` during planning to forward ports 80/443;
-install the optional Gateway resources as described below.
+and host networking. The optional public Gateway path is retired; this legacy
+provider now retains API/egress rules only. See [the overall TODO](../../TODO.md)
+for the remaining Tailscale/Blob migration.
 
 The gateway experiment verified four Ready nodes with replacement enabled,
 12 directed DNS/Service checks and public HTTP 200 through Envoy. It required
@@ -135,36 +136,16 @@ without coordinating Cilium configuration and allowing for connection disruption
 See [Cilium's K3s guide](https://docs.cilium.io/en/stable/installation/k3s/) and
 [kube-proxy replacement requirements](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/).
 
-## Optional public Cilium Gateway
+## Retired public Cilium Gateway
 
-Create a fresh plan with `azure plan --gateway` to add TCP 80/443 forwarding
-on the existing public load balancer, using the all-node backend pool and
-separate TCP listener probes. The API stays on 6443. Pulumi owns these rules;
-Azure CCM is not required. Without the flag, application ports remain closed.
-
-After the deployment is ready, install the pinned Gateway API CRDs, configure
-Cilium host-network listeners, and deploy the example HTTP service:
-
-```sh
-kubectl --kubeconfig state/NAME/kubeconfig apply --server-side -f \
-  https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.3/standard-install.yaml
-kubectl --kubeconfig state/NAME/kubeconfig apply -f examples/cilium-gateway.yaml
-# Wait for the K3s Helm job to finish, then reload agent/operator configuration.
-kubectl --kubeconfig state/NAME/kubeconfig -n kube-system rollout restart ds/cilium deployment/cilium-operator
-kubectl --kubeconfig state/NAME/kubeconfig -n kube-system rollout status ds/cilium
-kubectl --kubeconfig state/NAME/kubeconfig -n kube-system rollout status deployment/cilium-operator
-kubectl --kubeconfig state/NAME/kubeconfig apply -f examples/httpbin-gateway.yaml
-kubectl --kubeconfig state/NAME/kubeconfig -n httpbin rollout status deployment/httpbin
-curl --fail http://NAME-api.westus2.cloudapp.azure.com/get
-```
-
-The example is public HTTP on port 80. Port 443 forwards to the gateway nodes
-but needs an HTTPS listener and certificate before it can serve HTTPS. The
-Gateway binds the host ports on all nodes; its namespace only accepts routes
-from that same namespace. Host-network Gateway mode does not request another
-Azure load balancer. The example HelmChartConfig preserves the default Envoy
-capabilities and adds the capability required to bind ports below 1024.
-[Cilium host-network documentation](https://docs.cilium.io/en/stable/network/servicemesh/gateway-api/gateway-api/#host-network-mode).
+The public web Gateway path, examples, `azure plan --gateway`, and
+`smoke --public-url` are removed. The old experiment remains in the historical
+[runbook](RUNBOOK.md#2026-10-27-cilium-replacement-and-public-httpbin-gateway).
+Existing stack configuration with `gatewayEnabled: true` is rejected before
+resource registration. Review a preview and deliberately remove that setting
+when ready to retire its TCP 80/443 rules, probes and web firewall rule. API
+TCP 6443 and required legacy outbound rules are not removed by this cleanup.
+No live stack migration is performed automatically.
 
 ## Retrieve the kubeconfig
 

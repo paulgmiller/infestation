@@ -23,7 +23,6 @@ import (
 )
 
 const ownershipTag = "infestation-check-id"
-const gatewayCRDs = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.3/standard-install.yaml"
 
 func Run(ctx context.Context, o Options) (err error) {
 	o, err = o.withDefaults()
@@ -76,7 +75,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	}
 	planDir := filepath.Join(state, "plan")
 	plan, err := azureplan.Create(ctx, quiet, azureplan.Options{
-		Name: name, Location: o.Location, ClusterPath: input, OutputDir: planDir, SKUsFile: o.SKUsFile, RatesFile: o.RatesFile, GatewayEnabled: true,
+		Name: name, Location: o.Location, ClusterPath: input, OutputDir: planDir, SKUsFile: o.SKUsFile, RatesFile: o.RatesFile,
 		Constraints: azureplan.Constraints{MinVCPUs: 2, MinMemoryGiB: 8, MinUsableDiskGiB: 64, IncludeBurstable: true},
 	})
 	if err != nil {
@@ -98,16 +97,13 @@ func Run(ctx context.Context, o Options) (err error) {
 		fmt.Fprintln(o.Log, "Provision:", group, "(two API nodes, one worker; all three host CockroachDB)")
 		return deploy.Azure(ctx, deploy.Options{RepoRoot: o.RepoRoot, PlanDir: planDir, Stack: "check" + strings.ReplaceAll(id[:12], "-", ""), FlatcarVersion: o.FlatcarVersion, Yes: true, Log: o.Log})
 	}, func(ctx context.Context) error {
-		fmt.Fprintln(o.Log, "Smoke: internal DNS/Services and public LB/Cilium Gateway")
+		fmt.Fprintln(o.Log, "Smoke: internal DNS and cross-node ClusterIP HTTP")
 		kube := filepath.Join(planDir, "kubeconfig")
-		if err := enableGateway(ctx, runner, o.RepoRoot, kube); err != nil {
-			return err
-		}
 		c, err := cluster.Load(filepath.Join(planDir, "cluster.json"))
 		if err != nil {
 			return err
 		}
-		return smoke.Run(ctx, runner, c, planDir, kube, smoke.Options{PublicURL: "http://" + name + "-api." + o.Location + ".cloudapp.azure.com", Log: o.Log})
+		return smoke.Run(ctx, runner, c, planDir, kube, smoke.Options{Log: o.Log})
 	}, func(ctx context.Context) error {
 		fmt.Fprintln(o.Log, "Teardown:", group)
 		if err := cleanup(ctx, quiet, plan.SubscriptionID, group, id); err != nil {
@@ -145,28 +141,6 @@ func cycle(ctx context.Context, provision, test, teardown func(context.Context) 
 		return err
 	}
 	return test(ctx)
-}
-
-func enableGateway(ctx context.Context, runner executil.Runner, repo, kube string) error {
-	run := func(args ...string) error {
-		return runner.Run(ctx, "kubectl", append([]string{"--kubeconfig", kube}, args...)...).Err("enable Cilium Gateway")
-	}
-	commands := [][]string{
-		{"apply", "--server-side", "-f", gatewayCRDs},
-		{"apply", "-f", filepath.Join(repo, "examples", "cilium-gateway.yaml")},
-		{"-n", "kube-system", "wait", "--for=jsonpath={.data.enable-gateway-api}=true", "configmap/cilium-config", "--timeout=300s"},
-		{"-n", "kube-system", "wait", "--for=condition=complete", "job/helm-install-cilium", "--timeout=300s"},
-		{"-n", "kube-system", "rollout", "restart", "daemonset/cilium", "deployment/cilium-operator"},
-		{"-n", "kube-system", "rollout", "status", "daemonset/cilium", "--timeout=300s"},
-		{"-n", "kube-system", "rollout", "status", "deployment/cilium-operator", "--timeout=300s"},
-		{"-n", "kube-system", "rollout", "status", "daemonset/cilium-envoy", "--timeout=300s"},
-	}
-	for _, args := range commands {
-		if err := run(args...); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func groupExists(ctx context.Context, r executil.Runner, subscription, group string) (bool, error) {

@@ -5,22 +5,19 @@ providers. The inventory describes roles, addresses, datastore participation,
 locality, and TLS SANs. Provider settings describe VM sizes, storage, networks,
 firewall rules, and placement. Credentials are per-node, not VMSS-wide secrets.
 
-CockroachDB is a systemd-managed host Docker container. Each K3s server connects
-through Kine to its configured TLS SQL endpoint. Workers run agents and host the
-database by default. Cilium is installed after the Kubernetes API becomes ready;
-new profiles disable kube-proxy and enable Cilium's replacement. Cilium connects
-to the direct API endpoint, never the Kubernetes Service VIP during bootstrap.
-Azure uses the public API load balancer on 6443; local/static profiles use their
-configured API endpoint or a server address. The bootstrap Helm job uses host
-networking and the local API. Ports 80/443 are reserved for future gateway use;
-the optional Azure `--gateway` plan flag adds LB forwarding, and the example
-HelmChartConfig/Gateway manifests enable the listeners.
+CockroachDB is a systemd-managed host Docker container, with each K3s server
+using Kine over TLS. The tested egress-only path installs host Tailscale, builds
+its helper in a pinned Go container, and uses K3s's native Tailscale/Flannel
+integration with kube-proxy and CoreDNS. Nodes require outbound connectivity,
+not a connected underlay or public API load balancer. The mixed local/Azure
+prototype and its repair/verification limits are in [the runbook](mixed-cluster.md).
 
-The 2026-10-27 gateway experiment verified Cilium replacement on four nodes,
-12 directed DNS/Service checks, and public HTTP through Envoy. It required a
-worker startup repair: `disable-kube-proxy` is a server-only K3s flag; agents
-inherit that setting. Reboot, gateway failover and a clean unattended fresh
-bootstrap with the corrected profiles remain unverified.
+The older Azure Pulumi/VMSS profiles still install Cilium and use Blob-backed
+bootstrap/discovery and public API/egress infrastructure. Their migration is
+explicitly tracked in [TODO.md](../TODO.md); source cleanup must preserve stack
+identity and database initialization guards. Public Cilium Gateway examples,
+web probes/forwarding/firewall rules and the public smoke path are retired. The
+2026-10-27 Gateway experiment remains historical evidence in the Azure runbook.
 
 Go packages under `internal/provider` own Pulumi resource lifecycle. Planning
 resolves prices, quota and zones once and saves the result; subsequent previews
@@ -42,6 +39,6 @@ architecture because they own their Kubernetes control planes.
 `infestation azure check` is an opt-in disposable lifecycle check. Its explicit
 `smoke_test` topology uses two API servers plus a database-hosting worker, while
 normal clusters retain three API servers. It uses the shared deployment and
-smoke packages, verifies public HTTP via Cilium Gateway, and deletes only its
+smoke packages, verifies directed internal DNS/HTTP checks, and deletes only its
 fresh, ownership-tagged resource group. The command has local tests; its full
 three-node Azure cycle remains unverified. It does not implement upgrades.

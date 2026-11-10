@@ -251,7 +251,6 @@ type Options struct {
 	Location, Name, ClusterPath, OutputDir, SKUsFile, RatesFile string
 	AdminCIDRs, APICIDRs                                        []string
 	Constraints                                                 Constraints
-	GatewayEnabled                                              bool
 }
 
 // LocalDefaults resolves workstation inputs without Azure calls or filesystem writes.
@@ -335,9 +334,6 @@ func Create(ctx context.Context, runner executil.Runner, o Options) (Plan, error
 	c, settings, err := Resolve(c, candidates[0], o.Name, o.Location, o.AdminCIDRs, o.APICIDRs, o.Constraints.MinUsableDiskGiB)
 	if err != nil {
 		return p, err
-	}
-	if o.GatewayEnabled {
-		settings["gatewayEnabled"] = true
 	}
 	p = Plan{time.Now().UTC().Format(time.RFC3339), account.ID, candidates[0], candidates[1:min(len(candidates), 6)], o.Constraints, settings}
 	if err = os.MkdirAll(filepath.Dir(o.OutputDir), 0700); err != nil {

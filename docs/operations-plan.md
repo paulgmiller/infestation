@@ -1,5 +1,9 @@
 # Agreed operations design
 
+Current priorities are tracked in [TODO.md](../TODO.md). This older design
+contains Azure Blob/Cilium assumptions awaiting migration; do not treat them
+as requirements of the tested static Tailscale path.
+
 Decisions from the 2026-10-26 architecture interview. This is a target design;
 the implementation status below distinguishes it from deployed behavior.
 
@@ -73,7 +77,9 @@ New generated profiles disable kube-proxy and configure Cilium replacement
 against the public API LB on 6443. This supersedes the kube-proxy-enabled baseline
 for future profiles. The gateway experiment verified four Ready nodes, all
 12 directed DNS/Service checks and public HTTP through Envoy, after an in-place
-worker startup repair. `--gateway` optionally adds shared-LB 80/443 forwarding.
+worker startup repair. That optional public Gateway path is now retired; the
+2026-10-27 results are historical. See [the overall TODO](../TODO.md) for current
+cleanup and the tested Tailscale replacement.
 A clean unattended first boot and reboot/failure recovery remain unverified.
 Existing deployments are not automatically migrated.
 

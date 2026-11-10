@@ -1,5 +1,10 @@
 > Historical smoke-test record. The project is now the root Go module; see [migration notes](../../docs/migration.md) for current commands and preserved state.
 
+Historical record: the public Cilium Gateway examples and CLI path described in
+the 2026-10-27 experiment were removed during cleanup. See [TODO.md](../../TODO.md)
+for current priorities; old commands here are not current deployment instructions.
+
+
 # Azure smoke deployment, 2026-10-25
 
 The current [deployment guide](README.md) supersedes this historical NAT Gateway

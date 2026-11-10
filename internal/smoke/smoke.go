@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"path/filepath"
 	"sort"
-	"time"
 
 	"infestation/internal/cluster"
 	"infestation/internal/executil"
@@ -68,17 +67,9 @@ func Run(ctx context.Context, runner executil.Runner, c cluster.Config, state, k
 	if opt.TailnetLatency && c.Tailscale == nil {
 		return fmt.Errorf("--tailnet-latency requires Tailscale cluster configuration")
 	}
-	if opt.PublicURL != "" {
-		if _, err := publicURL(opt.PublicURL); err != nil {
-			return err
-		}
-	}
 	// Fresh Job identities ensure a rerun cannot reuse previously completed results.
 	runID := uuid.NewString()
 	doc, jobs := manifest(c, runID)
-	if opt.PublicURL != "" {
-		doc["items"] = append(doc["items"].([]any), publicResources(c, runID)...)
-	}
 	path := filepath.Join(state, "smoke-"+runID+".json")
 	if err := fsutil.WriteJSON(path, doc); err != nil {
 		return err
@@ -104,14 +95,6 @@ func Run(ctx context.Context, runner executil.Runner, c cluster.Config, state, k
 		if err := recordLatency(ctx, runner, c, state, kubeconfig, runID, opt.Log); err != nil {
 			return err
 		}
-	}
-	if opt.PublicURL != "" {
-		if err := run("-n", Namespace, "wait", "--for=condition=Programmed", "gateway/smoke-public", "--timeout=180s"); err != nil {
-			return err
-		}
-		publicCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		defer cancel()
-		return checkPublic(publicCtx, opt.PublicURL, runID, c.Nodes, opt.Log)
 	}
 	return nil
 }

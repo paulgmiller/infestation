@@ -288,7 +288,6 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		flags.Float64Var(&o.Constraints.MinMemoryGiB, "min-memory-gib", 8, "minimum RAM GiB")
 		flags.IntVar(&o.Constraints.MinUsableDiskGiB, "min-disk-gib", 64, "minimum database filesystem GiB")
 		exclude := flags.Bool("exclude-burstable", false, "exclude B-series VMs")
-		flags.BoolVar(&o.GatewayEnabled, "gateway", false, "forward public TCP 80/443 to Cilium host-network Gateway listeners")
 		var admin, api list
 		flags.Var(&admin, "admin-cidr", "API/admin source CIDR (repeatable; default 0.0.0.0/0)")
 		flags.Var(&api, "api-cidr", "API source CIDR override (defaults to admin ranges)")
@@ -344,7 +343,6 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		portable()
 		kube := flags.String("kubeconfig", "", "admin kubeconfig path")
 		tailnetLatency := flags.Bool("tailnet-latency", false, "record ten Tailscale pings per directed node pair, including path and latency")
-		publicURL := flags.String("public-url", "", "also test HTTP through the public LB and Cilium host-network Gateway")
 		if err := parse(flags, args); err != nil {
 			return help(err)
 		}
@@ -355,7 +353,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		if *kube == "" {
 			*kube = filepath.Join(state, "kubeconfig")
 		}
-		return smoke.Run(ctx, executil.OSRunner{Output: out}, c, state, *kube, smoke.Options{PublicURL: *publicURL, TailnetLatency: *tailnetLatency, Log: out})
+		return smoke.Run(ctx, executil.OSRunner{Output: out}, c, state, *kube, smoke.Options{TailnetLatency: *tailnetLatency, Log: out})
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

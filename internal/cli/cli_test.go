@@ -128,3 +128,13 @@ func TestAzureCheckRejectsUnpinnedImageBeforeDiscovery(t *testing.T) {
 		}
 	}
 }
+
+func TestRetiredPublicGatewayFlagsFailBeforeSideEffects(t *testing.T) {
+	for _, args := range [][]string{{"azure", "plan", "--gateway"}, {"smoke", "--public-url", "http://example.test"}} {
+		var out bytes.Buffer
+		err := Run(context.Background(), args, &out)
+		if err == nil || !strings.Contains(out.String()+err.Error(), "flag provided but not defined") {
+			t.Fatalf("retired flag accepted: %v: %v", args, err)
+		}
+	}
+}

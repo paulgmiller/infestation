@@ -27,7 +27,6 @@ type Settings struct {
 	OSDiskSizeGB                           int
 	OSDiskStorageAccountType               string
 	APILoadBalancer                        bool
-	GatewayEnabled                         bool
 	CheckID                                string
 	APIDNSLabel                            string
 	APIAdminCIDRs                          []string
@@ -79,9 +78,6 @@ type ignitionDocument struct {
 }
 
 func loadDeployment(s Settings) (*Deployment, error) {
-	if s.GatewayEnabled && !s.APILoadBalancer {
-		return nil, fmt.Errorf("gatewayEnabled requires apiLoadBalancer for the shared public frontend")
-	}
 	if s.OSDiskStorageAccountType == "" {
 		s.OSDiskStorageAccountType = "StandardSSD_LRS"
 	}

@@ -21,6 +21,9 @@ func Run() {
 			}
 			return fallback
 		}
+		if cfg.GetBool("gatewayEnabled") {
+			return fmt.Errorf("gatewayEnabled was retired; review removal of the legacy Cilium web ingress before updating this stack")
+		}
 		s := Settings{
 			Uniform: cfg.GetBool("uniform"), PrivateDNSZone: cfg.Get("privateDNSZone"), APICount: cfg.GetInt("apiCount"), WorkerCount: cfg.GetInt("workerCount"),
 			Name: get("name", "flatcar-"+ctx.Stack()), Location: get("location", "westus2"),
@@ -30,7 +33,6 @@ func Run() {
 			OSDiskSizeGB:             32,
 			OSDiskStorageAccountType: get("osDiskStorageAccountType", "StandardSSD_LRS"),
 			APILoadBalancer:          cfg.GetBool("apiLoadBalancer"),
-			GatewayEnabled:           cfg.GetBool("gatewayEnabled"),
 			CheckID:                  cfg.Get("checkID"),
 			OutboundPortsPerNode:     1024,
 		}
@@ -127,13 +129,6 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 				DestinationPortRange: pulumi.String("6443"), SourceAddressPrefix: pulumi.String("AzureLoadBalancer"), DestinationAddressPrefix: pulumi.String("*"),
 			})
 	}
-	if s.GatewayEnabled {
-		rules = append(rules, &network.SecurityRuleTypeArgs{
-			Name: pulumi.String("gateway-web"), Priority: pulumi.Int(140), Direction: pulumi.String("Inbound"),
-			Access: pulumi.String("Allow"), Protocol: pulumi.String("Tcp"), SourcePortRange: pulumi.String("*"),
-			DestinationPortRanges: pulumi.ToStringArray([]string{"80", "443"}), SourceAddressPrefix: pulumi.String("*"), DestinationAddressPrefix: pulumi.String("*"),
-		})
-	}
 	// Azure returns etags for inline rules; they are server-managed metadata.
 	nsg, err := network.NewNetworkSecurityGroup(ctx, "nodes", &network.NetworkSecurityGroupArgs{
 		NetworkSecurityGroupName: pulumi.String(s.Name + "-nodes"), ResourceGroupName: rg.Name, Location: location, SecurityRules: rules,
@@ -188,19 +183,6 @@ func deploy(ctx *pulumi.Context, d *Deployment) error {
 				Probe:                   &network.SubResourceArgs{Id: pulumi.Sprintf("%s/probes/api", lbID)},
 				DisableOutboundSnat:     pulumi.Bool(true), EnableTcpReset: pulumi.Bool(true), IdleTimeoutInMinutes: pulumi.Int(30),
 			}}
-		}
-		if s.GatewayEnabled {
-			for _, port := range []int{80, 443} {
-				name := fmt.Sprintf("gateway-%d", port)
-				probes = append(probes, &network.ProbeArgs{Name: pulumi.String(name), Protocol: pulumi.String("Tcp"), Port: pulumi.Int(port), IntervalInSeconds: pulumi.Int(5), NumberOfProbes: pulumi.Int(2)})
-				apiRules = append(apiRules, &network.LoadBalancingRuleArgs{
-					Name: pulumi.String(name), Protocol: pulumi.String("Tcp"), FrontendPort: pulumi.Int(port), BackendPort: pulumi.Int(port),
-					FrontendIPConfiguration: &network.SubResourceArgs{Id: pulumi.Sprintf("%s/frontendIPConfigurations/public", lbID)},
-					BackendAddressPool:      &network.SubResourceArgs{Id: pulumi.Sprintf("%s/backendAddressPools/egress", lbID)},
-					Probe:                   &network.SubResourceArgs{Id: pulumi.Sprintf("%s/probes/%s", lbID, name)},
-					DisableOutboundSnat:     pulumi.Bool(true), EnableTcpReset: pulumi.Bool(true), IdleTimeoutInMinutes: pulumi.Int(30),
-				})
-			}
 		}
 		frontends := network.FrontendIPConfigurationArray{&network.FrontendIPConfigurationArgs{Name: pulumi.String("public"), PublicIPAddress: &network.PublicIPAddressTypeArgs{Id: ip.ID()}}}
 
