@@ -1,8 +1,9 @@
 # Egress-only K3s networking checkpoint
 
 Last updated: 2026-11-10 (local date). The isolated three-VM Tailscale cluster and
-private API TailVIP are **deployed and verified** as described below. Azure
-migration and API failover drills remain unverified.
+private API TailVIP are **deployed and verified** as described below. The static mixed local/Azure prototype also passed after repairs; see
+[the mixed test record](mixed-cluster.md). The older Azure VMSS migration,
+unattended fresh mixed bootstrap, and API failover drills remain unverified.
 
 After merging origin/master's Go migration, `internal/cluster` accepts optional
 `api_tailnet_hostname`. `internal/ignition` adds the shared SAN and a host-level
@@ -488,7 +489,7 @@ Before claiming the design reliable:
 - [Cloudflare Tunnel redundancy](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/tunnel-availability/)
 
 
-## Next acceptance test: two local VMs and one Azure VM
+## Mixed acceptance test: selected scope and completed prototype
 
 Create a fresh three-server cluster with two independent local QEMU NAT VMs
 and one Azure VM, all running Flatcar, CockroachDB and K3s. Their only shared
@@ -501,11 +502,10 @@ plus the required networking and the existing tailnet/source/container services.
 Preserve the existing local lab and its credentials.
 
 Use the source-container helper build and tailnet SSH/local kubeconfig delivery
-outlined above. Before provisioning, replace the cloud Blob bootstrap dependency
-with an explicitly reviewed durable initialization guard; the existing local
-single-initializer behavior is not evidence of replacement safety. Use a unique
-API Service and disjoint pod/service CIDRs when running alongside the current
-lab, so the test does not mix API backends or compete for subnet routes.
+outlined above. The static test uses the existing persistent-disk guard on the local initializer;
+this is not evidence of replacement safety. At the owner's request it reuses
+`svc:k8s-api` while the old cluster remains stopped. Concurrent clusters require
+separate Services and disjoint ranges; do not resume the old advertisements.
 
 Acceptance evidence: three Ready API nodes, healthy Cockroach members and zero
 unavailable/under-replicated ranges after convergence, all six directed pod DNS
@@ -553,8 +553,27 @@ ping jobs returned 10/10 samples. Every sample used `DERP(sea)` in this run.
 With ten samples, nearest-rank p95 equals the maximum; this is a short diagnostic
 baseline, not a performance characterization. Private raw evidence is retained
 in `state/vms/tail3-1109/tailnet-latency-b584d14c-5fab-407f-9ae4-5ee9561bf84b.json`.
-The mixed Azure/local acceptance test has not been provisioned yet.
+The subsequent mixed Azure/local test is recorded in [mixed-cluster.md](mixed-cluster.md).
 
 At the owner's request, the existing local lab and standalone enrollment test
 VMs were shut down after these checks. Preserve their disks, PKI, kubeconfig and
 reports. API reachability is not expected while the lab is stopped.
+
+
+### Mixed test completion, 2026-11-10
+
+`mix-1110` is running with two local KVM/SLIRP VMs and one Azure westus2 VM.
+Three API endpoints and three Ready nodes passed verification. All six directed
+DNS/ClusterIP checks and 60/60 Tailscale ping samples completed; cross-cloud pings
+were direct, median 8 ms. CockroachDB has three live/available members with zero
+unavailable or under-replicated ranges. Kubeconfig copied over Tailscale SSH from
+Azure works through the existing `k8s-api` Service. The resource group has only a
+VM, disk, NIC, VNet/subnet and NSG; no storage account or public IP assignment.
+
+This required live DNS and publisher-path repairs, plus Azure API/profile and
+local retry fixes. The Azure VM reboot was premature; logs later proved join
+retries were working and container DNS was wrong. The generator now sets
+Cockroach container DNS to Quad100 in Tailscale profiles. This is a repaired
+prototype, not a clean unattended bootstrap or recovery proof. The former lab
+remains stopped. See [the full runbook and findings](mixed-cluster.md) before
+reusing either cluster. Stop feature expansion here for the requested review.

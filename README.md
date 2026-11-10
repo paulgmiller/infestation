@@ -21,6 +21,8 @@ resource groups and evidence. Local QEMU VMs remain stopped with storage preserv
 ## Build and test
 
 For a single Tailscale VM, see [Create a VM on a friend's tailnet](docs/friend-vm.md).
+The [mixed local/Azure test](docs/mixed-cluster.md) verified two local VMs and one
+Azure VM over Tailscale without Blob Storage, after documented prototype repairs.
 The [three-node cluster runbook](docs/isolated-vm-cluster.md) creates independent
 NAT VMs running CockroachDB and K3s over Tailscale. The 2026-11-09 test verified
 three Ready nodes, three healthy database members and all six directed
