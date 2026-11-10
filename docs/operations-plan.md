@@ -1,98 +1,59 @@
-# Agreed operations design
+# Operations goals
 
-Current priorities are tracked in [TODO.md](../TODO.md). This older design
-contains Azure Blob/Cilium assumptions awaiting migration; do not treat them
-as requirements of the tested static Tailscale path.
+These are operating targets and open decisions, not demonstrated guarantees.
+Current work is tracked in [TODO.md](../TODO.md); the system goals are in
+[goals.md](goals.md).
 
-Decisions from the 2026-10-26 architecture interview. This is a target design;
-the implementation status below distinguishes it from deployed behavior.
+## Availability and recovery targets
 
-- Small persistent application clusters; QEMU is the local test environment.
-  Complete Azure first, retaining the shared Go design for AWS/Google Cloud VMs.
-- Kubernetes and CockroachDB must survive losing one availability zone.
-  Applications need zone-spread placement and sufficient remaining capacity.
-- After losing two zones or a region, an operator triggers recovery into a
-  different region without pre-created compute/networking. Target: all logical
-  Cockroach databases restored and cluster ready within one hour, up to fifteen
-  minutes of data loss. Data size and demonstrated recovery throughput are TBD.
-  The `kubernetes` Kine database is included, along with matching K3s recovery
-  inputs. No other database engines are in scope.
-- One coordinated recovery restores the databases together and holds
-  applications until their databases are ready. Parallelism is an implementation
-  detail; database consistency must be preserved.
-- Backups go to region-redundant Blob Storage in the cluster resource group,
-  with one day of recovery-point retention. Protect the account against deletion.
-  Preserve complete backup-chain dependencies required by retained restore points.
-  Backup cadence and cross-region replication lag together determine achievable
-  data loss; a fifteen-minute schedule alone is insufficient evidence.
-- Recovery configuration/secrets also live in protected storage so recovery does
-  not depend on the original workstation. Operators obtain cloud access through
-  the provider portal. The kubeconfig has a CLI fetch command.
-- Region-qualified API and application endpoints. No automatic DNS changes or
-  traffic cutover: operators handle Traffic Manager/CNAMEs/routing. The one-hour
-  target ends at a healthy restored cluster and available endpoints/kubeconfig.
-- Alerting is deferred pending the user's alerting infrastructure.
-- Host Cockroach remains outside Kubernetes. Proposed host-network DaemonSet
-  stand-ins provide readiness, Service endpoints and fixed configurable scheduler
-  resource requests. Actual host controls separately constrain the DB process;
-  do not double-count its budget. Keep Kine's direct/local DB bootstrap path.
-- Initial Cockroach budget: 500m CPU request and 2 GiB memory reservation/host
-  limit, pending measurement. Allow CPU bursting with host CPU weights. Proposed
-  OS/K3s reservation is 500m CPU and 1.5 GiB memory. Application requests remain
-  optional, so their undeclared demand is not reflected in scheduling decisions.
-- No SSH or public node addresses. SSH services/sockets are masked for now;
-  later operator access through Tailscale remains to be designed.
-  The Kubernetes API remains public with TLS/authentication for now.
-- Deployment should self-bootstrap through Ignition-installed node services;
-  no external SSH runner. K3s generates its own PKI; publish the resulting
-  regional admin kubeconfig to protected storage and refresh after renewal.
-- For now the `-0` server VM (`kube-0` in the default inventory) is the only
-  initializer, regardless of inventory order. No automatic failover to another
-  initializer. A future Blob lease is a TODO; see [bootstrap design](bootstrap.md)
-  for the failure behavior and portability requirements.
-- Accept a Cockroach license secret and activate it during bootstrap. Licensing
-  eligibility, provisioning the license and ongoing renewal remain operator duties.
+- Tolerate losing one availability zone with sufficient remaining capacity for
+  Kubernetes, CockroachDB and application workloads.
+- After a larger outage, support operator-triggered recovery into another region
+  without pre-created compute/networking. The recorded target is a healthy
+  restored cluster within one hour, with at most fifteen minutes of data loss.
+  Dataset size, backup lag and measured restore throughput remain open.
+- Restore application databases and the Kine database with matching K3s recovery
+  inputs. Hold applications until their required databases are ready.
+- Keep recovery possible without the original workstation. Choose secure backup
+  and recovery-material storage without making it a normal bootstrap dependency.
+- Define backup retention, replication lag and complete backup-chain preservation.
+  The recorded retention target is one day of recovery points; cadence alone
+  does not establish an achievable recovery point.
+- Keep traffic cutover operator-controlled. Recovery targets must distinguish a
+  healthy restored cluster from external DNS/routing changes.
 
-## Implementation boundary (updated 2026-10-27)
+## Maintenance and resource ownership
 
-The Azure Uniform VMSS test completed fresh CLI-driven first boot without SSH,
-using three API servers and initially one worker. Scaling the worker pool to two
-produced five Ready Kubernetes nodes and five live Cockroach members across
-three zones. All 20 directed DNS/service checks passed. Kubeconfig publication
-and fetch, IMDS locality, temporary SQL-key cleanup, SSH masking and worker-role
-reconciliation were verified. See the [Azure runbook](../infra/azure/RUNBOOK.md)
-for evidence, limits and teardown history.
+CockroachDB remains a host service outside Kubernetes. Preserve its direct/local
+Kine bootstrap path. Define how the scheduler accounts for host database CPU and
+memory without double-counting requests and host reservations.
 
-New Azure plans use two shared role profiles, dynamic private addresses and
-`api-N` / `worker-N` identities derived from IMDS. Shared wildcard node leaf
-credentials support scale-out without a certificate enrollment service; CA and
-long-lived administrator keys stay local. A separate one-hour SQL root credential
-is in the shared API profile, used only by API instance 0; other API members
-remove their copies. The default output directory is `state/<name>`.
+Initial sizing proposals were a 500m CPU request and 2 GiB database memory budget,
+with CPU bursting, plus 500m CPU and 1.5 GiB for OS/K3s. These require measurement;
+application requests can omit demand that the scheduler then cannot account for.
+Test pressure, eviction, OOM and graceful database draining before adopting limits.
 
-Azure cloud-controller-manager is not installed. K3s ServiceLB is disabled;
-application LoadBalancer Services do not configure the Pulumi API/egress SLB.
+Updates must coordinate Flatcar reboots, K3s extensions and database upgrades one
+node at a time. A pinned source image does not prevent a later boot from applying
+an already staged OS update. Define rollback, store rejoin and compatibility
+checks before automating maintenance.
 
-New generated profiles disable kube-proxy and configure Cilium replacement
-against the public API LB on 6443. This supersedes the kube-proxy-enabled baseline
-for future profiles. The gateway experiment verified four Ready nodes, all
-12 directed DNS/Service checks and public HTTP through Envoy, after an in-place
-worker startup repair. That optional public Gateway path is now retired; the
-2026-10-27 results are historical. See [the overall TODO](../TODO.md) for current
-cleanup and the tested Tailscale replacement.
-A clean unattended first boot and reboot/failure recovery remain unverified.
-Existing deployments are not automatically migrated.
+Resource lifecycle must preserve disk ownership, CA/token and expected cluster
+identity. Never treat a missing marker, ambiguous initialization result or lost
+quorum as authorization to initialize another database. Replacement/decommission
+is a distinct operation from starting or retrying provisioning.
 
-Safe decommission/scale-in, coordinated upgrades, license activation, Cockroach
-stand-ins/host limits, backups/retention/restore, AZ failure tests and certificate-
-renewal publication remain unimplemented or unverified. Upgrade discovery changes
-are local preparation, not a tested rollout. Both Azure test resource groups were deleted and their absence verified.
-The source, private local state and test evidence remain for planning.
+## Access and observation
 
-## Open research
+Use tailnet SSH for operator access, normally `core` with sudo, and the shared
+private API Service with Kubernetes TLS validation. Publish kubeconfig locally
+and refresh it after renewal. Preserve private diagnostics without logging keys,
+auth URLs, profiles or kubeconfig contents.
 
-The user requested investigation of ephemeral container storage, external cloud
-providers, Tailscale Funnel, simpler CNI/gateway options, and coordinated automatic
-maintenance. These are questions for later design, not approvals to change the
-current baseline. The detailed backlog and additional lessons are in
-[research-questions.md](research-questions.md).
+Alerting integration remains deferred. Retain enough health, routing, latency,
+resource and lifecycle evidence to support diagnosis. Database license activation
+and renewal also need an explicit operator-owned workflow if required.
+
+The [mixed test record](mixed-cluster.md) documents current evidence and limits.
+Backup/restore, failure/replacement drills, coordinated maintenance, production
+sizing and the recovery targets above remain unverified.

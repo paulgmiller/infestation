@@ -1,44 +1,71 @@
 # Architecture
 
-Infestation shares a typed Go inventory, native PKI, and validated Ignition across
-providers. The inventory describes roles, addresses, datastore participation,
-locality, and TLS SANs. Provider settings describe VM sizes, storage, networks,
-firewall rules, and placement. Credentials are per-node, not VMSS-wide secrets.
+Infestation is intended to run on any compatible VM compute provider. QEMU and
+Azure are the current providers; they are implementations of the provisioning
+boundary, not requirements of the cluster architecture. Pulumi is the preferred
+layer for describing infrastructure, previews, resource ownership and lifecycle.
 
-CockroachDB is a systemd-managed host Docker container, with each K3s server
-using Kine over TLS. The tested egress-only path installs host Tailscale, builds
-its helper in a pinned Go container, and uses K3s's native Tailscale/Flannel
-integration with kube-proxy and CoreDNS. Nodes require outbound connectivity,
-not a connected underlay or public API load balancer. The mixed local/Azure
-prototype and its repair/verification limits are in [the runbook](mixed-cluster.md).
+## Provider contract
 
-The older Azure Pulumi/VMSS profiles still install Cilium and use Blob-backed
-bootstrap/discovery and public API/egress infrastructure. Their migration is
-explicitly tracked in [TODO.md](../TODO.md); source cleanup must preserve stack
-identity and database initialization guards. Public Cilium Gateway examples,
-web probes/forwarding/firewall rules and the public smoke path are retired. The
-2026-10-27 Gateway experiment remains historical evidence in the Azure runbook.
+A provider supplies:
 
-Go packages under `internal/provider` own Pulumi resource lifecycle. Planning
-resolves prices, quota and zones once and saves the result; subsequent previews
-do not choose a different VM or move a database node because prices changed.
-The deployment CLI invokes Pulumi and then uses the bootstrap package. Node
-provisioning and bootstrap are separate operations with explicit recovery guards.
+- A Flatcar-compatible VM with the requested architecture and resources.
+- Persistent disk and explicit storage lifecycle/ownership.
+- A way to deliver private Ignition configuration at first boot.
+- A NIC and working outbound connectivity, using whatever networking plumbing
+  that provider requires.
+- VM/disk status, start, stop and deletion operations with safe retry behavior.
 
-Azure uses individually configured Flatcar VMs in a Flexible VMSS. A Standard
-Load Balancer has separate API and all-node egress pools, sharing one frontend.
-QEMU uses the parameterized libvirt provider, with a private NAT bridge, stable
-DHCP reservations and protected copy-on-write disks. Its small in-tree Pulumi
-adapter registers the same provider parameters/resource tokens as the generated
-SDK, without making generated SDK source a build prerequisite.
+Nodes do not require a shared VNet/VPC, peering, inbound port forwarding, a
+public node address or an external ingress load balancer. A cloud can require
+its own VNet/subnet for a NIC without making that network the cluster transport.
+Egress infrastructure is provider-specific and remains an explicit design choice.
 
-AWS EC2 and Google Compute Engine need their own infrastructure packages around
-the same portable node preparation. Managed EKS/GKE/AKS would be a different
-architecture because they own their Kubernetes control planes.
+Provider implementations should be small Pulumi components around this contract.
+Cluster topology, credentials and bootstrap should not depend on a provider's
+managed identity, object storage, private DNS or remote command service.
+Existing Pulumi project IDs must remain stable so changing code does not replace
+resources or lose ownership of stored state.
 
-`infestation azure check` is an opt-in disposable lifecycle check. Its explicit
-`smoke_test` topology uses two API servers plus a database-hosting worker, while
-normal clusters retain three API servers. It uses the shared deployment and
-smoke packages, verifies directed internal DNS/HTTP checks, and deletes only its
-fresh, ownership-tagged resource group. The command has local tests; its full
-three-node Azure cycle remains unverified. It does not implement upgrades.
+## Shared node preparation
+
+The Go inventory describes node identities/roles, versions, locality, storage and
+TLS SANs. Go generates PKI, a persistent K3s token and validated Ignition. Long-lived
+administrator keys and CA signing keys stay on the workstation. Ignition installs
+configuration and systemd services; it is first-boot configuration, not continuous
+reconciliation.
+
+A pinned multiarchitecture Go container fetches an immutable source commit and
+builds the native helper on each node. It mounts only a temporary output directory.
+The helper is installed atomically and cached with its identity/checksum. Building
+runs before tailnet enrollment, using ordinary outbound internet access.
+
+Host Tailscale supplies peer connectivity. The helper enrolls the node, validates
+its identity and writes the assigned address into K3s configuration. K3s's native
+Tailscale/Flannel integration handles API-assigned PodCIDRs. kube-proxy implements
+ordinary Services and CoreDNS provides Kubernetes DNS.
+
+## Database and access
+
+CockroachDB is a TLS-enabled, systemd-managed host container outside Kubernetes.
+K3s servers connect through Kine. The selected initializer performs the guarded
+first SQL setup using a separate one-hour credential, then removes it. Its current
+persistent-disk marker does not establish safe initializer replacement.
+
+Control-plane nodes advertise a shared Tailscale API Service forwarding raw TCP
+to localhost:6443. Kubernetes retains CA/hostname validation and client authentication.
+Each server publishes a separate root-only kubeconfig. Tailnet members can retrieve
+it through Tailscale SSH; routine sessions use `core` with sudo.
+
+## Implementation boundary
+
+The tested VM CLI directly starts QEMU processes and provisions the Azure test
+through ARM and the Azure CLI. Pulumi provider packages also exist. These paths
+are not yet unified: consolidating them under Pulumi is outstanding work, not an
+already implemented provider abstraction.
+
+The [mixed test](mixed-cluster.md) proves the repaired topology can communicate
+across local and Azure networks. It does not prove unattended fresh bootstrap,
+arm64 execution, failure recovery, coordinated updates or production availability.
+See [goals](goals.md), [networking](networking-plan.md), [bootstrap](bootstrap.md)
+and [TODO.md](../TODO.md).

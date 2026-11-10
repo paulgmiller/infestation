@@ -1,12 +1,14 @@
-# Pulumi entry points
+# Infrastructure providers
 
-These small Go programs call the shared provider packages in the root Go module:
+QEMU and Azure are the current VM compute providers. The intended architecture
+supports any compatible provider through a shared VM/disk/Ignition/egress contract,
+preferably implemented with Pulumi. See [architecture](../docs/architecture.md).
 
-- [Azure](azure/README.md): `infestation/internal/provider/azure`.
-- [QEMU/KVM](qemu/README.md): `infestation/internal/provider/qemu`.
+The Pulumi entry points use the root Go module. Preserve the project IDs
+`flatcar-k3s-azure` and `flatcar-k3s-qemu` so stack ownership and resource URNs do
+not change during refactoring. No source cleanup should apply infrastructure or
+replace disks automatically.
 
-The Pulumi project IDs (`flatcar-k3s-azure` and `flatcar-k3s-qemu`) intentionally
-remain unchanged so existing stack URNs are preserved. There are no nested Go
-modules or Python generators here. Run `make check` at the repository root.
-
-See [architecture](../docs/architecture.md) and [migration notes](../docs/migration.md).
+Current operational guides: [QEMU](qemu/README.md), [Azure](azure/README.md), and
+[the mixed test](../docs/mixed-cluster.md). Outstanding consolidation work is in
+[TODO.md](../TODO.md).

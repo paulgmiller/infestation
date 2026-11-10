@@ -6,7 +6,8 @@ no common bridge, TAP, virtual switch, host port forward, or public node IP.
 Nodes use host Tailscale for peer communication. They still need internet egress.
 
 This is a local proof of the topology; it does not simulate WAN latency between
-friends' houses or clouds. Azure migration remains separate.
+friends' houses or clouds. See the [mixed local/Azure test](mixed-cluster.md)
+for the cross-provider topology.
 
 ## Create
 
@@ -110,7 +111,7 @@ reports containing service state, sanitized logs, peer resolution, TCP checks an
 routes. Kubeconfigs arrive on a separate private virtio channel, never the
 console. There is no SSH requirement and no automatic disk deletion command.
 
-CoreDNS and kube-proxy remain enabled, and Cilium is absent from these profiles.
+CoreDNS and kube-proxy remain enabled.
 NetworkPolicy enforcement, public ingress and
 coordinated maintenance are not established by this test. Same-node pod traffic
 is not encrypted. Read the actual test evidence and pending checks in the
@@ -192,8 +193,7 @@ outbound access to the registry, GitHub, and Go module services.
 
 The same flags are accepted by `infestation ignition`. A versioned official
 builder override is available as `--helper-builder-image`; preserve a multiarch
-manifest digest when pinning it. This path does not migrate existing VMs or
-remove the existing Azure Blob bootstrap implementation. Cold builds and artifact
+manifest digest when pinning it. This path does not migrate existing VMs. Cold builds and artifact
 lifecycle are explicit improvement items after the mixed-cloud test. Only native
 amd64 container compilation has been exercised so far; arm64 profile generation
 is tested, but arm64 execution and a new Flatcar first boot remain unverified.

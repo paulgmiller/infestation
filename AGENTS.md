@@ -3,44 +3,48 @@
 Infestation is one Go module at this repository root. Read README.md first.
 
 - `cmd/infestation` is the CLI; portable logic lives under `internal/`.
-- `internal/cluster`, `pki`, and `ignition` are shared by Azure and QEMU.
-- `internal/provider/{azure,qemu}` defines Pulumi infrastructure; `infra/` holds
-  thin entry points and stack configuration. Keep the existing Pulumi project IDs
-  unless deliberately migrating state; changing the repository layout is not a
-  reason to replace live resources.
+- Read `docs/goals.md` and `docs/architecture.md` for the intended provider
+  boundary. QEMU and Azure are the current providers; any compatible VM compute
+  provider should be supportable, preferably through Pulumi. Shared bootstrap
+  must not depend on a provider's object storage, private DNS or remote execution.
+- `internal/cluster`, `pki`, and `ignition` are shared node preparation.
+  `internal/provider/{azure,qemu}` defines Pulumi infrastructure; `infra/` holds
+  thin entry points and stack configuration. Preserve existing Pulumi project
+  IDs and state; refactoring is not a reason to replace live resources.
 - CockroachDB runs as a TLS-enabled host Docker service, outside Kubernetes.
-  Servers run the K3s control plane through Kine/CockroachDB; workers run agents.
-  Database hosting defaults on for both roles. Cilium is installed after the API
-  is ready, with kube-proxy disabled and Cilium Service routing enabled in the
-  current profiles. The selected replacement in docs/networking-plan.md installs
-  host-level Tailscale on every Flatcar server/worker, uses K3s's native
-  Tailscale/Flannel extension integration, retires Cilium, and restores kube-proxy.
-  Do not substitute VXLAN, a separate WireGuard overlay, or SQLite/etcd.
-- Azure uses SLB ingress/egress, three-zone placement and optional temporary
-  Cockroach data disks. QEMU uses private NAT and persistent qcow2 overlays.
-- PKI is generated with Go crypto; Ignition uses official v3.3 types/validation.
-  Never overwrite an existing CA or token. Root/admin credentials and CA signing
-  keys stay on the workstation and must never be embedded in node profiles.
-  Explicitly approved bootstrap exception: a separately issued, one-hour SQL root
-  client certificate/key may be embedded in the API pool's shared private Ignition profile (or
-  only the `-0` profile for static inventories). Only API instance `0` may use it.
-  Other API instances remove their copy. Shared wildcard node leaf credentials
-  are authorized for Uniform VMSS; the CA signing key stays on the workstation. Never substitute the long-lived admin key or CA signing key. Remove
-  the temporary credential from the node after SQL setup succeeds.
-- `make check` validates without provisioning. Add meaningful tests for identity,
-  storage, bootstrap/recovery guards, and infrastructure lifecycle changes.
+  K3s servers use Kine/CockroachDB; workers run agents. Database hosting defaults
+  on for both roles. Use host Tailscale and K3s's native Tailscale/Flannel
+  integration with kube-proxy and CoreDNS. Do not substitute a separate overlay
+  or SQLite/etcd. Host containers must use working tailnet DNS explicitly.
+- Nodes need egress, not a shared/connected underlay or public ingress. Keep
+  provider-specific NIC/subnet/egress requirements explicit. Follow the open
+  egress decision in TODO.md rather than silently adding a load-balancer dependency.
+- PKI uses Go crypto; Ignition uses official v3.3 types/validation. Never overwrite
+  an existing CA or token. Root/admin credentials and CA signing keys stay on the
+  workstation and must not enter node profiles. The explicit bootstrap exception
+  is a separately issued one-hour SQL root client certificate/key, delivered only
+  to static initializer `-0`, or to a shared API profile where only instance 0
+  may use it and other instances remove their copies. Shared node leaf credentials
+  are permitted for pooled profiles; never substitute admin/CA signing keys.
+  Remove temporary credentials after SQL setup succeeds.
+- Use `go test ./...` and `go vet ./...` for local validation without provisioning.
+  Add meaningful tests for identity, storage, bootstrap/recovery guards and
+  infrastructure lifecycle changes. Distinguish mocks from live verification.
 - No provisioning, disk formatting, remote deployment, database initialization,
   or destructive infrastructure operations without an explicit user request.
-  A request to refactor the repository permits local source/state-path migrations,
-  not recreating a deleted cloud cluster or starting stopped VMs.
+  Refactoring permits local source/state-path migrations, not recreating deleted
+  cloud resources or starting stopped VMs. Preserve local VM disks and private
+  state unless deletion is explicitly requested.
 - Keep state, credentials, generated Ignition and kubeconfigs ignored/private.
-  Preserve existing local VM storage and state. Distinguish unit/mock/preview
-  checks from actual deployment or failure-recovery verification.
-- Optional `api_tailnet_hostname` adds a host-level API TailVIP forwarder and
-  shared certificate SAN on servers only; workers must not advertise it. It does
-  not install/enroll Tailscale or create/approve the tailnet Service. Keep TLS
-  passthrough to localhost:6443, not a ClusterIP. Current Cilium and provider
-  defaults remain until the separate transition in docs/networking-plan.md is
-  implemented and verified.
-- Automatic reboot coordination and managed AKS/GKE/EKS remain outside the
-  current implementation. Cite vendor sources for version-specific claims.
+  Do not log keys, auth URLs, raw daemon preferences or kubeconfig contents.
+- `api_tailnet_hostname` declares a shared SAN and host API Service forwarder on
+  servers only. Workers must not advertise it. Keep raw TLS passthrough to
+  localhost:6443, not a ClusterIP. Defining the tailnet Service and its approval/
+  access policy is separate from node configuration.
+- The tailnet is the administrator boundary. Routine Tailscale SSH uses `core`
+  with sudo. Keep published kubeconfig root-only with normal Kubernetes TLS and
+  client authentication. Do not edit K3s's managed kubeconfig in place.
+- TODO files contain outstanding work only. Put test evidence in runbooks and
+  keep documentation focused on the current design. Reboot coordination and
+  managed Kubernetes services remain unimplemented. Cite vendor sources for
+  version-specific claims.

@@ -131,7 +131,7 @@ Ready. CockroachDB reported three available/live members in local and Azure
 localities, 62 ranges per member, and zero unavailable or under-replicated ranges.
 All six directed pod DNS/ClusterIP HTTP Jobs completed; three initially retried
 connection-refused errors while web endpoints were starting. CoreDNS,
-metrics-server and local-path-provisioner were Running; Cilium is absent.
+metrics-server and local-path-provisioner were Running.
 The Azure-published kubeconfig was copied over `core` + sudo and passed both
 node listing and `/readyz` through the shared Service with normal TLS validation.
 
@@ -159,7 +159,7 @@ The node-0 initialization marker is on its persistent disk, not Blob Storage or
 a distributed guard. No initializer replacement, multi-disk-loss recovery or
 quorum-loss/reinitialization scenario was tested. Preserve that state. Removing
 the Azure Blob dependency for this static topology does not solve recovery safety
-for a dynamically replaced initializer or migrate the older Azure VMSS workflow.
+for a dynamically replaced initializer.
 
 Review next: reduce duplicate bootstrap/access paths; make DNS assumptions
 explicit; define durable initialization/replacement safety; distinguish liveness
