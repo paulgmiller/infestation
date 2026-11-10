@@ -111,7 +111,58 @@ routes. Kubeconfigs arrive on a separate private virtio channel, never the
 console. There is no SSH requirement and no automatic disk deletion command.
 
 CoreDNS and kube-proxy remain enabled, and Cilium is absent from these profiles.
-NetworkPolicy enforcement, public ingress, API TailVIP provisioning and
+NetworkPolicy enforcement, public ingress and
 coordinated maintenance are not established by this test. Same-node pod traffic
 is not encrypted. Read the actual test evidence and pending checks in the
 [networking checkpoint](networking-plan.md).
+
+## Stable private API name with HTTPS
+
+Prepare an API TailVIP with the existing cluster CA and client credentials:
+
+```sh
+bin/infestation vm cluster api --name lab --state-dir state/vms
+```
+
+The command verifies the common certificate identity on every API server,
+prepares `kubeconfig.tailvip`, and runs one setup Job on each control-plane
+node. The Jobs mount only the host Tailscale CLI and its local API socket. They
+configure durable host state, with raw TCP forwarding:
+
+```sh
+tailscale serve --service=svc:k8s-api --tcp=443 tcp://127.0.0.1:6443
+```
+
+Define `k8s-api` in the Tailscale Services console with endpoint `tcp:443`, and
+approve the three hosts. For future automatic host approval, merge a `services`
+entry into your existing `autoApprovers`, alongside the pod route rule:
+
+```json
+"autoApprovers": {
+  "routes": {"10.42.0.0/16": ["tag:roach"]},
+  "services": {"svc:k8s-api": ["tag:roach"]}
+}
+```
+
+The tailnet's traffic policy must also permit the intended clients to reach
+`svc:k8s-api` on TCP 443. The enrollment auth key cannot define the Service or
+approve its hosts. See [Tailscale Services](https://tailscale.com/docs/features/tailscale-services).
+
+Kubeconfig uses `server: https://k8s-api.YOUR-TAILNET.ts.net:443` together with
+`tls-server-name: kubernetes.default.svc.cluster.local`. That canonical DNS name
+already appears in the K3s serving certificates. The normal Kubernetes CA
+validation and client-certificate authentication remain enabled. HTTPS ends at
+the API server; Tailscale forwards encrypted bytes. No certificate rotation or
+TLS-verification bypass is needed for this approach.
+
+The original working kubeconfig is preserved until the TailVIP succeeds over
+authenticated HTTPS. The command then saves `kubeconfig.direct` and switches the
+working file. `cluster wait` preserves the stable endpoint on later refreshes.
+This one-time setup does not place a Kubernetes proxy pod in the API traffic
+path. Automatic withdrawal when a host API fails remains separate work.
+
+The live `tail3-1109` kubeconfig has been switched to
+`https://k8s-api.quoll-duck.ts.net:443`. On November 10, authenticated readiness
+and node listing succeeded through this endpoint with TLS validation enabled.
+The console confirms two online Service hosts; acceptance of the third host
+and failover behavior remain unverified. See the networking checkpoint for details.

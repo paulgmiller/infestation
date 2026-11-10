@@ -216,9 +216,16 @@ func WaitCluster(ctx context.Context, o Options, out io.Writer) error {
 				continue
 			}
 			data, _ := json.Marshal(raw)
-			conf, e := bootstrap.PublicKubeconfig(data, "https://"+c.NodeAddress(n)+":6443")
+			endpoint := "https://" + c.NodeAddress(n) + ":6443"
+			if c.APITailnetHostname != "" {
+				endpoint = "https://" + c.APITailnetHostname + ":443"
+			}
+			conf, e := bootstrap.PublicKubeconfig(data, endpoint)
 			if e != nil {
 				continue
+			}
+			if c.APITailnetHostname != "" {
+				conf.Clusters[0].Cluster["tls-server-name"] = apiTLSName
 			}
 			encoded, _ := json.Marshal(conf)
 			if e = fsutil.WriteFile(kube, encoded, 0600); e != nil {
@@ -259,6 +266,9 @@ func clusterAPIsReady(ctx context.Context, c cluster.Config, kube string) bool {
 		if run("--server=https://"+c.NodeAddress(n)+":6443", "get", "--raw=/readyz").Code != 0 {
 			return false
 		}
+	}
+	if run("get", "--raw=/readyz").Code != 0 {
+		return false
 	}
 	result := run("get", "nodes", "-o", "json")
 	if result.Code != 0 {

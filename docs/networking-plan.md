@@ -1,8 +1,8 @@
 # Egress-only K3s networking checkpoint
 
-Last updated: 2026-11-09 (local date). The isolated three-VM Tailscale cluster is
-now **deployed and verified** as described below. Azure migration and the API
-TailVIP remain unverified.
+Last updated: 2026-11-10 (local date). The isolated three-VM Tailscale cluster and
+private API TailVIP are **deployed and verified** as described below. Azure
+migration and API failover drills remain unverified.
 
 After merging origin/master's Go migration, `internal/cluster` accepts optional
 `api_tailnet_hostname`. `internal/ignition` adds the shared SAN and a host-level
@@ -131,14 +131,15 @@ SHA512 reduced the profiles to 20–25 KB and cleared that wait. PKI, token and
 the existing overlays were preserved. The temporary artifact server stopped
 after API readiness; credentials/profiles were never served by it.
 
-For future automatic pod-route approval, merge this **proposed policy fragment**
-into the existing tailnet policy once (the auth key uses `tag:roach`):
+The owner added this auto-approval policy to the existing tailnet policy
+(the auth key uses `tag:roach`):
 
 ```json
 "autoApprovers": {
   "routes": {
     "10.42.0.0/16": ["tag:roach"]
-  }
+  },
+  "services": {"svc:k8s-api": ["tag:roach"]}
 }
 ```
 
@@ -150,8 +151,8 @@ approved manually. The current routes were approved manually; automatic approval
 of a future node has not been exercised. Separate clusters need disjoint pod
 address blocks.
 
-Remaining work includes NetworkPolicy enforcement, public ingress, API TailVIP
-provisioning, failure/recovery drills, and Azure migration. This one-host test
+Remaining work includes NetworkPolicy enforcement, public ingress,
+failure/recovery drills, and Azure migration. This one-host test
 establishes isolated-underlay connectivity, not WAN performance or production
 reliability across sites.
 
@@ -250,6 +251,33 @@ K3s's built-in network-policy controller disabled. Do not use Funnel or TailVIPs
 for ordinary Kubernetes Services. The API TailVIP is an explicit exception.
 
 ## Private API endpoint: decided
+
+Live setup status after the VM cluster test: all three API hosts now have
+persistent raw TCP forwarding for `svc:k8s-api` on port 443 to local port 6443.
+The one-time setup Jobs completed. TLS verification using the common
+`kubernetes.default.svc.cluster.local` certificate name succeeded against every
+direct API server. A private `kubeconfig.tailvip` preserves the existing
+Kubernetes CA and client credentials and sets that `tls-server-name` while
+targeting `https://k8s-api.<tailnet>.ts.net:443`. This approach needs no serving
+certificate rotation or TLS termination at Tailscale.
+
+The owner defined the Service and added service auto-approvers. The working
+`state/vms/tail3-1109/kubeconfig` now targets
+`https://k8s-api.quoll-duck.ts.net:443` (VIP `100.88.130.231`), with normal CA
+verification and the existing client credentials. The direct endpoint remains
+backed up in `kubeconfig.direct`. Authenticated `/readyz` and `kubectl get nodes`
+through the Service succeeded again on November 10; all three nodes were Ready.
+The owner's console lists nodes 0 and 1 as online Service hosts. Node 2's local
+Serve configuration and advertisement were verified and refreshed, but its
+control-plane acceptance has not been confirmed. Three Ready Kubernetes nodes
+does not establish three accepted Service hosts. API failover has not been
+tested. See the [runbook](isolated-vm-cluster.md#stable-private-api-name-with-https)
+for repeatable setup.
+
+The direct certificate already covers the canonical Kubernetes name, and the
+new candidate retains normal CA/hostname verification. For freshly generated
+profiles, the existing `api_tailnet_hostname` option can additionally put the
+TailVIP's own DNS name in the certificate SANs.
 
 Create one Tailscale Service named `svc:k8s-api`, accepting `tcp:443`. All three
 tagged server hosts advertise it, with each host forwarding raw TCP to its own

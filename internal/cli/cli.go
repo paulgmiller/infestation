@@ -35,7 +35,7 @@ func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *list) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/start/wait/status/stop, validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/start/wait/status/stop/api, validate, pki, ignition, image, azure plan, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
 		return nil
 	}
 	command := args[0]
@@ -49,7 +49,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	if command == "vm cluster" {
 		if len(args) == 0 || args[0] == "--help" {
-			fmt.Fprintln(out, "Usage: infestation vm cluster create|start|wait|status|stop --name NAME\nRun a subcommand with --help for its flags.")
+			fmt.Fprintln(out, "Usage: infestation vm cluster create|start|wait|status|stop|api --name NAME\nRun a subcommand with --help for its flags.")
 			return nil
 		}
 		command += " " + args[0]
@@ -72,7 +72,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			return fmt.Errorf("--state-dir is required")
 		}
 		return vm.ServeArtifacts(ctx, state)
-	case "vm cluster create", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop":
+	case "vm cluster create", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop", "vm cluster api":
 		o := vm.ClusterOptions{}
 		flags.StringVar(&o.Name, "name", "", "cluster name (required; creates NAME-0/1/2)")
 		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
@@ -85,7 +85,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow tcg")
 			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
 		}
-		if command == "vm cluster create" || command == "vm cluster start" || command == "vm cluster wait" {
+		if command == "vm cluster create" || command == "vm cluster start" || command == "vm cluster wait" || command == "vm cluster api" {
 			flags.DurationVar(&o.Wait, "wait", 30*time.Minute, "readiness deadline; 0 starts in background")
 		}
 		if command == "vm cluster start" {
@@ -106,6 +106,8 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			return vm.ClusterAction(ctx, o.Options, "start", out)
 		case "vm cluster status":
 			return vm.ClusterAction(ctx, o.Options, "status", out)
+		case "vm cluster api":
+			return vm.ConfigureAPIService(ctx, o.Options, out)
 		default:
 			return vm.ClusterAction(ctx, o.Options, "stop", out)
 		}
