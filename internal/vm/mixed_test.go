@@ -22,7 +22,7 @@ func TestMixedAzureUsesOnlyComputeDiskAndPrivateNetwork(t *testing.T) {
 	if !strings.Contains(text, `"type":"secureString"`) {
 		t.Fatal("customData not a secure template parameter")
 	}
-	c := clusterConfig(ClusterOptions{Options: Options{Name: "mixed"}, Domain: "example.ts.net", AzureLocation: "westus2"})
+	c := clusterConfig(ClusterOptions{Size: 3, Init: true, Options: Options{Name: "mixed"}, Domain: "example.ts.net", AzureLocation: "westus2"})
 	if len(c.Nodes) != 3 || !c.Tailscale.SSH || c.APITailnetHostname != "k8s-api.example.ts.net" {
 		t.Fatal("wrong mixed topology")
 	}

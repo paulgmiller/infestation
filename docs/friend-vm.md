@@ -1,8 +1,34 @@
 # A Linux VM on your friend's tailnet
 
-This creates a **standalone Flatcar VM enrolled in Tailscale**. It does not yet
-join Kubernetes or run CockroachDB. It is the first test of the egress-only node
-setup in [the networking plan](networking-plan.md).
+Create an independently enrolled cluster node using only the supplied tailnet
+auth key/domain and a distinct name. No other person’s workstation state, CA
+signing key, token file or global inventory is required. The flow has unit and
+protocol tests; a fresh independent VM test is still pending.
+
+```sh
+infestation vm cluster create --name alice --size 1 \
+  --tailnet-domain YOUR-TAILNET.ts.net \
+  --tailscale-auth-key-file /private/path/key \
+  --helper-source-ref YOUR-NEW-PUBLISHED-REF
+```
+
+Omit `--init` when joining. Exactly one founding group uses it; that group’s first
+node waits for two database peers before initialization. Use a published helper
+ref containing the enrollment protocol. Nodes discover `tag:roach` participants,
+fetch leaf/join credentials over the tailnet on helper port 7444, and start
+CockroachDB and K3s. Every enrolled member can supply join material afterward.
+The creator workstation does not need to be on the tailnet unless it requests
+`--wait` readiness checks. See [bootstrap](bootstrap.md) for policy and recovery.
+
+Use `vm cluster status|stop|start|resume --name alice` for this provider group.
+`azure create --name alice-cloud --size 1` accepts the same enrollment details;
+Azure region/SKU default to `westus2`/`Standard_B2s`. Each command creates compute
+on only one provider. Each machine retains its own private provider state.
+
+## Enrollment-only diagnostics
+
+The separate `vm create` command creates a standalone Flatcar/Tailscale VM without
+Kubernetes or CockroachDB. The rest of this page describes that diagnostic flow.
 
 Use Linux x86-64 with hardware virtualization enabled and access to `/dev/kvm`.
 Install QEMU once (Ubuntu/Debian):

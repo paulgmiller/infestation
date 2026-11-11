@@ -102,3 +102,13 @@ short run. This is not pod/SQL latency, WAN performance or failure-recovery proo
 
 See [the local cluster runbook](isolated-vm-cluster.md) for commands and
 [TODO.md](../TODO.md) for outstanding work.
+
+## Independent enrollment
+
+Each provider call creates only its own machines. After host enrollment, our Go
+helper discovers `tag:roach` peers and exchanges join material on TCP 7444, bound
+to a Tailscale IPv4 address. This helper endpoint is separate from K3s/Cockroach
+and requires tailnet grants between cluster peers. It carries shared leaf keys
+and the K3s token within WireGuard; CA signing and SQL root keys are excluded.
+The same helper can publish kubeconfig to tailnet administrators. See
+[bootstrap](bootstrap.md) for pinning, initialization guards and verification limits.

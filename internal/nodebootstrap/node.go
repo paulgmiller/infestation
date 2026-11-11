@@ -36,6 +36,7 @@ type Store interface {
 }
 
 type Worker struct {
+	Init                 bool // explicit --init authority; never inferred from a node name
 	Config               Config
 	Runner               executil.Runner
 	Store                Store
@@ -73,6 +74,9 @@ func (w Worker) sql(ctx context.Context, host, query string) executil.Result {
 }
 
 func (w Worker) Database(ctx context.Context) (string, error) {
+	if !w.Init {
+		return "", fmt.Errorf("database initialization/SQL setup requires --init")
+	}
 	initializer, err := w.Config.Cluster.Initializer()
 	if err != nil {
 		return "", err
@@ -80,20 +84,21 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 	if w.Config.Node != initializer.Name {
 		return "", fmt.Errorf("only %s may initialize CockroachDB or run SQL setup", initializer.Name)
 	}
-	for _, n := range w.Config.Cluster.Databases() {
-		ready := w.Reachable
-		if ready == nil {
-			ready = func(ctx context.Context, host string) bool {
-				conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, "26257"))
-				if err != nil {
-					return false
-				}
-				conn.Close()
-				return true
+	ready := w.Reachable
+	if ready == nil {
+		ready = func(ctx context.Context, host string) bool {
+			conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, "26257"))
+			if err != nil {
+				return false
 			}
+			conn.Close()
+			return true
 		}
-		if !ready(ctx, w.Config.Cluster.NodeAddress(n)) {
-			return "", fmt.Errorf("database listener on %s is not ready", n.Name)
+	}
+	var listeners []cluster.Node
+	for _, n := range w.Config.Cluster.Databases() {
+		if ready(ctx, w.Config.Cluster.NodeAddress(n)) {
+			listeners = append(listeners, n)
 		}
 	}
 	var marker bootstrap.Marker
@@ -114,7 +119,7 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 		w.bootstrapSQL = true
 	}
 	id := ""
-	for _, n := range w.Config.Cluster.Databases() {
+	for _, n := range listeners {
 		id, err = bootstrap.ParseIdentity(w.sql(ctx, w.Config.Cluster.NodeAddress(n), "SELECT crdb_internal.cluster_id()"))
 		if err != nil {
 			return "", err
@@ -124,8 +129,21 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 		}
 	}
 	if id == "" {
-		if !marker.CanInitialize(true) {
+		if !marker.CanInitialize(w.Init) {
 			return "", fmt.Errorf("database unavailable after recorded initialization; refusing to create a new cluster")
+		}
+		minimum := 3
+		if w.Config.Cluster.SingleNodeLab {
+			minimum = 1
+		}
+		localReady := false
+		for _, n := range listeners {
+			if n.Name == initializer.Name {
+				localReady = true
+			}
+		}
+		if !localReady || len(listeners) < minimum {
+			return "", fmt.Errorf("waiting for %d database listeners including the initializer; found %d", minimum, len(listeners))
 		}
 		marker.InitializationAttempted = true
 		intent, _ := json.Marshal(marker)
@@ -176,6 +194,11 @@ func (w Worker) Run(ctx context.Context) error {
 			w.Store = blobstore.Client{Token: blobstore.ManagedIdentityToken}
 		}
 	}
+	if w.Config.Cluster.DiscoverPeers {
+		if err := w.discoverTailnet(ctx); err != nil {
+			return err
+		}
+	}
 	var durable bootstrap.Marker
 	if w.Config.Azure != nil {
 		if w.Config.Azure.Role == "worker" {
@@ -214,8 +237,11 @@ func (w Worker) Run(ctx context.Context) error {
 		return targetErr
 	}
 	leader := targetErr == nil && initializer.Name == w.Config.Node
+	if w.Init && !leader && w.Config.Azure == nil {
+		return fmt.Errorf("--init is only authorized on the configured initializer")
+	}
 	id := durable.ClusterID
-	if !durable.SQLReady && leader {
+	if !durable.SQLReady && leader && w.Init {
 		id, err = w.Database(ctx)
 		if err != nil {
 			return err

@@ -27,10 +27,83 @@ managed identity, object storage, private DNS or remote command service.
 Existing Pulumi project IDs must remain stable so changing code does not replace
 resources or lose ownership of stored state.
 
+## Cluster configuration and independent enrollment
+
+The intended workflow is to create initial nodes across hosts/providers, then
+give friends the tailnet enrollment details and cluster name/endpoint so they can
+contribute more VMs. No participant should need a complete list of current or
+future nodes, or edit a central inventory when another person adds a VM.
+
+Configuration should have three separate scopes:
+
+- **Cluster settings:** stable cluster identity, tailnet domain, API endpoint,
+  network ranges and shared version/policy defaults. No complete node list.
+- **Node settings:** that node's identity, selected roles, storage, resources and
+  locality. Roles determine whether it joins Kubernetes, the database, or both.
+- **Provisioning state:** only the VMs/disks/network resources owned by a person's
+  host or Pulumi stack. One stack need not manage everybody else's machines.
+
+For now there is one cluster per tailnet. Participants can have arbitrary names,
+such as `miller`, `sullivan` and `locke`, and come from different people/providers.
+Tailnet peer discovery uses `tag:roach` and the helper’s host bootstrap endpoint
+on port 7444. A fixed hostname convention is not required for discovery.
+
+The current bootstrap choice is explicit: authorize one founding node with
+`--init`. It waits for two database peers, joins an existing database if found,
+and otherwise initializes its own store. All other nodes only join. Grouped
+provisioning explicitly designates one server; no hostname convention grants
+independent nodes initialization authority. See [bootstrap](bootstrap.md).
+
+An automatic one-time election is deferred. A lowest-IP rule can rank candidates,
+but cannot prevent different peer views from initializing separate databases.
+A future protocol must establish an agreed founding voter set and persist one
+initialization target before invoking Cockroach's init RPC. Merely observing
+three available peers does not establish the same voter set everywhere.
+
+Once initialization might have occurred, a timeout or unavailable target must
+not authorize initialization on a different store. Persist the resulting database
+identity and have later nodes join it. Election/formation recovery remains design work. Independent credential
+delivery uses shared leaf identities over the tailnet; CA signing keys stay on
+the initializer’s workstation.
+
+A joining VM enrolls in Tailscale, contacts the existing cluster's bootstrap
+endpoint and obtains the settings/join credentials appropriate to its roles.
+Kubernetes and CockroachDB establish membership through their join protocols.
+Health checks and all-pairs smoke tests should discover members at runtime.
+The initial database/control-plane group still needs an explicit, safely fenced
+first-bootstrap step; that group is not a permanent enumeration of the cluster.
+
+Tailnet membership is the chosen administrator trust boundary. Nodes obtain
+join material and shared database/Kine leaf credentials from an enrolled peer’s
+helper endpoint. The exchange stays on the tailnet, pins the database CA and keeps
+CA signing keys out of ordinary node profiles. Small stable bootstrap/seed endpoints are
+acceptable; requiring all peers to be known and present is not the target.
+
+### Current implementation
+
+Each provisioning call targets one provider and writes a private `cluster.json`
+containing only the nodes that call owns. For example, `vm cluster create --init
+--size 2` and `azure create --size 1` use different local state directories and
+may run on different workstations. The node helper discovers runtime membership
+over the tailnet instead of requiring the callers to exchange a global inventory.
+
+`--init` creates the cluster CA/token and one-hour SQL credential locally, with
+only leaf/join credentials and the temporary SQL credential delivered to the
+selected VM. Joining calls generate no second CA/token. They enroll in Tailscale,
+fetch the pinned bundle and start Cockroach/K3s with discovered join seeds. See
+[bootstrap](bootstrap.md) for the protocol and trust boundary.
+
+The shared `cluster.Config` type still represents both provisioning and runtime
+settings. Static examples and some checks still use full inventories; splitting
+those concerns remains outstanding. Azure enrollment currently supports one VM
+per call; local groups support 1–32. Independent enrollment has protocol/unit
+coverage but needs fresh VM verification. The earlier mixed test used a complete
+static inventory and does not verify this new path.
+
 ## Shared node preparation
 
-The Go inventory describes node identities/roles, versions, locality, storage and
-TLS SANs. Go generates PKI, a persistent K3s token and validated Ignition. Long-lived
+The `--init` call generates cluster PKI and a persistent K3s token. Joining calls
+render Ignition without those credentials and fetch leaves/token after enrollment. Long-lived
 administrator keys and CA signing keys stay on the workstation. Ignition installs
 configuration and systemd services; it is first-boot configuration, not continuous
 reconciliation.
@@ -55,7 +128,8 @@ persistent-disk marker does not establish safe initializer replacement.
 Control-plane nodes advertise a shared Tailscale API Service forwarding raw TCP
 to localhost:6443. Kubernetes retains CA/hostname validation and client authentication.
 Each server publishes a separate root-only kubeconfig. Tailnet members can retrieve
-it through Tailscale SSH; routine sessions use `core` with sudo.
+it through Tailscale SSH or the helper endpoint; routine sessions use `core`
+with sudo.
 
 ## Implementation boundary
 

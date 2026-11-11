@@ -145,7 +145,7 @@ func TestAzurePlanningRemovedAndDirectFlagsAvailable(t *testing.T) {
 	if err := Run(context.Background(), []string{"azure", "plan"}, &out); err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Fatal("planning command still accepted", err)
 	}
-	for _, command := range [][]string{{"azure", "deploy"}, {"azure", "check"}, {"vm", "cluster", "create"}} {
+	for _, command := range [][]string{{"azure", "deploy"}, {"azure", "check"}, {"azure", "create"}} {
 		out.Reset()
 		if err := Run(context.Background(), append(command, "--help"), &out); err != nil {
 			t.Fatal(err)
@@ -159,6 +159,24 @@ func TestAzurePlanningRemovedAndDirectFlagsAvailable(t *testing.T) {
 		out.Reset()
 		if err := Run(context.Background(), args, &out); err == nil {
 			t.Fatal("removed planning flag accepted", args)
+		}
+	}
+}
+
+func TestProviderCreationFlagsAreSeparate(t *testing.T) {
+	for _, command := range [][]string{{"vm", "cluster", "create"}, {"azure", "create"}} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), append(command, "--help"), &out); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "-init") || !strings.Contains(out.String(), "-size") {
+			t.Fatal("missing independent group flags", out.String())
+		}
+	}
+	for _, args := range [][]string{{"vm", "cluster", "create", "--azure"}, {"vm", "cluster", "create", "--region", "westus2"}, {"azure", "create", "--azure"}} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), args, &out); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatal("provider mixing flag accepted", args, err)
 		}
 	}
 }

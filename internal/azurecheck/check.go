@@ -68,7 +68,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	c.K3sExtensionVersion = o.K3sVersion
 	c.SingleNodeLab = false
 	c.SmokeTest = true
-	c.Nodes = []cluster.Node{{Name: "api-0", IP: "192.168.1.101"}, {Name: "api-1", IP: "192.168.1.102"}, {Name: "worker-0", IP: "192.168.1.103", Role: "worker"}}
+	c.Nodes = []cluster.Node{{Init: true, Name: "api-0", IP: "192.168.1.101"}, {Name: "api-1", IP: "192.168.1.102"}, {Name: "worker-0", IP: "192.168.1.103", Role: "worker"}}
 	input := filepath.Join(state, "cluster-input.json")
 	if err := fsutil.WriteJSON(input, c); err != nil {
 		return err

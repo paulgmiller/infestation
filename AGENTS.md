@@ -23,9 +23,9 @@ Infestation is one Go module at this repository root. Read README.md first.
   an existing CA or token. Root/admin credentials and CA signing keys stay on the
   workstation and must not enter node profiles. The explicit bootstrap exception
   is a separately issued one-hour SQL root client certificate/key, delivered only
-  to static initializer `-0`, or to a shared API profile where only instance 0
+  to the explicitly selected `--init` server, or to a shared API profile where only instance 0
   may use it and other instances remove their copies. Shared node leaf credentials
-  are permitted for pooled profiles; never substitute admin/CA signing keys.
+  are permitted for pooled profiles and independent tailnet enrollment; never substitute admin/CA signing keys.
   Remove temporary credentials after SQL setup succeeds.
 - Use `go test ./...` and `go vet ./...` for local validation without provisioning.
   Add meaningful tests for identity, storage, bootstrap/recovery guards and

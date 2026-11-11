@@ -1,5 +1,8 @@
 # Infestation
 
+A kubernetes cluster that runs on any latency proximage (<30ms) compute using tailscale as the connective tissue.
+Won't go down while you still have 2 nodes alive. 
+
 Infestation provisions Flatcar VMs running host-level CockroachDB and K3s over
 Tailscale. Nodes need outbound connectivity; cluster communication does not
 require a shared underlay, public node addresses or an external ingress load
@@ -34,25 +37,44 @@ kubectl and a reachable cluster.
 ## Create a VM or cluster
 
 [Create a VM on a friend's tailnet](docs/friend-vm.md) covers standalone enrollment.
-That VM does not automatically join Kubernetes or run CockroachDB.
+Use its independent cluster enrollment command to join; `vm create` remains an
+enrollment-only diagnostic.
 
 [Three local VMs](docs/isolated-vm-cluster.md) and the
 [mixed local/Azure runbook](docs/mixed-cluster.md) cover cluster creation. The CLI
-generates a private inventory under `state/vms/<name>/cluster.json`; it also
-preserves PKI, token, profiles and reports there. Keep that directory private.
+records only that provider call’s nodes under `state/vms/<name>/cluster.json`.
+Each call keeps its own private state; joining machines fetch credentials over
+the tailnet rather than sharing a workstation directory. Keep generated state private.
 
 The helper can be built on each Flatcar node in a pinned multiarchitecture Go
 container from an immutable source commit:
 
 ```sh
-bin/infestation vm cluster create --name lab --state-dir state/vms \
+bin/infestation vm cluster create --name lab --init --size 3 --state-dir state/vms \
   --tailnet-domain YOUR-TAILNET.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
 ```
 
-Add `--azure` to place the third node in Azure. `--region` defaults to `westus2`
-and `--sku` defaults to `Standard_B2s`; set either directly when needed.
+Each command creates compute on one provider. For two local nodes and one
+independently enrolled Azure node, use separate calls (which can run on different
+workstations with different state directories):
+
+```sh
+bin/infestation vm cluster create --name local --init --size 2 \
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
+  --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
+bin/infestation azure create --name cloud --size 1 \
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
+  --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
+```
+
+Only one founding node gets initialization authority. It waits for two database
+peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;
+override `--region` and `--sku` directly. Azure enrollment currently creates one
+VM per call. Creation returns after provisioning by default; `--wait` also needs
+tailnet access from the workstation. This independent flow has unit/protocol
+coverage and still needs a fresh VM test. See [bootstrap](docs/bootstrap.md).
 
 The renderer resolves a tag before provisioning. Credentials stay outside the
 source/build container. Native arm64 execution remains unverified.

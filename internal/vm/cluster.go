@@ -18,6 +18,7 @@ import (
 	"infestation/internal/fsutil"
 	"infestation/internal/ignition"
 	"infestation/internal/image"
+	"infestation/internal/nodebootstrap"
 	"infestation/internal/pki"
 )
 
@@ -26,101 +27,181 @@ type ClusterOptions struct {
 	Domain, NodeHelper                  string
 	HelperSourceRef, HelperBuilderImage string
 	AzureLocation, AzureVMSize          string
+	Provider                            string
+	Size                                int
+	Init                                bool
 }
 
 func clusterConfig(o ClusterOptions) cluster.Config {
-	c := cluster.Config{CockroachImage: "cockroachdb/cockroach:v26.2.7", K3sExtensionVersion: "v1.35.8+k3s1", Architecture: "x86-64", CockroachStorage: "persistent", CockroachCache: "256MiB", CockroachSQLMemory: "256MiB", Tailscale: &cluster.Tailscale{Version: TailscaleVersion, Domain: o.Domain}}
-	for i := 0; i < 3; i++ {
-		c.Nodes = append(c.Nodes, cluster.Node{Name: fmt.Sprintf("%s-%d", o.Name, i), IP: fmt.Sprintf("192.0.2.%d", i+1), Locality: fmt.Sprintf("region=lab,zone=node%d", i)})
+	c := cluster.Config{DiscoverPeers: true, CockroachImage: "cockroachdb/cockroach:v26.2.7", K3sExtensionVersion: "v1.35.8+k3s1", Architecture: "x86-64", CockroachStorage: "persistent", CockroachCache: "256MiB", CockroachSQLMemory: "256MiB", Tailscale: &cluster.Tailscale{Version: TailscaleVersion, Domain: o.Domain}}
+	for i := 0; i < o.Size; i++ {
+		c.Nodes = append(c.Nodes, cluster.Node{Init: o.Init && i == 0, Name: fmt.Sprintf("%s-%d", o.Name, i), IP: fmt.Sprintf("192.0.2.%d", i+1), Locality: fmt.Sprintf("region=lab,zone=node%d", i)})
 	}
-	if o.AzureLocation != "" {
-		c.Tailscale.SSH = true
-		c.APITailnetHostname = "k8s-api." + o.Domain
-		c.Nodes[0].Locality = "region=local,zone=vm0"
-		c.Nodes[1].Locality = "region=local,zone=vm1"
-		c.Nodes[2].Locality = "region=azure,zone=" + o.AzureLocation
-	}
+	c.Tailscale.SSH = true
+	c.APITailnetHostname = "k8s-api." + o.Domain
 	return c
 }
 
-// CreateCluster renders all credentials once, then boots three distinct QEMU
-// user NAT backends. No network, TAP, bridge, hostfwd or underlay peer IP is shared.
+// CreateCluster creates independent node profiles and compute on one provider.
+// Only --init creates CA/token/bootstrap credentials. All other nodes enroll
+// through the tailnet after boot and never need the initializer's workstation.
 func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
-	if o.AzureLocation != "" {
+	if o.Provider == "" {
+		o.Provider = "qemu"
+	}
+	if o.Provider != "qemu" && o.Provider != "azure" {
+		return fmt.Errorf("unknown compute provider")
+	}
+	if o.Size < 1 || o.Size > 32 {
+		return fmt.Errorf("--size must be between 1 and 32")
+	}
+	if o.Provider == "azure" {
+		if o.Size != 1 {
+			return fmt.Errorf("Azure enrollment batches currently support --size 1")
+		}
 		in, err := (azureconfig.Inputs{Region: o.AzureLocation, SKU: o.AzureVMSize}).Defaults()
 		if err != nil {
 			return err
 		}
 		o.AzureLocation, o.AzureVMSize = in.Region, in.SKU
+		if o.HelperSourceRef == "" {
+			return fmt.Errorf("Azure requires --helper-source-ref for guest builds")
+		}
 	}
 	dir, err := directory(o.Options)
 	if err != nil {
 		return err
 	}
+	if _, err := os.Lstat(dir); err == nil {
+		return fmt.Errorf("provider state already exists; use this provider's resume command")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	c := clusterConfig(o)
-	if err = c.Validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		return err
 	}
-	if o.Network != "" && o.Network != "slirp" {
-		return fmt.Errorf("the isolated cluster test currently uses --network slirp")
+	base := o.BaseImage
+	if o.Provider == "qemu" {
+		if err := validateHost(o.Accel); err != nil {
+			return err
+		}
+		if o.MemoryMiB < 2048 || o.MemoryMiB > 32768 {
+			return fmt.Errorf("cluster VMs require 2048–32768 MiB each")
+		}
+		if o.Network != "" && o.Network != "slirp" {
+			return fmt.Errorf("cluster VMs currently require slirp")
+		}
+		if base == "" {
+			base, err = image.Prepare(ctx, filepath.Join(filepath.Dir(dir), "images"), FlatcarVersion)
+			if err != nil {
+				return err
+			}
+		}
 	}
-	if err = validateHost(o.Accel); err != nil {
+	if err := prepareCluster(ctx, o, dir, c, out); err != nil {
 		return err
 	}
-	if o.AzureLocation != "" && o.HelperSourceRef == "" {
-		return fmt.Errorf("mixed test requires --helper-source-ref for cloud-independent guest builds")
+	for _, n := range c.Nodes {
+		if o.Provider == "azure" {
+			if err := createAzureNode(ctx, o, dir, n.Name, out); err != nil {
+				return err
+			}
+		} else {
+			raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
+			if err != nil {
+				return err
+			}
+			raw, err = addClusterChannels(raw)
+			if err != nil {
+				return err
+			}
+			if err := Create(ctx, Options{Name: n.Name, StateDir: dir, BaseImage: base, Accel: o.Accel, Network: "slirp", MemoryMiB: o.MemoryMiB, profile: raw}, out); err != nil {
+				return err
+			}
+		}
 	}
+	fmt.Fprintln(out, "Provider state:", dir)
+	if o.Init && o.Size < 3 {
+		fmt.Fprintln(out, "Initializer is waiting for two database peers from any provider")
+		return nil
+	}
+	if o.Wait > 0 {
+		return WaitCluster(ctx, o.Options, out)
+	}
+	return nil
+}
+
+func groupProvider(dir string) (string, error) {
+	var provider string
+	if err := fsutil.ReadJSON(filepath.Join(dir, "provider.json"), &provider); err == nil {
+		if provider != "qemu" && provider != "azure" {
+			return "", fmt.Errorf("invalid provider ownership")
+		}
+		return provider, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	// Old mixed state remains inspectable, but cannot trigger cross-provider actions.
+	if _, mixed := loadAzureNode(dir); mixed {
+		return "", fmt.Errorf("mixed provider state is read-only; use individual VM controls")
+	}
+	return "qemu", nil
+}
+
+func prepareCluster(ctx context.Context, o ClusterOptions, dir string, c cluster.Config, out io.Writer) error {
 	key, err := authKey(o.Options)
 	if err != nil {
 		return err
 	}
-	var helper []byte
-	sourceCommit := ""
+	b := ignition.Bootstrap{HelperBuilderImage: o.HelperBuilderImage, TailscaleAuthKey: key}
+	var identity []byte
 	if o.HelperSourceRef != "" {
-		sourceCommit, err = ignition.ResolveHelperSource(ctx, o.HelperSourceRef)
+		b.HelperSourceCommit, err = ignition.ResolveHelperSource(ctx, o.HelperSourceRef)
 		if err != nil {
 			return err
 		}
-		helper = []byte(ignition.HelperBuildIdentity(sourceCommit, o.HelperBuilderImage))
-		fmt.Fprintln(out, "Guest helper source commit:", sourceCommit)
+		identity = []byte(ignition.HelperBuildIdentity(b.HelperSourceCommit, b.HelperBuilderImage))
+		fmt.Fprintln(out, "Guest helper source commit:", b.HelperSourceCommit)
 	} else {
-		helper, err = os.ReadFile(o.NodeHelper)
+		identity, err = os.ReadFile(o.NodeHelper)
 		if err != nil {
 			return fmt.Errorf("build the Linux node helper first: %w", err)
 		}
 	}
-	if _, err = os.Lstat(dir); err == nil {
-		return fmt.Errorf("cluster state already exists; use vm cluster wait/status/start/stop")
-	} else if !os.IsNotExist(err) {
+	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
 		return err
 	}
-	if o.MemoryMiB < 2048 || o.MemoryMiB > 32768 {
-		return fmt.Errorf("cluster VMs require 2048–32768 MiB each")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return fmt.Errorf("reserve cluster state: %w", err)
 	}
-	base := o.BaseImage
-	if base == "" {
-		fmt.Fprintln(out, "Downloading and verifying Flatcar image…")
-		base, err = image.Prepare(ctx, filepath.Join(filepath.Dir(dir), "images"), FlatcarVersion)
+	if o.Init {
+		if err := pki.Create(c, dir); err != nil {
+			return err
+		}
+		shared, err := pki.PoolCertificate(dir, c.Tailscale.Domain)
+		if err != nil {
+			return err
+		}
+		for name, data := range shared {
+			if err := fsutil.WriteFile(filepath.Join(dir, "pki", c.Nodes[0].Name, name), data, 0600); err != nil {
+				return err
+			}
+		}
+		token, err := ignition.Token(c, dir)
+		if err != nil {
+			return err
+		}
+		b.JoinBundle, err = nodebootstrap.NewJoinBundle(c, c.Nodes[0], dir, token)
+		if err != nil {
+			return err
+		}
+		b.Credential, err = pki.BootstrapCredential(dir)
 		if err != nil {
 			return err
 		}
 	}
-	for _, n := range c.Nodes {
-		if _, err = directory(Options{Name: n.Name, StateDir: dir}); err != nil {
-			return err
-		}
-	}
-	if err = os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
-		return err
-	}
-	if err = os.Mkdir(dir, 0700); err != nil {
-		return fmt.Errorf("reserve new cluster state: %w", err)
-	}
-	if err = pki.Create(c, dir); err != nil {
-		return err
-	}
-	b := ignition.Bootstrap{HelperSourceCommit: sourceCommit, HelperBuilderImage: o.HelperBuilderImage, TailscaleAuthKey: key}
-	if sourceCommit == "" {
+	if b.HelperSourceCommit == "" {
 		artifact, err := startArtifacts(ctx, dir, o.NodeHelper)
 		if err != nil {
 			return err
@@ -129,47 +210,15 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 		b.LocalHelperURL = fmt.Sprintf("http://10.0.2.2:%d/infestation-node", artifact.Port)
 		b.LocalHelperSHA512 = artifact.SHA512
 	}
-	// Issue the one-hour SQL credential after image acquisition, immediately
-	// before first boot. Existing PKI/token/state are never regenerated on resume.
-	credential, err := pki.BootstrapCredential(dir)
-	if err != nil {
-		return err
-	}
-	id := sha256.Sum256(helper)
-	b.Credential = credential
+	id := sha256.Sum256(identity)
 	b.DeploymentID = fmt.Sprintf("%x", id)
-	if err = ignition.Generate(c, dir, b); err != nil {
+	if err := ignition.Generate(c, dir, b); err != nil {
 		return err
 	}
-	if err = fsutil.WriteJSON(filepath.Join(dir, "cluster.json"), c); err != nil {
+	if err := fsutil.WriteJSON(filepath.Join(dir, "cluster.json"), c); err != nil {
 		return err
 	}
-	if o.AzureLocation != "" {
-		if err := createAzureNode(ctx, o, dir, c.Nodes[2].Name, out); err != nil {
-			return err
-		}
-	}
-	for i, n := range c.Nodes {
-		if o.AzureLocation != "" && i == 2 {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
-		if err != nil {
-			return err
-		}
-		doc, err := addClusterChannels(raw)
-		if err != nil {
-			return err
-		}
-		if err = Create(ctx, Options{Name: n.Name, StateDir: dir, BaseImage: base, Accel: o.Accel, Network: "slirp", MemoryMiB: o.MemoryMiB, profile: doc}, out); err != nil {
-			return err
-		}
-	}
-	fmt.Fprintln(out, "Cluster state:", dir)
-	if o.Wait == 0 {
-		return nil
-	}
-	return WaitCluster(ctx, o.Options, out)
+	return fsutil.WriteJSON(filepath.Join(dir, "provider.json"), o.Provider)
 }
 
 func loadCluster(o Options) (string, cluster.Config, error) {
@@ -181,8 +230,8 @@ func loadCluster(o Options) (string, cluster.Config, error) {
 	if err != nil {
 		return "", c, err
 	}
-	if c.Tailscale == nil || len(c.Nodes) != 3 || len(c.Servers()) != 3 {
-		return "", c, fmt.Errorf("expected an owned three-server tailnet cluster inventory")
+	if c.Tailscale == nil || len(c.Nodes) == 0 || len(c.Servers()) != len(c.Nodes) {
+		return "", c, fmt.Errorf("expected an owned tailnet provider inventory")
 	}
 	for i, n := range c.Nodes {
 		if n.Name != fmt.Sprintf("%s-%d", o.Name, i) {
@@ -197,6 +246,13 @@ func ClusterAction(ctx context.Context, o Options, action string, out io.Writer)
 	if err != nil {
 		return err
 	}
+	provider, err := groupProvider(dir)
+	if err != nil {
+		return err
+	}
+	if provider != "qemu" {
+		return fmt.Errorf("use azure %s for Azure-owned nodes", action)
+	}
 	if action == "start" {
 		if _, e := os.Stat(filepath.Join(dir, "artifacts", "infestation-node")); e == nil {
 			if _, e = startArtifacts(ctx, dir, ""); e != nil {
@@ -204,19 +260,7 @@ func ClusterAction(ctx context.Context, o Options, action string, out io.Writer)
 			}
 		}
 	}
-	azure, mixed := loadAzureNode(dir)
-	if mixed && (action == "start" || action == "stop") {
-		if err := azureAction(ctx, azure, action, out); err != nil {
-			return err
-		}
-	}
 	for _, n := range c.Nodes {
-		if mixed && n.Name == azure.Node {
-			if action == "status" {
-				fmt.Fprintln(out, n.Name, "Azure VM", azure.Group)
-			}
-			continue
-		}
 		node := Options{Name: n.Name, StateDir: dir, Accel: o.Accel}
 		switch action {
 		case "stop":
@@ -271,10 +315,17 @@ func WaitCluster(ctx context.Context, o Options, out io.Writer) error {
 		found := false
 		for _, n := range c.Servers() {
 			raw, e := latestObject(filepath.Join(dir, n.Name, "access.json"))
-			if e != nil {
+			var data []byte
+			if e == nil {
+				data, _ = json.Marshal(raw)
+			} else if c.DiscoverPeers {
+				data, e = nodebootstrap.FetchKubeconfig(ctx, c.NodeAddress(n))
+				if e != nil {
+					continue
+				}
+			} else {
 				continue
 			}
-			data, _ := json.Marshal(raw)
 			endpoint := "https://" + c.NodeAddress(n) + ":6443"
 			if c.APITailnetHostname != "" {
 				endpoint = "https://" + c.APITailnetHostname + ":443"
@@ -293,12 +344,12 @@ func WaitCluster(ctx context.Context, o Options, out io.Writer) error {
 			found = true
 			break
 		}
-		phase = "Waiting for node enrollment, Cockroach bootstrap and the first API kubeconfig"
+		phase = "Waiting for independent node enrollment, Cockroach bootstrap and an API kubeconfig"
 		if found {
-			phase = "Kubeconfig received; waiting for all three API endpoints and Ready tailnet nodes"
+			phase = "Kubeconfig received; waiting for this group and at least three Ready tailnet nodes"
 			if clusterAPIsReady(ctx, c, kube) {
 				stopArtifacts(dir)
-				fmt.Fprintln(out, "Three API endpoints and three Ready nodes verified over Tailscale")
+				fmt.Fprintln(out, "Provider API endpoints and Ready tailnet nodes verified over Tailscale")
 				fmt.Fprintln(out, "Kubeconfig:", kube)
 				return nil
 			}
@@ -342,7 +393,7 @@ func clusterAPIsReady(ctx context.Context, c cluster.Config, kube string) bool {
 			}
 		}
 	}
-	if json.Unmarshal([]byte(result.Stdout), &nodes) != nil || len(nodes.Items) != 3 {
+	if json.Unmarshal([]byte(result.Stdout), &nodes) != nil || len(nodes.Items) < 3 {
 		return false
 	}
 	expected := map[string]bool{}
@@ -350,9 +401,6 @@ func clusterAPIsReady(ctx context.Context, c cluster.Config, kube string) bool {
 		expected[n.Name] = true
 	}
 	for _, n := range nodes.Items {
-		if !expected[n.Metadata.Name] {
-			return false
-		}
 		delete(expected, n.Metadata.Name)
 		ready, tailIP := false, false
 		for _, condition := range n.Status.Conditions {
@@ -370,5 +418,49 @@ func clusterAPIsReady(ctx context.Context, c cluster.Config, kube string) bool {
 			return false
 		}
 	}
-	return true
+	return len(expected) == 0
+}
+
+// ResumeLocal launches only reserved QEMU nodes, using the original profiles.
+func ResumeLocal(ctx context.Context, o ClusterOptions, out io.Writer) error {
+	dir, c, err := loadCluster(o.Options)
+	if err != nil {
+		return err
+	}
+	provider, err := groupProvider(dir)
+	if err != nil {
+		return err
+	}
+	if provider != "qemu" {
+		return fmt.Errorf("use azure resume for Azure-owned nodes")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "artifacts", "infestation-node")); err == nil {
+		if _, err := startArtifacts(ctx, dir, ""); err != nil {
+			return err
+		}
+	}
+	base := o.BaseImage
+	if base == "" {
+		base = filepath.Join(filepath.Dir(dir), "images", "flatcar-"+FlatcarVersion+".qcow2")
+	}
+	for _, n := range c.Nodes {
+		if _, err := os.Stat(filepath.Join(dir, n.Name, "machine.json")); err == nil {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
+		if err != nil {
+			return err
+		}
+		raw, err = addClusterChannels(raw)
+		if err != nil {
+			return err
+		}
+		if err := Create(ctx, Options{Name: n.Name, StateDir: dir, BaseImage: base, Accel: o.Accel, Network: "slirp", MemoryMiB: o.MemoryMiB, profile: raw}, out); err != nil {
+			return err
+		}
+	}
+	if o.Wait > 0 {
+		return WaitCluster(ctx, o.Options, out)
+	}
+	return nil
 }

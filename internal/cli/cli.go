@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"infestation/internal/azurecheck"
@@ -34,7 +35,7 @@ func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
 func (l *list) Set(s string) error { *l = append(*l, s); return nil }
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/resume/start/wait/status/stop/api, validate, pki, ignition, image, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/resume/start/wait/status/stop/api, validate, pki, ignition, image, azure create/resume/start/status/stop, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
 		return nil
 	}
 	command := args[0]
@@ -71,14 +72,16 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			return fmt.Errorf("--state-dir is required")
 		}
 		return vm.ServeArtifacts(ctx, state)
-	case "vm cluster create", "vm cluster resume", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop", "vm cluster api":
-		o := vm.ClusterOptions{}
-		var mixedAzure bool
-		var region string
-		flags.StringVar(&o.Name, "name", "", "cluster name (required; creates NAME-0/1/2)")
+	case "azure create", "azure resume", "azure start", "azure stop", "azure status", "vm cluster create", "vm cluster resume", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop", "vm cluster api":
+		o := vm.ClusterOptions{Provider: "qemu"}
+		cloud := strings.HasPrefix(command, "azure ")
+		if cloud {
+			o.Provider = "azure"
+			command = "vm cluster " + strings.TrimPrefix(command, "azure ")
+		}
+		flags.StringVar(&o.Name, "name", "", "provider group name (required; use a distinct name for each group)")
 		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
-		if command == "vm cluster resume" {
-			flags.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU for mixed-test retry")
+		if command == "vm cluster resume" && !cloud {
 			flags.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image")
 			flags.StringVar(&o.Accel, "accel", "kvm", "local VM accelerator")
 			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "local VM memory MiB")
@@ -87,20 +90,33 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			flags.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS suffix, such as example.ts.net")
 			flags.StringVar(&o.NodeHelper, "node-helper", "bin/infestation-node", "static Linux node helper to embed")
 			flags.StringVar(&o.HelperSourceRef, "helper-source-ref", "", "build helper on each guest from this GitHub tag or commit instead of local binary")
-			flags.BoolVar(&mixedAzure, "azure", false, "place the third node in Azure instead of QEMU")
-			flags.StringVar(&region, "region", azureconfig.DefaultRegion, "Azure region when --azure is enabled")
-			flags.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
+			size := 3
+			if cloud {
+				size = 1
+			}
+			flags.IntVar(&o.Size, "size", size, "number of nodes to create on this provider in this call")
+			flags.BoolVar(&o.Init, "init", false, "designate one initializer when preparing new founding state")
+			if cloud {
+				flags.StringVar(&o.AzureLocation, "region", azureconfig.DefaultRegion, "Azure region")
+				flags.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
+			}
 			flags.StringVar(&o.HelperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "versioned multiarch golang builder image")
 			flags.StringVar(&o.AuthKey, "tailscale-auth-key", "", "tagged auth key (default: TAILSCALE_AUTH_KEY)")
 			flags.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private auth key file")
-			flags.StringVar(&o.BaseImage, "base-image", "", "trusted Flatcar base (default: download verified image)")
-			flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow tcg")
-			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
+			if !cloud {
+				flags.StringVar(&o.BaseImage, "base-image", "", "trusted Flatcar base (default: download verified image)")
+				flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow tcg")
+				flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
+			}
 		}
 		if command == "vm cluster create" || command == "vm cluster resume" || command == "vm cluster start" || command == "vm cluster wait" || command == "vm cluster api" {
-			flags.DurationVar(&o.Wait, "wait", 30*time.Minute, "readiness deadline; 0 starts in background")
+			waitDefault := 30 * time.Minute
+			if command == "vm cluster create" {
+				waitDefault = 0
+			}
+			flags.DurationVar(&o.Wait, "wait", waitDefault, "readiness deadline; 0 returns after provisioning; readiness needs workstation tailnet access")
 		}
-		if command == "vm cluster start" {
+		if command == "vm cluster start" && !cloud {
 			flags.StringVar(&o.Accel, "accel", "", "override stored accelerator for this start (kvm or tcg)")
 		}
 		if err := parse(flags, args); err != nil {
@@ -109,34 +125,33 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		if o.Wait < 0 {
 			return fmt.Errorf("--wait must not be negative")
 		}
-		if command == "vm cluster create" {
-			if mixedAzure && o.AzureLocation == "" {
-				o.AzureLocation = region
-			}
-			var regionSet bool
-			flags.Visit(func(f *flag.Flag) {
-				if f.Name == "region" {
-					regionSet = true
-				}
-			})
-			if regionSet && o.AzureLocation == "" {
-				return fmt.Errorf("--region requires --azure")
-			}
-		}
+
 		switch command {
 		case "vm cluster create":
 			return vm.CreateCluster(ctx, o, out)
 		case "vm cluster resume":
-			return vm.ResumeMixed(ctx, o, out)
+			if cloud {
+				return vm.ResumeAzure(ctx, o, out)
+			}
+			return vm.ResumeLocal(ctx, o, out)
 		case "vm cluster wait":
 			return vm.WaitCluster(ctx, o.Options, out)
 		case "vm cluster start":
+			if cloud {
+				return vm.AzureAction(ctx, o.Options, "start", out)
+			}
 			return vm.ClusterAction(ctx, o.Options, "start", out)
 		case "vm cluster status":
+			if cloud {
+				return vm.AzureAction(ctx, o.Options, "status", out)
+			}
 			return vm.ClusterAction(ctx, o.Options, "status", out)
 		case "vm cluster api":
 			return vm.ConfigureAPIService(ctx, o.Options, out)
 		default:
+			if cloud {
+				return vm.AzureAction(ctx, o.Options, "stop", out)
+			}
 			return vm.ClusterAction(ctx, o.Options, "stop", out)
 		}
 	case "vm create", "vm start", "vm status", "vm stop", "vm netcheck":
@@ -210,8 +225,10 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return nil
 	case "validate", "pki", "ignition":
 		portable()
+		var initNode string
 		var helper, tailscaleAuthKey, tailscaleAuthKeyFile, helperSourceRef, helperBuilderImage string
 		if command == "ignition" {
+			flags.StringVar(&initNode, "init", "", "authorize this configured node to initialize the database")
 			flags.StringVar(&helper, "node-helper", "bin/infestation-node", "Linux node bootstrap executable to embed for local VMs")
 			flags.StringVar(&helperSourceRef, "helper-source-ref", "", "build helper on each guest from this GitHub tag or commit")
 			flags.StringVar(&helperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "versioned multiarch golang builder image")
@@ -229,6 +246,16 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		if command == "ignition" {
+			if initNode != "" {
+				if err := c.SelectInitializer(initNode); err != nil {
+					return err
+				}
+			}
+			if len(c.Servers()) > 0 {
+				if _, err := c.Initializer(); err != nil {
+					return err
+				}
+			}
 			if tailscaleAuthKey == "" && tailscaleAuthKeyFile == "" && c.Tailscale != nil && c.Tailscale.AuthKeyFile == "" {
 				tailscaleAuthKey = os.Getenv("TAILSCALE_AUTH_KEY")
 			}

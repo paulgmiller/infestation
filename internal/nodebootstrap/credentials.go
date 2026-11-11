@@ -33,7 +33,7 @@ func (w Worker) prepareCredentials() error {
 	source, runtime, caPath := w.credentialPaths()
 	certificate, err := os.ReadFile(filepath.Join(source, "client.root.crt"))
 	if err != nil {
-		return fmt.Errorf("bootstrap SQL certificate is missing; fresh bootstrap credentials must be supplied to the -0 VM")
+		return fmt.Errorf("bootstrap SQL certificate is missing; fresh bootstrap credentials must be supplied to the explicitly designated initializer")
 	}
 	key, err := os.ReadFile(filepath.Join(source, "client.root.key"))
 	if err != nil {

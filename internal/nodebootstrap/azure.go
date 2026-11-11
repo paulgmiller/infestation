@@ -291,6 +291,9 @@ func (w *Worker) discoverAzure(ctx context.Context, initialized bool) error {
 		return fmt.Errorf("waiting for initial DNS registration: %d API, %d workers", servers, workers)
 	}
 	w.Config.Node = id.Name
+	for i := range nodes {
+		nodes[i].Init = nodes[i].Name == "api-0"
+	}
 	w.Config.Cluster.Nodes = nodes
 	return nil
 }

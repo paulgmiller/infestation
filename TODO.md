@@ -5,6 +5,21 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Consolidate deployment
 
+- [ ] Verify independent enrollment from separate workstations with two local VMs
+  (`--init --size 2`) and one Azure VM (`--size 1`), without shared local state.
+  Publish the updated helper source before testing; earlier helper refs lack the
+  enrollment endpoint. Test delayed peers and joining while the initializer is down.
+- [ ] Split cluster settings, per-node settings and per-owner state in the Go API;
+  remove static fixture/default and smoke-check assumptions about complete membership.
+- [ ] Generalize Azure enrollment batches beyond the current one-VM-per-call limit.
+- [ ] Design rotation/revocation of shared database/Kine leaf credentials, cluster
+  tokens and cached enrollment bundles while preserving the pinned cluster identity.
+- [ ] Future: replace explicit `--init` with automatic one-time bootstrap election over discovered tailnet peers:
+  seal an agreed founding voter set, persist votes/initialization target, and
+  handle ambiguous init results without authorizing another database. Do not
+  treat failure to discover an initialized database as proof none exists.
+- [ ] Replace inventory-wide bootstrap/readiness barriers and static smoke-node
+  lists with local join readiness and runtime membership discovery.
 - [ ] Make Pulumi the common provisioning layer for QEMU, Azure and additional
   VM compute providers; share the node/bootstrap contract across providers.
 - [ ] Remove unused deployment paths, duplicated networking/bootstrap code and
@@ -18,16 +33,14 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Reliable bootstrap and networking
 
-- [ ] Verify a fresh mixed deployment with all fixes present from first boot,
-  requiring no SSH repair/reboot. Capture failures before taking recovery actions.
 - [ ] Replace Azure default outbound access with an explicit egress design;
   evaluate dependency cost, failure scope and NAT traversal.
 - [ ] Validate container DNS, delayed peers, MTU, packet loss and pod routes from
   ordinary tailnet clients. [Detailed networking work](docs/networking-todo.md).
 - [ ] Add readiness-aware API Service withdrawal/failover and redundant DNS.
 - [ ] Choose and test pod NetworkPolicy enforcement.
-- [ ] Make Service names and pod/service CIDRs explicit for concurrent clusters;
-  clean up stale tailnet device, route and Service registrations.
+- [ ] Clean up stale tailnet device, route and Service registrations during
+  replacement or teardown so they cannot interfere with the tailnet's cluster.
 - [ ] Gate smoke clients on ready endpoints and retain failed-test evidence.
 - [ ] Verify kubeconfig publication across credential renewal.
 

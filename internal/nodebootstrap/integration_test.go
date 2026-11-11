@@ -66,7 +66,7 @@ func TestPinnedSQLBootstrap(t *testing.T) {
 	}
 	state := &memoryStore{blobs: map[string][]byte{}}
 	name := fmt.Sprintf("infestation-sql-bootstrap-%d", time.Now().UnixNano())
-	w := Worker{Config: Config{Cluster: c, Node: "kube-0"}, Store: state, Runner: containerRunner{name: name, t: t}, CredentialDir: filepath.Join(root, "source"), RuntimeCredentialDir: filepath.Join(root, "runtime"), CAPath: filepath.Join(root, "pki", "kube-0", "ca.crt"), Reachable: func(context.Context, string) bool { return true }}
+	w := Worker{Init: true, Config: Config{Cluster: c, Node: "kube-0"}, Store: state, Runner: containerRunner{name: name, t: t}, CredentialDir: filepath.Join(root, "source"), RuntimeCredentialDir: filepath.Join(root, "runtime"), CAPath: filepath.Join(root, "pki", "kube-0", "ca.crt"), Reachable: func(context.Context, string) bool { return true }}
 	for _, dir := range []string{w.CredentialDir, w.RuntimeCredentialDir} {
 		if err := os.Mkdir(dir, 0700); err != nil {
 			t.Fatal(err)

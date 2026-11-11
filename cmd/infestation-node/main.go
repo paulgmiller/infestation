@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -26,12 +27,24 @@ func main() {
 	if err == nil {
 		if len(os.Args) > 1 && os.Args[1] == "diagnose" {
 			err = nodebootstrap.Diagnose(ctx, config)
+		} else if len(os.Args) > 1 && os.Args[1] == "enroll" {
+			err = nodebootstrap.JoinMembership(ctx, config, "/", executil.OSRunner{})
+		} else if len(os.Args) > 1 && os.Args[1] == "membership" {
+			err = nodebootstrap.ServeMembership(ctx, config, executil.OSRunner{})
 		} else if len(os.Args) > 1 && os.Args[1] == "prepare" {
 			err = nodebootstrap.PrepareAzure(ctx, config, "/")
 		} else if len(os.Args) > 1 && os.Args[1] == "join" {
 			err = nodebootstrap.JoinAzure(ctx, config, "/")
 		} else {
-			err = (nodebootstrap.Worker{Config: config}).Run(ctx)
+			flags := flag.NewFlagSet("infestation-node", flag.ContinueOnError)
+			init := flags.Bool("init", false, "authorize first database initialization on this node")
+			err = flags.Parse(os.Args[1:])
+			if err == nil && flags.NArg() != 0 {
+				err = fmt.Errorf("unexpected arguments")
+			}
+			if err == nil {
+				err = (nodebootstrap.Worker{Config: config, Init: *init}).Run(ctx)
+			}
 		}
 	}
 	if err != nil {

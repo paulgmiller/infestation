@@ -15,8 +15,9 @@ import (
 	"infestation/internal/testutil"
 )
 
-func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
+func TestTemporarySQLCredentialOnlyOnExplicitInitializer(t *testing.T) {
 	c := testutil.Config()
+	c.Nodes[0].Name = "miller"
 	c.Nodes = append(c.Nodes, cluster.Node{Name: "worker-0", IP: "192.168.1.104", Role: "worker"})
 	state := t.TempDir()
 	if err := pki.Create(c, state); err != nil {
@@ -41,6 +42,11 @@ func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
 		doc, report, err := config.Parse(raw)
 		if err != nil {
 			t.Fatal(err, report)
+		}
+		for _, unit := range doc.Systemd.Units {
+			if unit.Name == "infestation-bootstrap.service" && strings.Contains(*unit.Contents, " --init\n") != n.Init {
+				t.Fatal("--init must be passed only to the explicitly selected server")
+			}
 		}
 		count := 0
 		chartFound := false
@@ -74,7 +80,7 @@ func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
 			}
 			if strings.HasPrefix(file.Path, nodebootstrap.BootstrapCredentialDir+"/") {
 				count++
-				if n.Name != "kube-0" || file.Mode == nil || *file.Mode != 0600 {
+				if n.Name != "miller" || file.Mode == nil || *file.Mode != 0600 {
 					t.Fatal("bootstrap credentials exposed to wrong node or file mode")
 				}
 			}
@@ -85,7 +91,7 @@ func TestTemporarySQLCredentialOnlyOnOrdinalZero(t *testing.T) {
 		if chartFound == n.Worker() {
 			t.Fatal("Cilium chart must be present only on servers")
 		}
-		if (n.Name == "kube-0" && count != 2) || (n.Name != "kube-0" && count != 0) {
+		if (n.Name == "miller" && count != 2) || (n.Name != "miller" && count != 0) {
 			t.Fatalf("wrong credential files on %s", n.Name)
 		}
 	}

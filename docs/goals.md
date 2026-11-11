@@ -28,12 +28,24 @@ that all behavior is implemented or proven. Outstanding work is in [TODO.md](../
 
 ## Portability and simplicity
 
+- Support one cluster per tailnet for now. Use conventional API/bootstrap
+  endpoints so friends need no additional cluster selector or global node list.
+- Discover arbitrarily named participants through the tailnet. For now, designate
+  one founding node with `--init`; it automatically initializes once two peers
+  are ready, or joins an existing database. Defer automatic election until it can
+  distinguish an unavailable existing cluster from a new one.
+- Provision compute from exactly one provider per command. Mixed clusters use
+  separate independent calls, such as local `--init --size 2` and Azure `--size 1`.
 - Support any compatible VM compute provider. QEMU and Azure are the current
   providers; other clouds, hosts and friends' machines should use the same node
   contract. Pulumi is the preferred provisioning layer.
 - Make it simple to give friends the repository/binary and an enrollment key so
   they can create a VM on the supplied tailnet. Accept a command argument or
   environment variable as well as a private key file.
+- Allow the creator to start nodes across hosts/providers, then let friends
+  independently add VMs using tailnet enrollment details and the cluster
+  name/endpoint. No complete shared node inventory or central edit is required.
+  Each host/Pulumi stack owns its own resources; cluster membership is discovered.
 - Prefer standard Flatcar images and shared Ignition/bootstrap logic. Build the
   helper natively in a Go container from a pinned source revision so deployment
   does not require a custom image or published helper binary per architecture.

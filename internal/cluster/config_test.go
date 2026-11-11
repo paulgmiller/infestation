@@ -6,16 +6,17 @@ import (
 	"testing"
 )
 
-func TestFixedInitializerIgnoresInventoryOrder(t *testing.T) {
+func TestExplicitInitializerIgnoresNameAndInventoryOrder(t *testing.T) {
 	c := testutil.Config()
+	c.Nodes[0].Name = "miller"
 	c.Nodes = []cluster.Node{c.Nodes[2], c.Nodes[1], c.Nodes[0]}
 	n, err := c.Initializer()
-	if err != nil || n.Name != "kube-0" || n.IP != "192.168.1.101" {
+	if err != nil || n.Name != "miller" || n.IP != "192.168.1.101" {
 		t.Fatalf("wrong initializer: %+v, %v", n, err)
 	}
 	for _, change := range []func(*cluster.Config){
-		func(c *cluster.Config) { c.Nodes[2].Name = "kube-3" },
-		func(c *cluster.Config) { c.Nodes[0].Name = "other-0" },
+		func(c *cluster.Config) { c.Nodes[2].Init = false },
+		func(c *cluster.Config) { c.Nodes[0].Init = true },
 		func(c *cluster.Config) { off := false; c.Nodes[2].CockroachDB = &off },
 		func(c *cluster.Config) { c.Nodes[2].Role = "worker" },
 	} {
@@ -118,5 +119,23 @@ func TestThreeNodeSmokeTopologyIsExplicitAndKeepsThreeDatabases(t *testing.T) {
 		if bad.Validate() == nil {
 			t.Fatal("invalid smoke topology accepted")
 		}
+	}
+}
+
+func TestInitializerChoiceRejectsSilentRetargeting(t *testing.T) {
+	c := testutil.Config()
+	if err := c.SelectInitializer("kube-1"); err == nil {
+		t.Fatal("changed existing authority")
+	}
+	c.Nodes[0].Init = false
+	c.Nodes[1].Name = "sullivan"
+	if err := c.SelectInitializer("sullivan"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := c.Initializer(); err != nil || n.Name != "sullivan" {
+		t.Fatal("explicit choice not retained", err)
+	}
+	if err := c.SelectInitializer("unknown"); err == nil {
+		t.Fatal("unknown initializer accepted")
 	}
 }

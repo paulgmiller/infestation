@@ -13,6 +13,7 @@ import (
 )
 
 type Node struct {
+	Init          bool   `json:"init,omitempty"`
 	Name          string `json:"name"`
 	IP            string `json:"ip"`
 	DNSName       string `json:"dns_name,omitempty"`
@@ -35,6 +36,7 @@ func (n Node) Worker() bool   { return n.Role == "worker" }
 func (n Node) Database() bool { return n.CockroachDB == nil || *n.CockroachDB }
 
 type Config struct {
+	DiscoverPeers       bool       `json:"discover_peers,omitempty"`
 	Tailscale           *Tailscale `json:"tailscale,omitempty"`
 	CockroachImage      string     `json:"cockroach_image"`
 	K3sExtensionVersion string     `json:"k3s_extension_version"`
@@ -97,23 +99,45 @@ func (c Config) Databases() []Node {
 	return out
 }
 
-// Initializer selects the fixed server VM with ordinal zero, independently of
-// inventory order. This is intentionally a naming convention, not leader election.
-// TODO: replace this with a coordinated bootstrap target (e.g. a Blob lease on
-// Azure) so a fresh deployment can proceed when the -0 VM never starts.
+// Initializer selects an explicitly authorized bootstrap server. Hostnames and
+// inventory order never grant initialization authority.
 func (c Config) Initializer() (Node, error) {
 	var selected Node
 	count := 0
-	for _, n := range c.Servers() {
-		if strings.HasSuffix(n.Name, "-0") {
+	for _, n := range c.Nodes {
+		if n.Init {
 			selected = n
 			count++
 		}
 	}
-	if count != 1 || !selected.Database() {
-		return Node{}, fmt.Errorf("bootstrap requires exactly one server named with suffix -0, hosting CockroachDB (for example kube-0)")
+	if count != 1 || selected.Worker() || !selected.Database() {
+		return Node{}, fmt.Errorf("bootstrap requires exactly one server with init=true, hosting CockroachDB")
 	}
 	return selected, nil
+}
+
+// SelectInitializer applies an explicit CLI choice without silently replacing
+// an existing bootstrap authority.
+func (c *Config) SelectInitializer(name string) error {
+	found := false
+	for _, n := range c.Nodes {
+		if n.Init && n.Name != name {
+			return fmt.Errorf("initializer is already %s; refusing to select %s", n.Name, name)
+		}
+		if n.Name == name {
+			if n.Worker() || !n.Database() {
+				return fmt.Errorf("initializer must be a database-hosting server")
+			}
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("initializer %q is not in the configured nodes", name)
+	}
+	for i := range c.Nodes {
+		c.Nodes[i].Init = c.Nodes[i].Name == name
+	}
+	return nil
 }
 func (c Config) MinDiskGiB() int {
 	if c.CockroachMinDiskGiB == 0 {
@@ -171,6 +195,9 @@ func (c Config) RequiredServers() int {
 func (c Config) ValidateDiscovered() error { return c.validate(true) }
 
 func (c Config) validate(surge bool) error {
+	if c.DiscoverPeers && c.Tailscale == nil {
+		return fmt.Errorf("peer discovery requires Tailscale")
+	}
 	if ts := c.Tailscale; ts != nil {
 		if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(ts.Version) ||
 			!ValidSAN(ts.Domain) || !strings.HasSuffix(ts.Domain, ".ts.net") ||
@@ -212,12 +239,20 @@ func (c Config) validate(surge bool) error {
 			return fmt.Errorf("api_tailnet_hostname must be k8s-api.<tailnet>.ts.net")
 		}
 	}
+	for _, n := range c.Nodes {
+		if n.Init {
+			if _, err := c.Initializer(); err != nil {
+				return err
+			}
+			break
+		}
+	}
 	expected := c.RequiredServers()
 	if c.SmokeTest && (c.SingleNodeLab || len(c.Nodes) != 3 || len(c.Servers()) != 2 || len(c.Databases()) != 3) {
 		return fmt.Errorf("smoke_test requires two API servers and one worker, all hosting CockroachDB")
 	}
 	servers := len(c.Servers())
-	if len(c.Nodes) == 0 || (servers != 0 && ((!surge && servers != expected) || (surge && servers < expected))) {
+	if len(c.Nodes) == 0 || (servers != 0 && !c.DiscoverPeers && ((!surge && servers != expected) || (surge && servers < expected))) {
 		return fmt.Errorf("exactly %d servers are required (or workers only)", expected)
 	}
 	names, ips := map[string]bool{}, map[string]bool{}

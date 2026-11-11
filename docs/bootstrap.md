@@ -1,9 +1,34 @@
 # Cluster bootstrap
 
-The inventory must identify exactly one database-hosting server whose name ends
-in `-0`. That node alone may initialize CockroachDB and perform initial Kine SQL
-setup. Selection is independent of inventory order. Other nodes join and wait;
-they do not initialize themselves. There is no automatic initializer failover.
+Exactly one founding node is explicitly authorized with `--init`:
+
+```sh
+infestation vm cluster create --name local --init --size 2 \
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
+  --helper-source-ref YOUR-PUBLISHED-REF
+infestation azure create --name cloud --size 1 \
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
+  --helper-source-ref YOUR-PUBLISHED-REF
+```
+
+These calls can run on different workstations. Each creates nodes on exactly one
+provider and records only its own machines. Use distinct group names in the
+shared tailnet. The first call authorizes its first node; the second call creates
+no CA, cluster token or SQL bootstrap credential. Ignition passes `--init` only
+to the designated helper. The flag grants authority, rather than forcing a fresh
+database. Hostname suffixes do not grant authority.
+
+The initializer waits for three listening database participants, including itself
+and two peers, before the first init RPC. An explicit single-node lab profile is
+the exception. Existing database identity and recorded intent prevent fresh init
+on subsequent starts. If another founding CA is discovered, enrollment stops.
+Never designate two independent initializers: a partition can hide the conflict.
+
+For manually rendered static inventories, `"init": true` marks the selected node;
+`infestation ignition --init NODE` can select it when none is already marked.
+Shared Azure API profiles still fence their initializer to provider instance 0.
+There is no automatic election or initializer failover. A future one-time election
+must agree on a durable target; seeing three peers or ranking IPs is insufficient.
 
 ## First boot
 
@@ -12,11 +37,32 @@ Go container builds the helper from an immutable source commit before enrollment
 Host Tailscale then enrolls the node and supplies its runtime address. CockroachDB
 and K3s start after host preparation; the container uses Quad100 for tailnet DNS.
 
-The initializer checks peer database listeners and queries for an existing cluster
-identity. It records initialization intent before the initial request. A saved
-cluster ID prevents accepting a different database identity. The present marker
-lives on the initializer's persistent disk; losing that disk is an unresolved
-replacement/recovery case, not permission to initialize again.
+After enrollment, the helper discovers online `tag:roach` peers in the supplied
+tailnet using `tailscale status --json`. It probes a helper-owned HTTP endpoint
+on port **7444**, bound to a Tailscale IPv4 address. This is separate from K3s
+(6443) and CockroachDB (26257). Policy must allow cluster peers to reach 7444;
+no public listener, Tailscale API key or node-to-node SSH permission is needed.
+
+`GET /v1/join` provides cluster settings, the K3s token, public database CA, shared
+wildcard database node leaf/key and Kine client leaf/key. It never provides CA
+signing keys, SQL root/admin client keys or enrollment auth keys. All tailnet
+members are administrators by design. HTTP travels inside Tailscale/WireGuard;
+the server rejects non-tailnet source addresses and responses disable caching.
+Discovery uses the DNS name, tags and stable ID supplied by Tailscale, not an IP
+ranking. See [Tailscale status fields](https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go).
+
+The joiner validates the bundle, pins it in root-only
+`/var/lib/infestation/join.json`, installs the leaves, and supplies runtime
+Cockroach join seeds and the K3s token before those services start. Existing
+credentials and pins cannot be silently replaced. Every enrolled server serves
+the bundle, so later joins can use another member when the initializer is down.
+`GET /v1/node` reports membership identity for runtime discovery. Shared leaf keys
+match the chosen administrator boundary; rotation/revocation needs further work.
+
+The initializer queries peers for an existing database identity, records intent
+before init and saves the resulting UUID. Ambiguous init results never authorize
+another init request. The marker remains on its persistent disk; losing it is an
+unresolved recovery case, not permission to initialize another database.
 
 ## Temporary SQL credential
 
@@ -39,12 +85,15 @@ K3s generates its own serving/client credentials. Each server publishes a separa
 root-only `/etc/infestation/kubeconfig`, replacing the server URL with the shared
 API Service and retaining normal CA, hostname and client authentication checks.
 The publisher retries and refreshes after source credential changes. Retrieval
-uses Tailscale SSH with `core` + sudo. Local QEMU diagnostic/access channels are
+uses Tailscale SSH with `core` + sudo, or the helper’s tailnet-only
+`GET /v1/kubeconfig` endpoint. That endpoint exposes the same admin credentials to
+tailnet administrators; Kubernetes API traffic retains normal TLS. Local QEMU diagnostic/access channels are
 also available for boot inspection.
 
 ## Verification boundary
 
-Tests cover initializer selection, initialization intent, identity mismatch,
+Tests cover independent enrollment, offline restart, conflicting enrollment CAs,
+credential exclusion, endpoint source checks, initializer selection, initialization intent, identity mismatch,
 credential scope/lifetime, SQL retries and cleanup. A pinned database integration
 test can be run explicitly:
 
@@ -54,5 +103,6 @@ INFESTATION_DOCKER_TEST=1 go test ./internal/nodebootstrap \
 ```
 
 The [mixed test](mixed-cluster.md) exercised the distributed topology after
-repairs. Fresh unattended provisioning, initializer replacement, lost-marker and
+repairs. The independent two-call flow has not been VM-tested. Fresh unattended
+provisioning, initializer replacement, lost-marker and
 quorum-loss recovery remain outstanding in [TODO.md](../TODO.md).

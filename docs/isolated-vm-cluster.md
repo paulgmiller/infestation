@@ -18,14 +18,14 @@ Linux helper from the checkout:
 go build -o bin/infestation ./cmd/infestation
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/infestation-node ./cmd/infestation-node
 
-bin/infestation vm cluster create --name lab \
+bin/infestation vm cluster create --name lab --init --size 3 \
   --tailnet-domain YOUR-TAILNET.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
-  --state-dir state/vms
+  --state-dir state/vms --wait 30m
 ```
 
 Alternatively supply `TAILSCALE_AUTH_KEY` or `--tailscale-auth-key`. The command
-requires a tagged enrollment key and refuses an existing state directory. It
+requires a `tag:roach` enrollment key and refuses an existing state directory. It
 creates `lab-0`, `lab-1` and `lab-2`, using 3072 MiB and two virtual CPUs per VM.
 `--memory-mib` sets memory per VM. KVM is the default; `--accel tcg` permits slow
 software emulation. `--base-image` accepts a previously verified Flatcar qcow2;
@@ -33,7 +33,7 @@ otherwise the pinned image is downloaded and SHA512-verified.
 
 The initial bootstrap renders private PKI and a persistent K3s token once. The
 CA signing key and long-lived SQL admin key remain on the workstation. Only
-node `-0` receives the existing one-hour SQL bootstrap credential. It initializes
+the explicitly selected first node receives the one-hour SQL bootstrap credential. It initializes
 Cockroach once, configures Kine SQL, then removes that credential. Resume commands
 do not regenerate the CA, token or database identity.
 
@@ -81,7 +81,7 @@ pod IPs are preserved. See the official
 [K3s Tailscale configuration](https://docs.k3s.io/networking/distributed-multicloud#integration-with-the-tailscale-vpn-provider-experimental).
 An enrollment auth key cannot approve routes or change the policy.
 
-`create` waits for all three private API endpoints and Ready nodes, then writes
+With `--wait 30m`, `create` waits for private API endpoints and Ready nodes, then writes
 `state/vms/lab/kubeconfig` with mode `0600`. **Node readiness does not prove that
 pod routes are approved.** Run the directed DNS/Service workload check:
 
@@ -174,7 +174,7 @@ and failover behavior remain unverified. See the networking checkpoint for detai
 Instead of supplying `--node-helper`, opt into a native guest build:
 
 ```sh
-bin/infestation vm cluster create --name source-lab \
+bin/infestation vm cluster create --name source-lab --init --size 3 \
   --tailnet-domain YOUR-TAILNET.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT

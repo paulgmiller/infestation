@@ -32,7 +32,7 @@ func TestTailVIPConfigKeepsCAClientCredentialsAndVerifiesSharedIdentity(t *testi
 }
 
 func TestAPIServiceJobsTargetServersAndOnlyMountCLIAndSocket(t *testing.T) {
-	c := clusterConfig(ClusterOptions{Options: Options{Name: "lab"}, Domain: "example.ts.net"})
+	c := clusterConfig(ClusterOptions{Size: 3, Init: true, Options: Options{Name: "lab"}, Domain: "example.ts.net"})
 	c.Nodes = append(c.Nodes, cluster.Node{Name: "worker-0", IP: "192.0.2.4", Role: "worker"})
 	doc := apiServiceJobs(c)
 	raw, _ := json.Marshal(doc)

@@ -49,23 +49,40 @@ and SSH access for members to `tag:roach` devices. The tested member SSH rule is
 }
 ```
 
+The independent enrollment flow uses two calls and distinct group names. These
+can run on different workstations; only tailnet enrollment details are shared.
+Use a published ref containing the new enrollment helper, not the historical test
+commit below. This flow still needs fresh VM verification.
+
 ```sh
-bin/infestation vm cluster create --name UNIQUE-NAME --state-dir state/vms \
-  --tailnet-domain quoll-duck.ts.net \
+bin/infestation vm cluster create --name local-new --state-dir state/local \
+  --init --size 2 --tailnet-domain quoll-duck.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref 138c5676d497f665517d6fc67c1d5a0712e7a15e \
-  --azure \
-  --memory-mib 3072 --wait 30m
+  --helper-source-ref YOUR-NEW-PUBLISHED-REF
+
+bin/infestation azure create --name cloud-new --state-dir state/cloud \
+  --size 1 --tailnet-domain quoll-duck.ts.net \
+  --tailscale-auth-key-file secrets/tsauth \
+  --helper-source-ref YOUR-NEW-PUBLISHED-REF
 ```
 
-Node suffixes 0 and 1 are local; `--azure` places suffix 2 in Azure. Region and
-SKU default to `westus2` and `Standard_B2s`; override them directly with `--region`
-and `--sku`. No price, quota or SKU-selection step is performed. Only node 0 receives the
-one-hour SQL bootstrap credential and can initialize the database. All nodes
-build their helper from the pinned GitHub commit in the same digest-pinned,
-multiarchitecture Go container. No workstation artifact server is used.
+The first call creates `local-new-0/1`; only `local-new-0` gets `--init` and the
+one-hour SQL bootstrap credential. The second creates `cloud-new-0` with no local
+CA/token or knowledge of the first call’s inventory. After Tailscale enrollment,
+it obtains shared leaf/join credentials from a peer’s helper on port 7444.
+Tailnet policy must permit that port between `tag:roach` peers.
 
-The Azure resource group is `UNIQUE-NAME-rg`. Its resources are one VM, one
+Azure region and SKU default to `westus2` and `Standard_B2s`. Creation returns
+after provisioning; from a tailnet-connected workstation, use `--wait 30m` or
+`vm cluster wait` with that workstation’s group name. The first three database
+participants must arrive within the initializer credential’s one-hour lifetime;
+expiry requires explicit recovery. See [bootstrap](bootstrap.md).
+
+The historical run below used source commit
+`138c5676d497f665517d6fc67c1d5a0712e7a15e` and a static three-node inventory. Its
+latency/topology evidence does not verify independent enrollment.
+
+The Azure resource group is `cloud-new-rg`. Its resources are one VM, one
 managed OS disk, a NIC, a VNet/subnet and an NSG. It contains no storage account,
 load balancer, public IP resource, managed identity, private DNS zone, or remote
 execution extension. Boot diagnostics are disabled. The subnet explicitly opts
@@ -83,17 +100,17 @@ Azure requires an OS login credential in this VM creation API. The CLI generates
 an RSA public key, supplies it in the OS profile, and never serializes the private
 half. This satisfies Azure validation; Tailscale SSH handles real access.
 
-A failed creation preserves profiles, CA, token, disks and Azure metadata. For
-this static mixed-test path, retry without regenerating them:
+A failed creation preserves profiles, disks and provider metadata. Retry each
+provider separately using its original private state:
 
 ```sh
-bin/infestation vm cluster resume --name UNIQUE-NAME --state-dir state/vms --wait 30m
+bin/infestation vm cluster resume --name local-new --state-dir state/local --wait 0
+bin/infestation azure resume --name cloud-new --state-dir state/cloud --wait 0
 ```
 
-The retry checks the resource group's ownership tag and preserves a provisioned
-Azure VM. It creates missing local nodes from the original profiles; it does not
-renew expired bootstrap credentials or replace existing disks. Keep partial state
-for diagnosis rather than blindly rerunning `create` or reinitializing a database.
+Resume never regenerates CA/token or renews an expired bootstrap credential.
+Azure retry validates the saved resource-group ownership and reuses the saved
+template. Preserve partial state for diagnosis instead of reinitializing a database.
 
 ## Actual evidence and repairs
 

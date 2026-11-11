@@ -25,6 +25,11 @@ func File(path string, data []byte, mode int) types.File {
 func quoted(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func Token(c cluster.Config, state string) (string, error) {
+	if c.DiscoverPeers {
+		if _, err := c.Initializer(); err != nil {
+			return "", nil
+		}
+	}
 	path := filepath.Join(state, "pki", "k3s-token")
 	if data, err := os.ReadFile(path); err == nil {
 		token := strings.TrimSpace(string(data))
@@ -139,7 +144,7 @@ func Render(c cluster.Config, n cluster.Node, state, token string, options ...Bo
 			uid  int
 		}{"client.kine.key", 0600, 0})
 	}
-	if n.Database() || !n.Worker() {
+	if (n.Database() || !n.Worker()) && (!c.DiscoverPeers || n.Init) {
 		for _, entry := range certs {
 			data, err := os.ReadFile(filepath.Join(state, "pki", n.Name, entry.name))
 			if err != nil {
@@ -249,6 +254,9 @@ WantedBy=multi-user.target
 			return doc, err
 		}
 	}
+	if c.DiscoverPeers {
+		membershipProfile(&doc, c, n, options[0])
+	}
 	accessProfile(&doc, c, n)
 	return doc, nil
 }
@@ -284,7 +292,7 @@ func CockroachUnit(c cluster.Config, n cluster.Node) string {
 	if c.Tailscale != nil {
 		tailnetDependency = "Requires=infestation-tailnet.service\nAfter=infestation-tailnet.service\n"
 	}
-	return fmt.Sprintf(`[Unit]
+	unit := fmt.Sprintf(`[Unit]
 Description=CockroachDB host datastore
 %sWants=network-online.target
 After=network-online.target docker.service%s
@@ -306,4 +314,10 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 `, tailnetDependency, dependency, dependency, check, store, containerDNS, store, c.CockroachImage, command, net.JoinHostPort(c.NodeAddress(n), "26257"), join, locality, c.Cache(), c.SQLMemory())
+	if c.DiscoverPeers {
+		unit = strings.Replace(unit, "[Service]\n", "[Service]\nEnvironmentFile=/run/infestation/cluster.env\n", 1)
+		unit = strings.Replace(unit, join, " --join=${INFESTATION_SEEDS}", 1)
+		unit = strings.Replace(unit, "[Unit]\n", "[Unit]\nRequires=infestation-join.service\nAfter=infestation-join.service\n", 1)
+	}
+	return unit
 }

@@ -137,7 +137,7 @@ func worker(t *testing.T) (*Worker, *dbRunner, *memoryStore) {
 	s := &memoryStore{blobs: map[string][]byte{}}
 	r := &dbRunner{t: t, store: s, target: "192.168.1.101"}
 	c := testutil.Config()
-	w := &Worker{Config: Config{Cluster: c, Node: c.Servers()[0].Name, Account: "testaccount", APIEndpoint: "https://regional.example.test:6443", DeploymentID: "test"}, Runner: r, Store: s, Reachable: func(context.Context, string) bool { return true }}
+	w := &Worker{Init: true, Config: Config{Cluster: c, Node: c.Servers()[0].Name, Account: "testaccount", APIEndpoint: "https://regional.example.test:6443", DeploymentID: "test"}, Runner: r, Store: s, Reachable: func(context.Context, string) bool { return true }}
 	root := t.TempDir()
 	w.CredentialDir, w.RuntimeCredentialDir, w.CAPath = filepath.Join(root, "source"), filepath.Join(root, "runtime"), filepath.Join(root, "ca.crt")
 	raw, ca := credentialFixture(t)
@@ -254,11 +254,11 @@ func TestExpiredAndLongLivedCredentialsStopBeforeInit(t *testing.T) {
 	}
 }
 
-func TestOnlyOrdinalZeroInitializes(t *testing.T) {
+func TestOnlyExplicitInitializerInitializes(t *testing.T) {
 	w, r, _ := worker(t)
 	w.Config.Cluster.Nodes[0], w.Config.Cluster.Nodes[2] = w.Config.Cluster.Nodes[2], w.Config.Cluster.Nodes[0]
 	if _, err := w.Database(context.Background()); err != nil || r.inits != 1 {
-		t.Fatalf("ordinal zero must initialize regardless of order: %v", err)
+		t.Fatalf("explicit initializer must initialize regardless of order: %v", err)
 	}
 	for _, name := range []string{"kube-1", "kube-2", "worker-0", "unknown"} {
 		w, r, s := worker(t)
@@ -386,5 +386,36 @@ func TestWorkerRoleDoesNotRelabelControlPlane(t *testing.T) {
 	runner.fail = true
 	if w.labelWorkers(context.Background(), "/test/kubeconfig") == nil {
 		t.Fatal("label failure ignored")
+	}
+}
+
+func TestInitRequiresExplicitAuthority(t *testing.T) {
+	w, r, s := worker(t)
+	w.Init = false
+	if _, err := w.Database(context.Background()); err == nil || r.inits != 0 || s.writes != 0 {
+		t.Fatal("database bootstrap proceeded without --init")
+	}
+}
+
+func TestArbitraryInitializerWaitsForTwoPeers(t *testing.T) {
+	w, r, _ := worker(t)
+	w.Config.Cluster.Nodes[0].Name = "miller"
+	w.Config.Node = "miller"
+	w.Reachable = func(_ context.Context, host string) bool { return host != "192.168.1.103" }
+	if _, err := w.Database(context.Background()); err == nil || r.inits != 0 {
+		t.Fatal("initialized before two peers were ready")
+	}
+	w.Reachable = func(context.Context, string) bool { return true }
+	if _, err := w.Database(context.Background()); err != nil || r.inits != 1 {
+		t.Fatalf("arbitrary-name initializer failed with two peers: %v", err)
+	}
+}
+
+func TestExistingDatabaseDoesNotRequireThreeAvailableListeners(t *testing.T) {
+	w, r, _ := worker(t)
+	r.initialized = true
+	w.Reachable = func(_ context.Context, host string) bool { return host == r.target }
+	if _, err := w.Database(context.Background()); err != nil || r.inits != 0 {
+		t.Fatalf("existing database should be adopted without new initialization: %v", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/coreos/ignition/v2/config/v3_3/types"
 	"infestation/internal/cluster"
@@ -15,6 +16,7 @@ import (
 )
 
 type Bootstrap struct {
+	JoinBundle                             []byte // private leaf credentials/token; never CA/admin signing keys
 	HelperSourceCommit, HelperBuilderImage string
 	// Render-only secret: never serialize into the node's bootstrap inventory.
 	TailscaleAuthKey                                 string `json:"-"`
@@ -26,8 +28,8 @@ type Bootstrap struct {
 }
 
 func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Bootstrap) error {
-	initializer, err := c.Initializer()
-	if err != nil {
+	_, err := c.Initializer()
+	if err != nil && !c.DiscoverPeers {
 		return err
 	}
 	if n.Worker() && b.Pool == nil {
@@ -36,10 +38,13 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 	add := func(path, text string, mode int) {
 		doc.Storage.Files = append(doc.Storage.Files, File(path, []byte(text), mode))
 	}
-	if n.Name == initializer.Name {
+	if n.Init {
+		if c.DiscoverPeers && len(b.JoinBundle) == 0 {
+			return fmt.Errorf("initializer requires a private enrollment bundle")
+		}
 		var credential struct{ Certificate, Key []byte }
 		if json.Unmarshal(b.Credential, &credential) != nil || len(credential.Certificate) == 0 || len(credential.Key) == 0 {
-			return fmt.Errorf("the -0 Ignition profile requires a short-lived SQL bootstrap credential")
+			return fmt.Errorf("the initializer Ignition profile requires a short-lived SQL bootstrap credential")
 		}
 		add(nodebootstrap.BootstrapCredentialDir+"/client.root.crt", string(credential.Certificate), 0600)
 		add(nodebootstrap.BootstrapCredentialDir+"/client.root.key", string(credential.Key), 0600)
@@ -88,8 +93,14 @@ exec /opt/infestation/infestation-node "$@"
 		add("/opt/infestation/bootstrap", loader, 0755)
 		executable = "/opt/infestation/bootstrap"
 	}
+	if n.Init {
+		executable += " --init"
+	}
 	unit := "[Unit]\nDescription=Infestation node-local bootstrap\nWants=network-online.target docker.service\nAfter=network-online.target docker.service\nStartLimitIntervalSec=0\n\n[Service]\nStandardOutput=journal+console\nStandardError=journal+console\nType=oneshot\nTimeoutStartSec=0\nExecStart=" + executable + "\nRestart=on-failure\nRestartSec=15s\n\n[Install]\nWantedBy=multi-user.target\n"
 	timer := "[Unit]\nDescription=Refresh Infestation kubeconfig publication\n[Timer]\nOnBootSec=5min\nOnUnitInactiveSec=5min\nUnit=infestation-bootstrap.service\n[Install]\nWantedBy=timers.target\n"
+	if c.DiscoverPeers {
+		unit = strings.Replace(unit, "Wants=network-online.target docker.service", "Requires=infestation-join.service\nAfter=infestation-join.service\nWants=network-online.target docker.service", 1)
+	}
 	doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: "infestation-bootstrap.service", Enabled: ptr(true), Contents: &unit}, types.Unit{Name: "infestation-bootstrap.timer", Enabled: ptr(true), Contents: &timer})
 	if n.Worker() || c.Tailscale != nil {
 		return nil

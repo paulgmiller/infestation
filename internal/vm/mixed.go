@@ -146,6 +146,9 @@ func deployAzureNode(ctx context.Context, node azureNode, dir string, out io.Wri
 }
 
 func azureAction(ctx context.Context, node azureNode, action string, out io.Writer) error {
+	if action != "start" && action != "stop" {
+		return fmt.Errorf("unknown Azure VM action")
+	}
 	actual := "start"
 	if action == "stop" {
 		actual = "deallocate"
@@ -158,10 +161,10 @@ func azureAction(ctx context.Context, node azureNode, action string, out io.Writ
 	return nil
 }
 
-// ResumeMixed retries infrastructure and local launches from the original
+// ResumeAzure retries only Azure infrastructure from the original
 // private profiles. It never reissues the CA, token or SQL bootstrap credential.
-func ResumeMixed(ctx context.Context, o ClusterOptions, out io.Writer) error {
-	dir, c, err := loadCluster(o.Options)
+func ResumeAzure(ctx context.Context, o ClusterOptions, out io.Writer) error {
+	dir, _, err := loadCluster(o.Options)
 	if err != nil {
 		return err
 	}
@@ -176,18 +179,8 @@ func ResumeMixed(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	if strings.TrimSpace(tag.Stdout) != node.Ownership {
 		return fmt.Errorf("mixed resource group ownership mismatch")
 	}
-	if node.PublicKey == "" {
-		node.PublicKey, err = disposableAzurePublicKey()
-		if err != nil {
-			return err
-		}
-		if err = fsutil.WriteJSON(filepath.Join(dir, "azure-node.json"), node); err != nil {
-			return err
-		}
-	}
-	if err = fsutil.WriteJSON(filepath.Join(dir, "azure-template.json"), azureTemplate(node, o.AzureVMSize)); err != nil {
-		return err
-	}
+	// Retry saved inputs verbatim; defaults must not resize an existing VM or
+	// replace its credentials.
 	status := executil.OSRunner{}.Run(ctx, "az", "vm", "show", "--subscription", node.Subscription, "--resource-group", node.Group, "--name", node.Node, "--query", "provisioningState", "-o", "tsv")
 	if status.Code != 0 || strings.TrimSpace(status.Stdout) != "Succeeded" {
 		if err = deployAzureNode(ctx, node, dir, out); err != nil {
@@ -196,31 +189,25 @@ func ResumeMixed(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	} else {
 		fmt.Fprintln(out, "Preserving provisioned Azure VM:", node.Node)
 	}
-	base := o.BaseImage
-	if base == "" {
-		base = filepath.Join(filepath.Dir(dir), "images", "flatcar-"+FlatcarVersion+".qcow2")
-	}
-	for _, n := range c.Nodes {
-		if n.Name == node.Node {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(dir, n.Name, "machine.json")); err == nil {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
-		if err != nil {
-			return err
-		}
-		raw, err = addClusterChannels(raw)
-		if err != nil {
-			return err
-		}
-		if err = Create(ctx, Options{Name: n.Name, StateDir: dir, BaseImage: base, Accel: o.Accel, Network: "slirp", MemoryMiB: o.MemoryMiB, profile: raw}, out); err != nil {
-			return err
-		}
-	}
 	if o.Wait > 0 {
 		return WaitCluster(ctx, o.Options, out)
 	}
 	return nil
+}
+
+// AzureAction affects only Azure compute, never the local VMs sharing this state.
+func AzureAction(ctx context.Context, o Options, action string, out io.Writer) error {
+	dir, _, err := loadCluster(o)
+	if err != nil {
+		return err
+	}
+	node, ok := loadAzureNode(dir)
+	if !ok {
+		return fmt.Errorf("no owned Azure node in this state")
+	}
+	if action == "status" {
+		result := executil.OSRunner{Output: out}.Run(ctx, "az", "vm", "get-instance-view", "--subscription", node.Subscription, "--resource-group", node.Group, "--name", node.Node, "--query", "instanceView.statuses", "-o", "json")
+		return result.Err("read Azure VM status")
+	}
+	return azureAction(ctx, node, action, out)
 }
