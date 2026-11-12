@@ -32,7 +32,8 @@ bin/infestation --help
 ```
 
 Builds and unit tests do not provision resources. Running VM commands needs the
-appropriate QEMU/KVM tools or authenticated Azure CLI. Connectivity checks need
+appropriate [QEMU/KVM packages and host access](docs/local-vm-prerequisites.md)
+or authenticated Azure CLI. Connectivity checks need
 kubectl and a reachable cluster.
 
 ## Create nodes
