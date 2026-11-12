@@ -15,13 +15,13 @@ import (
 	"regexp"
 
 	"gopkg.in/yaml.v3"
-	"infestation/internal/azureconfig"
-	"infestation/internal/bootstrap"
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
-	"infestation/internal/ignition"
-	"infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/azureconfig"
+	"github.com/paulgmiller/infestation/internal/bootstrap"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/pki"
 )
 
 type Options struct {

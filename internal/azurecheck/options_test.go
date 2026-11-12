@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/cluster"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func TestOptionalVersionDefaultsAndOverrides(t *testing.T) {

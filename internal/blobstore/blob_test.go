@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 type tokenRunner struct {

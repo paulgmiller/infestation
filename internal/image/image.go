@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 const Base = "flatcar_production_qemu_image.img"

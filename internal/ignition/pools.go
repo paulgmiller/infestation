@@ -9,9 +9,9 @@ import (
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/cluster"
-	"infestation/internal/fsutil"
-	"infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/pki"
 )
 
 // GeneratePools writes exactly one shared first-boot document per role. Host

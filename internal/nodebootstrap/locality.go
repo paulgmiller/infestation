@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/cluster"
 )
 
 var localityValue = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)

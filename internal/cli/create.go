@@ -2,9 +2,9 @@ package cli
 
 import (
 	"github.com/spf13/cobra"
-	"infestation/internal/azureconfig"
-	"infestation/internal/ignition"
-	"infestation/internal/vm"
+	"github.com/paulgmiller/infestation/internal/azureconfig"
+	"github.com/paulgmiller/infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/vm"
 )
 
 func (p provider) create() *cobra.Command {
@@ -13,7 +13,7 @@ func (p provider) create() *cobra.Command {
 	f.IntVar(&o.Size, "size", 1, "number of nodes created on this provider")
 	f.BoolVar(&o.Agent, "agent", false, "run a K3s agent and CockroachDB, without an API server")
 	f.BoolVar(&o.Init, "init", false, "authorize the first server in this group to initialize the database")
-	f.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS domain, such as example.ts.net")
+	f.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS domain (default: discover from local running Tailscale)")
 	f.StringVar(&o.AuthKey, "tailscale-auth-key", "", "tag:roach auth key (default: TAILSCALE_AUTH_KEY)")
 	f.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private auth key file")
 	f.StringVar(&o.HelperSourceRef, "helper-source-ref", ignition.DefaultHelperSourceRef, "helper source branch, tag or commit; resolved once before provisioning")

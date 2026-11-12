@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"infestation/internal/cluster"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 // BootstrapCredential mints a separate short-lived client key. It never exports

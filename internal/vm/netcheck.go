@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/ignition"
 )
 
 func validateNetwork(network string) error {

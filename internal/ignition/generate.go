@@ -14,8 +14,8 @@ import (
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/cluster"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 func ptr[T any](v T) *T { return &v }

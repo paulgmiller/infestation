@@ -13,14 +13,14 @@ import (
 	"strings"
 	"time"
 
-	"infestation/internal/azureconfig"
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
-	"infestation/internal/ignition"
-	"infestation/internal/image"
-	"infestation/internal/nodebootstrap"
-	"infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/azureconfig"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/image"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/pki"
 )
 
 type ClusterOptions struct {
@@ -105,10 +105,15 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	o.Domain, err = resolveDomain(ctx, o.Domain, executil.OSRunner{})
+	if err != nil {
+		return err
+	}
 	c := clusterConfig(o)
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	fmt.Fprintln(out, "Tailnet domain:", o.Domain)
 	base := o.BaseImage
 	if o.Provider == "qemu" {
 		if err := validateHost(o.Accel); err != nil {

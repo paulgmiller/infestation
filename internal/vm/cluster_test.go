@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
-	"infestation/internal/ignition"
-	"infestation/internal/nodebootstrap"
-	"infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/pki"
 )
 
 func TestLocalVMsSharePhysicalHostAcrossCreateGroups(t *testing.T) {

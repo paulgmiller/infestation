@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 // RemoveGroup removes only compute owned by this saved provider group. Local

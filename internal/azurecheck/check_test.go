@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 func TestCycleAlwaysTearsDownAndPreservesBothErrors(t *testing.T) {

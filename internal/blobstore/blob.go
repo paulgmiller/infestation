@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 const MaxArtifactSize = 1024 * 1024

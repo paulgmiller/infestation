@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 type fakeRunner struct {

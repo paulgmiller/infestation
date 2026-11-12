@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
-	"infestation/internal/blobstore"
+	"github.com/paulgmiller/infestation/internal/blobstore"
 )
 
 // These few native resource registrations avoid pulling in the large generated

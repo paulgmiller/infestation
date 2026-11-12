@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/cluster"
-	"infestation/internal/tailnet"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/tailnet"
 )
 
 func tailnetProfile(doc *types.Config, c cluster.Config, n cluster.Node, options []Bootstrap) error {

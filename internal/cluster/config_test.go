@@ -1,8 +1,8 @@
 package cluster_test
 
 import (
-	"infestation/internal/cluster"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/testutil"
 	"testing"
 )
 

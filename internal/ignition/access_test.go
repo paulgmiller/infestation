@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/cluster"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func TestPortableAccessPreservesManagedConfigAndTLS(t *testing.T) {

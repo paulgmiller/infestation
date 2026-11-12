@@ -3,7 +3,7 @@ package pki
 import (
 	"crypto/x509"
 	"encoding/pem"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/testutil"
 	"os"
 	"path/filepath"
 	"strings"

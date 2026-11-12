@@ -11,15 +11,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"infestation/internal/azureconfig"
-	"infestation/internal/blobstore"
-	"infestation/internal/bootstrap"
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
-	"infestation/internal/ignition"
-	"infestation/internal/kubeconfigstore"
-	"infestation/internal/nodebootstrap"
-	"infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/azureconfig"
+	"github.com/paulgmiller/infestation/internal/blobstore"
+	"github.com/paulgmiller/infestation/internal/bootstrap"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/kubeconfigstore"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/pki"
 )
 
 type nodeAssets struct {

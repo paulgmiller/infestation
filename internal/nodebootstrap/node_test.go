@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"infestation/internal/blobstore"
-	"infestation/internal/bootstrap"
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
-	"infestation/internal/pki"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/blobstore"
+	"github.com/paulgmiller/infestation/internal/bootstrap"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 const identity = "96c1d420-f94b-43e3-845d-e946b2fcce1b"

@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 const Namespace = "infestation-smoke"

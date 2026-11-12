@@ -2,7 +2,7 @@ package azurecheck
 
 import (
 	"fmt"
-	"infestation/internal/azureconfig"
+	"github.com/paulgmiller/infestation/internal/azureconfig"
 	"io"
 	"regexp"
 	"strings"

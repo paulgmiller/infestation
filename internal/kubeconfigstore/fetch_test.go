@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/blobstore"
-	"infestation/internal/bootstrap"
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/blobstore"
+	"github.com/paulgmiller/infestation/internal/bootstrap"
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 const config = `apiVersion: v1

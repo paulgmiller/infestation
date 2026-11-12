@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
-	"infestation/internal/fsutil"
-	"infestation/internal/tailnet"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/tailnet"
 )
 
 func TestProfileKeepsSecretsPrivateAndNetworkingOutboundOnly(t *testing.T) {

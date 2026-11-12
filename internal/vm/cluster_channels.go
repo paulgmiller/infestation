@@ -5,7 +5,7 @@ import (
 	"fmt"
 	config "github.com/coreos/ignition/v2/config/v3_3"
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/ignition"
 	"strings"
 )
 

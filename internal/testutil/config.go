@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/cluster"
 )
 
 func Config() cluster.Config {

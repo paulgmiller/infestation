@@ -3,7 +3,7 @@ package ignition
 import (
 	"fmt"
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/cluster"
 )
 
 // accessProfile leaves K3s's managed kubeconfig untouched. Publication does not

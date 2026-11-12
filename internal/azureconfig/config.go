@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 const DefaultRegion = "westus2"

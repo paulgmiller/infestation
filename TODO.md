@@ -64,6 +64,14 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   replacement or teardown so they cannot interfere with the tailnet's cluster.
 - [ ] Gate smoke clients on ready endpoints and retain failed-test evidence.
 - [ ] Verify kubeconfig publication across credential renewal.
+- [ ] Make the CockroachDB DB Console viewable by anyone on the tailnet through
+  a stable private HTTPS endpoint, with browser-trusted TLS and no public ingress.
+  Define tailnet access policy and dashboard authentication so tailnet members can
+  inspect locality, node health, replication and network latency without receiving
+  SQL admin credentials. Keep CA signing keys and long-lived admin keys on the
+  workstation. Verify access from another member's device and endpoint behavior
+  when the serving node is unavailable. See
+  [CockroachDB v26.2 DB Console](https://docs.cockroachlabs.com/docs/v26.2/ui-overview).
 
 ## Data safety and maintenance
 

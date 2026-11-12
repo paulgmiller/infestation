@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"infestation/internal/blobstore"
-	"infestation/internal/cluster"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/blobstore"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 // AzurePool is common to every member of a role. IMDS supplies the instance

@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"infestation/internal/cli"
+	"github.com/paulgmiller/infestation/internal/cli"
 )
 
 func main() {

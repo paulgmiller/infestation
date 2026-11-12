@@ -11,6 +11,17 @@ infestation vm create --name alice --size 1 \
   --tailscale-auth-key-file /private/path/key
 ```
 
+If the creator workstation is already connected to the intended tailnet, omit
+`--tailnet-domain`: the CLI reads `CurrentTailnet.MagicDNSSuffix` from
+`tailscale status --json` (with the legacy `MagicDNSSuffix` field as a fallback)
+and prints the selected domain before profile preparation. It requires a running
+client and a valid `<tailnet>.ts.net` suffix; it does not guess from peer names,
+the tailnet display name or the enrollment key. If discovery is unavailable,
+supply the flag explicitly. An explicit value takes precedence, allowing creation
+from outside the tailnet or while connected to another one. Check that the auth
+key belongs to the selected tailnet. See the
+[Tailscale status definitions](https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go).
+
 Omit `--init` when joining. Exactly one founding group uses it; that group’s first
 node waits for two database peers before initialization. The published `master`
 branch must contain the enrollment protocol; override `--helper-source-ref` to

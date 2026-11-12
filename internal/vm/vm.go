@@ -17,11 +17,11 @@ import (
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
-	"infestation/internal/ignition"
-	"infestation/internal/image"
-	"infestation/internal/tailnet"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/image"
+	"github.com/paulgmiller/infestation/internal/tailnet"
 )
 
 const FlatcarVersion = "4757.2.2"

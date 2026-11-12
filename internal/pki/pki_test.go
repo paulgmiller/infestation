@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func TestBootstrapCredentialIsShortLivedAndSeparate(t *testing.T) {

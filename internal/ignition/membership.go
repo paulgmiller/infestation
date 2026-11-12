@@ -2,8 +2,8 @@ package ignition
 
 import (
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/cluster"
-	"infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
 	"strings"
 )
 

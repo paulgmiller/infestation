@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/coreos/ignition/v2/config/v3_3/types"
-	"infestation/internal/cluster"
-	"infestation/internal/nodebootstrap"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func recoveryFixture(t *testing.T, worker, azure bool, locality string) types.Config {

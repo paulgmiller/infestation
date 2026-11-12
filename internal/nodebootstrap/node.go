@@ -13,11 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	"infestation/internal/blobstore"
-	"infestation/internal/bootstrap"
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/blobstore"
+	"github.com/paulgmiller/infestation/internal/bootstrap"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 type Config struct {

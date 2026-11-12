@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"infestation/internal/smoke"
+	"github.com/paulgmiller/infestation/internal/smoke"
 	"os"
 	"os/signal"
 	"syscall"

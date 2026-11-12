@@ -14,9 +14,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 type azureNode struct {

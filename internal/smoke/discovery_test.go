@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 type smokeRunner struct {

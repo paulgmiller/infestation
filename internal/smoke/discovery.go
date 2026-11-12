@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 // Node is discovered from the Kubernetes API, not provisioning state.

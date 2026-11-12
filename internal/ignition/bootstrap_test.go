@@ -3,8 +3,8 @@ package ignition
 import (
 	"testing"
 
-	"infestation/internal/nodebootstrap"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func TestCiliumAPIEndpoint(t *testing.T) {

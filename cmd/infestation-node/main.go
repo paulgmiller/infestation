@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"infestation/internal/executil"
-	"infestation/internal/nodebootstrap"
-	"infestation/internal/tailnet"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/tailnet"
 )
 
 func main() {

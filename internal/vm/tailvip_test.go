@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/cluster"
 )
 
 func TestTailVIPConfigKeepsCAClientCredentialsAndVerifiesSharedIdentity(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
-	"infestation/internal/ignition"
-	"infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/ignition"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
 )
 
 func loadPools(d *Deployment) (*Deployment, error) {

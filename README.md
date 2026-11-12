@@ -26,7 +26,20 @@ state and reports remain preserved.
 
 ## Build and check
 
-Requires Go 1.26.6 or newer:
+Requires Go 1.26.6 or newer. Install the CLI directly from GitHub:
+
+```sh
+go install github.com/paulgmiller/infestation/cmd/infestation@latest
+```
+
+Ensure your Go binary directory (`go env GOBIN`, or `$(go env GOPATH)/bin`
+when unset) is on `PATH`. The optional connectivity checker installs separately:
+
+```sh
+go install github.com/paulgmiller/infestation/cmd/infestation-smoke@latest
+```
+
+To build and check a local checkout:
 
 ```sh
 go build -o bin/infestation ./cmd/infestation
@@ -48,6 +61,12 @@ Azure. Both create CockroachDB and K3s servers by default. Add `--agent` to omit
 the Kubernetes API server while keeping CockroachDB; agents cannot use `--init`.
 First apply the one-time [tailnet policy setup](docs/tailnet-policy.md), then see
 [independent enrollment](docs/friend-vm.md).
+
+When `--tailnet-domain` is omitted, both providers discover it from the
+workstation's running Tailscale client and print the selected domain before
+preparing profiles. Supply the flag explicitly when Tailscale is unavailable or
+when targeting a different tailnet. The enrollment key must belong to the target
+tailnet; its contents are not used to infer the domain.
 
 [Three local VMs](docs/isolated-vm-cluster.md) and the
 [mixed local/Azure runbook](docs/mixed-cluster.md) cover cluster creation. The CLI

@@ -162,6 +162,12 @@ var label = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 var dnsLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 var locality = regexp.MustCompile(`^[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+)*$`)
 
+// ValidTailnetDomain excludes node/service names and unsupported DNS suffixes.
+func ValidTailnetDomain(domain string) bool {
+	return ValidSAN(domain) && strings.HasSuffix(domain, ".ts.net") &&
+		len(strings.Split(domain, ".")) == 3 && domain == strings.ToLower(domain)
+}
+
 func ValidSAN(s string) bool {
 	if _, err := netip.ParseAddr(s); err == nil {
 		return true
@@ -202,8 +208,7 @@ func (c Config) validate(surge bool) error {
 		if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(ts.Version) {
 			return fmt.Errorf("tailscale version must be an exact release such as v1.104.2")
 		}
-		if !ValidSAN(ts.Domain) || !strings.HasSuffix(ts.Domain, ".ts.net") ||
-			len(strings.Split(ts.Domain, ".")) != 3 || ts.Domain != strings.ToLower(ts.Domain) {
+		if !ValidTailnetDomain(ts.Domain) {
 			return fmt.Errorf("tailnet domain must be <tailnet>.ts.net (for example quoll-duck.ts.net), without a host or service prefix")
 		}
 		if c.CockroachStorage == "azure-temporary" {

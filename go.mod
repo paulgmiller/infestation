@@ -1,4 +1,4 @@
-module infestation
+module github.com/paulgmiller/infestation
 
 go 1.26.6
 

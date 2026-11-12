@@ -5,7 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/executil"
 	"io"
 )
 

@@ -10,9 +10,9 @@ import (
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
 	"gopkg.in/yaml.v3"
-	"infestation/internal/cluster"
-	"infestation/internal/pki"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func TestTailnetAuthArgumentIsRenderOnly(t *testing.T) {

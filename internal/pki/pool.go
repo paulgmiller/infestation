@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"infestation/internal/cluster"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 // PoolCertificate issues one cluster node identity for dynamic DNS names. Only

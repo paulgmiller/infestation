@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"infestation/internal/azureconfig"
-	"infestation/internal/cluster"
-	"infestation/internal/deploy"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
-	"infestation/internal/smoke"
+	"github.com/paulgmiller/infestation/internal/azureconfig"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/deploy"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/smoke"
 )
 
 const ownershipTag = "infestation-check-id"

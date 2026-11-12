@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"infestation/internal/bootstrap"
-	"infestation/internal/executil"
-	"infestation/internal/pki"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/bootstrap"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 type containerRunner struct {

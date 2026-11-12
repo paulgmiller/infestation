@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 const BootstrapCredentialDir = "/etc/infestation/bootstrap-client"

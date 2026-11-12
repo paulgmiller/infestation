@@ -1,7 +1,7 @@
 package azureconfig
 
 import (
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/testutil"
 	"reflect"
 	"testing"
 )

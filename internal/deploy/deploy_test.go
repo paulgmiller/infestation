@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"infestation/internal/fsutil"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func TestPreviewPreparesNativeStateAndPreservesIdentity(t *testing.T) {

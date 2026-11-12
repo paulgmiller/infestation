@@ -3,9 +3,9 @@ package ignition
 import (
 	"encoding/base64"
 	"encoding/json"
-	"infestation/internal/nodebootstrap"
-	"infestation/internal/pki"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/pki"
+	"github.com/paulgmiller/infestation/internal/testutil"
 	"os"
 	"path/filepath"
 	"strings"

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 func removalState(t *testing.T, provider string) (Options, string) {

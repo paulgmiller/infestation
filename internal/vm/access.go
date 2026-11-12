@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"infestation/internal/bootstrap"
-	"infestation/internal/cluster"
-	"infestation/internal/fsutil"
-	"infestation/internal/nodebootstrap"
+	"github.com/paulgmiller/infestation/internal/bootstrap"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/nodebootstrap"
 )
 
 // groupKubeconfig prefers the private local channel, otherwise uses a member's

@@ -2,7 +2,7 @@ package bootstrap
 
 import (
 	"fmt"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 	"os"
 	"path/filepath"
 	"testing"

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 const ConfigPath = "/etc/infestation/tailnet.json"

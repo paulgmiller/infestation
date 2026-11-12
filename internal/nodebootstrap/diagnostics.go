@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-	"infestation/internal/executil"
-	"infestation/internal/tailnet"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/tailnet"
 )
 
 // Diagnose sends a bounded, sanitized report through the explicit VM channel.

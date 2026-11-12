@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"infestation/internal/vm"
+	"github.com/paulgmiller/infestation/internal/vm"
 )
 
 type provider struct{ name string }

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
 func TestKubeconfigWritesPrivateVerifiedTLSConfigWithoutPrintingCredentials(t *testing.T) {

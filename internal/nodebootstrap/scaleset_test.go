@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
-	"infestation/internal/fsutil"
-	"infestation/internal/tailnet"
-	"infestation/internal/testutil"
+	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
+	"github.com/paulgmiller/infestation/internal/fsutil"
+	"github.com/paulgmiller/infestation/internal/tailnet"
+	"github.com/paulgmiller/infestation/internal/testutil"
 )
 
 func scaleMetadata(ordinal string) Metadata {
