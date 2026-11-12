@@ -5,6 +5,14 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Consolidate deployment
 
+- [ ] Ensure a working `stop` command is available for both QEMU and Azure,
+  preserving disks and private state.
+- [ ] Ensure helper builds use `github.com/paulgmiller/infestation`'s published
+  `master` branch by default, rather than local workstation source.
+- [ ] Show more progress output while `create` runs, including the current stage
+  and what it is waiting for.
+- [ ] Make the Azure resource group clear in CLI output, including which group
+  is being created or used.
 - [ ] Verify independent enrollment from separate workstations with two local VMs
   (`--init --size 2`) and one Azure VM (`--size 1`), without shared local state.
   Publish the updated helper source before testing; earlier helper refs lack the
@@ -33,6 +41,18 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Reliable bootstrap and networking
 
+- [ ] Verify unattended bootstrap with joiners starting before the initializer,
+  delayed enrollment and temporarily unavailable databases. Recover canceled
+  dependency jobs and stuck K3s startup/shutdown without manual service commands.
+- [ ] Live-verify rejection of incompatible pinned helpers and missing database
+  environment values. Verify reboot recreates runtime files without manual repairs.
+- [ ] Live-verify status identifies bootstrap blockers, including enrollment/
+  membership, failed dependencies, discovered peers and database listeners.
+- [ ] Replace placeholder database locality with explicit, accurate host/site/cloud
+  failure domains. Independent groups must not imply separate failure domains
+  merely from node indices; omit optional locality cleanly when unspecified.
+- [ ] Verify three-node database health and directed workload DNS/HTTP connectivity
+  after independent enrollment; Kubernetes Ready alone is insufficient evidence.
 - [ ] Replace Azure default outbound access with an explicit egress design;
   evaluate dependency cost, failure scope and NAT traversal.
 - [ ] Validate container DNS, delayed peers, MTU, packet loss and pod routes from
@@ -113,8 +133,9 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   health and K3s/Kine behavior before resuming workloads. Document the tested
   version-specific procedure and evidence in a recovery runbook.
 - [ ] Coordinate Flatcar, K3s and Cockroach updates, drains, rollback and rejoin.
-- [ ] Investigate Kine/Cockroach maintenance-status incompatibilities and watch
-  timeout logs under sustained WAN latency.
+- [ ] Investigate Kine/Cockroach maintenance-status incompatibilities, including
+  the rejected `pg_total_relation_size()` query, and watch timeout logs under
+  sustained WAN latency. Verify metrics API discovery after startup converges.
 - [ ] Test application storage, placement, zone/site failures and resource sizing.
 
 ## Distribution and portability

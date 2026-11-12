@@ -74,6 +74,45 @@ before init and saves the resulting UUID. Ambiguous init results never authorize
 another init request. The marker remains on its persistent disk; losing it is an
 unresolved recovery case, not permission to initialize another database.
 
+## Startup recovery and helper compatibility
+
+Joiners may boot before the initializer. Failed enrollment retries every fifteen
+seconds without creating founding credentials. Generated discovery profiles use
+systemd `Upholds` from successful preparation services to their persistent
+dependents, so enrollment recovery also revives canceled CockroachDB, K3s and
+membership start jobs. Readiness and access publication are driven by timers;
+completing oneshots are not continuously restarted. This requires systemd 249 or
+later; see [systemd's dependency documentation](https://github.com/systemd/systemd/blob/main/man/systemd.unit.xml).
+Stopping an upheld service alone is temporary while its preparation service
+remains active. For node shutdown, use the provider's VM stop command.
+
+K3s has a five-minute startup timeout, a sixty-second shutdown timeout and a
+fifteen-second restart delay. A process that never signals readiness or finishes
+shutdown is retried rather than left indefinitely activating. These limits do
+not time out CockroachDB formation or authorize fresh initialization. See
+[systemd service timeouts](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml).
+
+The renderer and helper share an explicit interface version, reported by
+`infestation-node --contract-version` without loading credentials or configuration.
+Enrollment checks it before accepting helper output. Compatible fixes may use
+different source commits; incompatible interface changes require a contract bump.
+Older helpers without this interface are rejected with a compatibility error.
+Publish a compatible helper revision before using newly generated profiles;
+the default published `master` must include these changes. Existing Ignition and
+guest binaries are not updated by rebuilding the workstation CLI.
+
+Database startup also validates required runtime variables before running Docker.
+A seeds-only environment file is rejected with the missing variable's name.
+Enrollment regenerates `/run/infestation/cluster.env` from persisted node settings
+on reboot; manual edits there are temporary.
+
+Local VM status includes dependency results, queued jobs, enrollment and membership
+logs, the helper build identity, and peer discovery endpoint results. Database/API
+TCP probes include successfully discovered members as well as saved nodes.
+An open TCP listener does not establish SQL readiness or database membership.
+See [the November bootstrap troubleshooting record](bootstrap-troubleshooting.md)
+for the manually recovered cluster and remaining live verification.
+
 ## Temporary SQL credential
 
 A separate root client certificate/key has a one-hour lifetime and is delivered

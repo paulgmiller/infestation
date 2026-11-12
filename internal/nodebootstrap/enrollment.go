@@ -355,20 +355,39 @@ func joinMembership(ctx context.Context, c Config, root string, runner executil.
 }
 
 func discoverMembers(ctx context.Context, c Config, b JoinBundle, status enrollmentStatus, candidates []tailPeer, client *http.Client) (Config, error) {
+	return discoverMembersReporting(ctx, c, b, candidates, client, nil)
+}
+
+// report receives only fixed diagnostic messages, never response bodies or join
+// credentials. Failed endpoints remain visible even though enrollment skips them.
+func discoverMembersReporting(ctx context.Context, c Config, b JoinBundle, candidates []tailPeer, client *http.Client, report map[string]string) (Config, error) {
 	nodes := map[string]cluster.Node{}
 	for _, n := range c.Cluster.Nodes {
 		nodes[n.Name] = n
 	}
 	for _, p := range candidates {
 		var m member
-		if fetch(ctx, client, p, "/v1/node", &m) != nil {
+		name := strings.TrimSuffix(p.DNSName, ".")
+		if err := fetch(ctx, client, p, "/v1/node", &m); err != nil {
+			if report != nil {
+				report[name] = err.Error()
+			}
 			continue
 		}
 		if m.Identity != b.Identity() {
+			if report != nil {
+				report[name] = "different cluster identity"
+			}
 			return c, fmt.Errorf("discovered a different cluster identity")
 		}
 		if m.Node.Name+"."+c.Cluster.Tailscale.Domain != strings.TrimSuffix(p.DNSName, ".") {
+			if report != nil {
+				report[name] = "bootstrap identity disagrees with Tailscale"
+			}
 			return c, fmt.Errorf("peer bootstrap identity disagrees with Tailscale")
+		}
+		if report != nil {
+			report[name] = "ready"
 		}
 		m.Node.IP = peerIP(p)
 		m.Node.Init = m.Node.Name == b.Initializer.Name

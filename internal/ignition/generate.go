@@ -210,7 +210,7 @@ func Render(c cluster.Config, n cluster.Node, state, token string, options ...Bo
 		service = "k3s-agent.service"
 	}
 	doc.Storage.Links = append(doc.Storage.Links, types.Link{Node: types.Node{Path: "/etc/systemd/system/multi-user.target.wants/" + service, Overwrite: ptr(true)}, LinkEmbedded1: types.LinkEmbedded1{Target: ptr("/usr/local/lib/systemd/system/" + service)}})
-	restart := "[Service]\nRestart=always\nRestartSec=15s\n"
+	restart := "[Unit]\nStartLimitIntervalSec=0\n[Service]\nRestart=always\nRestartSec=15s\nTimeoutStartSec=5min\nTimeoutStopSec=60s\nSendSIGKILL=yes\n"
 	dropin := "10-restart.conf"
 	if n.Database() {
 		unit := CockroachUnit(c, n)
@@ -258,6 +258,9 @@ WantedBy=multi-user.target
 		membershipProfile(&doc, c, n, options[0])
 	}
 	accessProfile(&doc, c, n)
+	if c.DiscoverPeers {
+		recoveryProfile(&doc, n)
+	}
 	return doc, nil
 }
 
@@ -315,7 +318,7 @@ RestartSec=10
 WantedBy=multi-user.target
 `, tailnetDependency, dependency, dependency, check, store, containerDNS, store, c.CockroachImage, command, net.JoinHostPort(c.NodeAddress(n), "26257"), join, locality, c.Cache(), c.SQLMemory())
 	if c.DiscoverPeers {
-		unit = strings.Replace(unit, "[Service]\n", "[Service]\nEnvironmentFile=/run/infestation/cluster.env\n", 1)
+		unit = strings.Replace(unit, "[Service]\n", "[Service]\nEnvironmentFile=/run/infestation/cluster.env\nExecStartPre=/opt/infestation/check-database-environment\n", 1)
 		unit = strings.Replace(unit, join, " --join=${INFESTATION_SEEDS}", 1)
 		unit = strings.Replace(unit, "--advertise-addr="+net.JoinHostPort(c.NodeAddress(n), "26257"), "--advertise-addr=${INFESTATION_DATABASE_ADDRESS}", 1)
 		if locality != "" {

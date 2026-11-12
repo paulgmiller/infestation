@@ -89,6 +89,7 @@ func handlerClient(h http.Handler) *http.Client {
 func TestIndependentJoinAndOfflineRestartPinExistingIdentity(t *testing.T) {
 	b, seed := enrollmentFixture(t)
 	c, root, runner := joinFixture(t, b)
+	c.Cluster.Nodes[0].Locality = "region=lab,zone=host-a"
 	client := handlerClient(membershipHandler(seed, b, t.TempDir()))
 	if err := joinMembership(context.Background(), c, root, runner, client); err != nil {
 		t.Fatal(err)
@@ -128,9 +129,25 @@ func TestIndependentJoinAndOfflineRestartPinExistingIdentity(t *testing.T) {
 		t.Fatal("joiner acquired init authority")
 	}
 	// Restart without any currently reachable bootstrap peers: use pinned bundle.
+	// /run is ephemeral: enrollment must recreate its environment on reboot.
+	if err := os.Remove(filepath.Join(root, "/run/infestation/cluster.env")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "/run/infestation")); err != nil {
+		t.Fatal(err)
+	}
 	runner.status.Peer = nil
 	if err := joinMembership(context.Background(), cfg, root, runner, client); err != nil {
 		t.Fatal("offline restart discarded pinned material", err)
+	}
+	env, err := os.ReadFile(filepath.Join(root, "/run/infestation/cluster.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"INFESTATION_SEEDS=", "INFESTATION_DATABASE_ADDRESS=locke.example.ts.net:26257\n", "INFESTATION_LOCALITY=region=lab,zone=host-a\n"} {
+		if !strings.Contains(string(env), want) {
+			t.Fatal("restart omitted runtime database setting", want)
+		}
 	}
 	// An online peer with another CA must not replace that pin.
 	other, _ := enrollmentFixture(t)
