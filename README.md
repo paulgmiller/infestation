@@ -25,6 +25,7 @@ Requires Go 1.26.6 or newer:
 
 ```sh
 go build -o bin/infestation ./cmd/infestation
+go build -o bin/infestation-smoke ./cmd/infestation-smoke
 go test ./...
 go vet ./...
 bin/infestation --help
@@ -72,8 +73,11 @@ bin/infestation azure create --name cloud --size 1 \
 ```
 
 The public CLI has the same lifecycle verbs for both providers: `create`,
-`start`, `stop`, `status`, `resume`, `wait` and `kubeconfig`. `vm status --netcheck`
-includes guest network diagnostics. `smoke` runs workload connectivity checks.
+`start`, `stop`, `status`, `wait` and `kubeconfig`. `vm status --netcheck`
+includes guest network diagnostics. The separate `infestation-smoke` CLI runs
+workload connectivity checks using Kubernetes credentials alone.
+Every command has `--help`. Local VM control runs on its QEMU host; Azure control
+requires saved provider state and Azure login. See [where commands run](docs/local-state.md#where-lifecycle-commands-run).
 
 Only one founding node gets initialization authority. It waits for two database
 peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;
@@ -91,12 +95,15 @@ source/build container. Native arm64 execution remains unverified.
 bin/infestation vm kubeconfig --name lab --state-dir state/vms
 export KUBECONFIG="$PWD/state/vms/lab/kubeconfig"
 kubectl get nodes
-bin/infestation smoke --config state/vms/lab/nodes.json \
-  --state-dir state/vms/lab --kubeconfig "$KUBECONFIG" --tailnet-latency
+bin/infestation-smoke --kubeconfig "$KUBECONFIG" \
+  --out-dir smoke-results --tailnet-latency
 ```
 
-The smoke command creates workload checks for every directed node pair and can
-record host Tailscale latency/path samples. It changes the test cluster. See the
+The checker discovers all nodes through Kubernetes and tests every directed pair.
+No provider inventory, local VM state or Azure login is needed. Optional host
+Tailscale measurements use privileged Jobs; the caller needs the corresponding
+Kubernetes permissions. It changes the test cluster and retains pods/services for
+inspection. See [smoke checks](docs/smoke.md). See the
 runbooks for route approvals, API Service setup and Tailscale SSH policy.
 
 The tailnet is the administrator trust boundary. Routine SSH uses `core` with

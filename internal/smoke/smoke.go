@@ -8,33 +8,40 @@ import (
 	"github.com/google/uuid"
 	"path/filepath"
 	"sort"
+	"strings"
 
-	"infestation/internal/cluster"
 	"infestation/internal/executil"
 	"infestation/internal/fsutil"
 )
 
 const Namespace = "infestation-smoke"
 
-func Manifest(c cluster.Config) (map[string]any, []string) {
-	return manifest(c, "")
+func Manifest(nodes []Node) (map[string]any, []string) {
+	return manifest(nodes, "")
 }
 
-func safeName(value string) string {
-	if len(value) <= 63 {
+func safeName(original string) string {
+	value := strings.ReplaceAll(original, ".", "-")
+	if len(value) <= 63 && value == original {
 		return value
 	}
-	sum := sha256.Sum256([]byte(value))
-	return value[:50] + "-" + fmt.Sprintf("%x", sum[:6])
+	sum := sha256.Sum256([]byte(original))
+	if len(value) > 50 {
+		value = value[:50]
+	}
+	return value + "-" + fmt.Sprintf("%x", sum[:6])
 }
 
-func manifest(c cluster.Config, runID string) (map[string]any, []string) {
-	nodes := append([]cluster.Node{}, c.Nodes...)
+func manifest(input []Node, runID string) (map[string]any, []string) {
+	nodes := append([]Node{}, input...)
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	docs := []any{map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": Namespace}}}
 	var jobs []string
 	for _, n := range nodes {
-		labels := map[string]string{"app": "infestation-smoke-web", "server": n.Name}
+		labels := map[string]string{"app": "infestation-smoke-web", "server": safeName(n.Name)}
+		if runID != "" {
+			labels["infestation.io/run"] = runID
+		}
 		meta := map[string]any{"name": safeName("web-" + n.Name), "namespace": Namespace, "labels": labels}
 		container := map[string]any{"name": "web", "image": "busybox:1.37.0", "command": []string{"sh", "-ec", fmt.Sprintf("mkdir -p /www; echo %s > /www/index.html; exec httpd -f -p 8080 -h /www", n.Name)}, "readinessProbe": map[string]any{"httpGet": map[string]any{"path": "/", "port": 8080}}, "resources": map[string]any{"requests": map[string]string{"cpu": "10m", "memory": "16Mi"}, "limits": map[string]string{"memory": "64Mi"}}}
 		docs = append(docs, map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": meta, "spec": map[string]any{"nodeName": n.Name, "containers": []any{container}}}, map[string]any{"apiVersion": "v1", "kind": "Service", "metadata": meta, "spec": map[string]any{"selector": labels, "ports": []any{map[string]int{"port": 8080, "targetPort": 8080}}}})
@@ -56,31 +63,32 @@ func manifest(c cluster.Config, runID string) (map[string]any, []string) {
 	}
 	return map[string]any{"apiVersion": "v1", "kind": "List", "items": docs}, jobs
 }
-func Run(ctx context.Context, runner executil.Runner, c cluster.Config, state, kubeconfig string, options ...Options) error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
+func Run(ctx context.Context, runner executil.Runner, state, kubeconfig string, options ...Options) error {
 	opt := Options{}
 	if len(options) > 0 {
 		opt = options[0]
 	}
-	if opt.TailnetLatency && c.Tailscale == nil {
-		return fmt.Errorf("--tailnet-latency requires Tailscale cluster configuration")
+	nodes, err := discoverNodes(ctx, runner, kubeconfig, opt.TailnetLatency)
+	if err != nil {
+		return err
 	}
 	// Fresh Job identities ensure a rerun cannot reuse previously completed results.
 	runID := uuid.NewString()
-	doc, jobs := manifest(c, runID)
+	doc, jobs := manifest(nodes, runID)
+	if err := fsutil.WriteJSON(filepath.Join(state, "nodes-"+runID+".json"), nodes); err != nil {
+		return err
+	}
 	path := filepath.Join(state, "smoke-"+runID+".json")
 	if err := fsutil.WriteJSON(path, doc); err != nil {
 		return err
 	}
 	run := func(args ...string) error {
-		return runner.Run(ctx, "kubectl", append([]string{"--kubeconfig", kubeconfig}, args...)...).Err("connectivity smoke test")
+		return runner.Run(ctx, "kubectl", kubectlArgs(kubeconfig, args...)...).Err("connectivity smoke test")
 	}
 	if err := run("apply", "-f", path); err != nil {
 		return err
 	}
-	if err := run("-n", Namespace, "wait", "--for=condition=Ready", "pod", "-l", "app=infestation-smoke-web", "--timeout=180s"); err != nil {
+	if err := run("-n", Namespace, "wait", "--for=condition=Ready", "pod", "-l", "app=infestation-smoke-web,infestation.io/run="+runID, "--timeout=180s"); err != nil {
 		return err
 	}
 	for _, job := range jobs {
@@ -92,7 +100,7 @@ func Run(ctx context.Context, runner executil.Runner, c cluster.Config, state, k
 		}
 	}
 	if opt.TailnetLatency {
-		if err := recordLatency(ctx, runner, c, state, kubeconfig, runID, opt.Log); err != nil {
+		if err := recordLatency(ctx, runner, nodes, state, kubeconfig, runID, opt.Log); err != nil {
 			return err
 		}
 	}

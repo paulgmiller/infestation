@@ -92,11 +92,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	}, func(ctx context.Context) error {
 		fmt.Fprintln(o.Log, "Smoke: internal DNS and cross-node ClusterIP HTTP")
 		kube := filepath.Join(deploymentDir, "kubeconfig")
-		c, err := cluster.Load(filepath.Join(deploymentDir, "cluster.json"))
-		if err != nil {
-			return err
-		}
-		return smoke.Run(ctx, runner, c, deploymentDir, kube, smoke.Options{Log: o.Log})
+		return smoke.Run(ctx, runner, deploymentDir, kube, smoke.Options{Log: o.Log})
 	}, func(ctx context.Context) error {
 		fmt.Fprintln(o.Log, "Teardown:", group)
 		if err := cleanup(ctx, quiet, subscription, group, id); err != nil {

@@ -29,7 +29,7 @@ masked. Unrestricted sudo still provides full administration.
 
 The existing `svc:k8s-api` and its auto-approver are deliberately reused, at the
 owner's request. The old `tail3-1109` cluster remains stopped with disks preserved.
-Do not resume that cluster while it advertises the same Service: first retire
+Do not start that cluster while it advertises the same Service: first retire
 its advertisements or choose separate Service identities. Its pod ranges also
 overlap the current test, so concurrent use requires a separate CIDR design.
 
@@ -100,17 +100,11 @@ Azure requires an OS login credential in this VM creation API. The CLI generates
 an RSA public key, supplies it in the OS profile, and never serializes the private
 half. This satisfies Azure validation; Tailscale SSH handles real access.
 
-A failed creation preserves profiles, disks and provider metadata. Retry each
-provider separately using its original private state:
-
-```sh
-bin/infestation vm resume --name local-new --state-dir state/local --wait 0
-bin/infestation azure resume --name cloud-new --state-dir state/cloud --wait 0
-```
-
-Resume never regenerates CA/token or renews an expired bootstrap credential.
-Azure retry validates the saved resource-group ownership and reuses the saved
-template. Preserve partial state for diagnosis instead of reinitializing a database.
+A failed creation preserves profiles, disks and provider metadata for inspection.
+There is no partial-provisioning repair command. Creation refuses existing state;
+plan explicit cleanup and a fresh create rather than rewriting an incomplete
+deployment. Preserve existing data, CA/token and failure evidence; never
+initialize another database merely because existing peers are unavailable.
 
 ## Actual evidence and repairs
 
@@ -206,5 +200,5 @@ processes verified absent. Azure resource group `mix-1110-rg` was deleted;
 `az group exists` returned false after its resource list became empty. The Azure
 VM, managed OS disk, NIC, VNet/subnet and NSG have been removed. Local disks,
 PKI, kubeconfigs and raw latency/verification reports remain private for reference.
-Tailnet device/Service registration cleanup is a separate TODO; do not resume
+Tailnet device/Service registration cleanup is a separate TODO; do not start
 old local nodes into the reused Service without reviewing those advertisements.

@@ -82,7 +82,7 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 		return err
 	}
 	if _, err := os.Lstat(dir); err == nil {
-		return fmt.Errorf("provider state already exists; use this provider's resume command")
+		return fmt.Errorf("provider state already exists; inspect existing resources and preserve their disks before a fresh create")
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -417,48 +417,4 @@ func clusterAPIsReady(ctx context.Context, c cluster.Config, kube string) bool {
 		}
 	}
 	return len(expected) == 0
-}
-
-// ResumeLocal launches only reserved QEMU nodes, using the original profiles.
-func ResumeLocal(ctx context.Context, o ClusterOptions, out io.Writer) error {
-	dir, c, err := loadCluster(o.Options)
-	if err != nil {
-		return err
-	}
-	provider, err := groupProvider(dir)
-	if err != nil {
-		return err
-	}
-	if provider != "qemu" {
-		return fmt.Errorf("use azure resume for Azure-owned nodes")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "artifacts", "infestation-node")); err == nil {
-		if _, err := startArtifacts(ctx, dir, ""); err != nil {
-			return err
-		}
-	}
-	base := o.BaseImage
-	if base == "" {
-		base = filepath.Join(filepath.Dir(dir), "images", "flatcar-"+FlatcarVersion+".qcow2")
-	}
-	for _, n := range c.Nodes {
-		if _, err := os.Stat(filepath.Join(dir, n.Name, "machine.json")); err == nil {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
-		if err != nil {
-			return err
-		}
-		raw, err = addClusterChannels(raw)
-		if err != nil {
-			return err
-		}
-		if err := Create(ctx, Options{Name: n.Name, StateDir: dir, BaseImage: base, Accel: o.Accel, Network: "slirp", MemoryMiB: o.MemoryMiB, profile: raw}, out); err != nil {
-			return err
-		}
-	}
-	if o.Wait > 0 {
-		return WaitCluster(ctx, o.Options, out)
-	}
-	return nil
 }

@@ -9,18 +9,18 @@ import (
 	"testing"
 )
 
-func TestHelpShowsOnlyProviderLifecycleAndSmoke(t *testing.T) {
+func TestHelpShowsOnlyProviderLifecycle(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run(context.Background(), nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, retired := range []string{"vm cluster", "azure deploy", "azure check", "validate,", "pki,", "ignition,", "image,"} {
+	for _, retired := range []string{"infestation smoke", "vm cluster", "azure deploy", "azure check", "validate,", "pki,", "ignition,", "image,"} {
 		if strings.Contains(out.String(), retired) {
 			t.Fatal("obsolete public command", retired)
 		}
 	}
 	for _, provider := range []string{"vm", "azure"} {
-		for _, action := range []string{"create", "start", "stop", "status", "resume", "wait", "kubeconfig"} {
+		for _, action := range []string{"create", "start", "stop", "status", "wait", "kubeconfig"} {
 			out.Reset()
 			if err := Run(context.Background(), []string{provider, action, "--help"}, &out); err != nil {
 				t.Fatal(provider, action, err)
@@ -65,7 +65,7 @@ func TestAgentCannotInitializeBeforeAnySideEffects(t *testing.T) {
 func TestRemovedUtilitiesFailBeforeExternalCommands(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("PATH", root)
-	for _, args := range [][]string{{"vm", "cluster", "create"}, {"azure", "deploy"}, {"azure", "check"}, {"azure", "plan"}, {"validate"}, {"pki"}, {"ignition"}, {"image"}, {"vm", "netcheck"}} {
+	for _, args := range [][]string{{"smoke"}, {"vm", "resume"}, {"azure", "resume"}, {"vm", "cluster", "create"}, {"azure", "deploy"}, {"azure", "check"}, {"azure", "plan"}, {"validate"}, {"pki"}, {"ignition"}, {"image"}, {"vm", "netcheck"}} {
 		var out bytes.Buffer
 		if err := Run(context.Background(), args, &out); err == nil || !strings.Contains(err.Error(), "unknown") {
 			t.Fatal("removed command still accepted", args, err)

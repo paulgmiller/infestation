@@ -10,7 +10,7 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   Publish the updated helper source before testing; earlier helper refs lack the
   enrollment endpoint. Test delayed peers and joining while the initializer is down.
 - [ ] Split cluster settings, per-node settings and per-owner state in the Go API;
-  remove static fixture/default and smoke-check assumptions about complete membership.
+  remove static fixture/default assumptions about complete membership.
 - [ ] Generalize Azure enrollment batches beyond the current one-VM-per-call limit.
 - [ ] Design rotation/revocation of shared database/Kine leaf credentials, cluster
   tokens and cached enrollment bundles while preserving the pinned cluster identity.
@@ -18,8 +18,8 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   seal an agreed founding voter set, persist votes/initialization target, and
   handle ambiguous init results without authorizing another database. Do not
   treat failure to discover an initialized database as proof none exists.
-- [ ] Replace inventory-wide bootstrap/readiness barriers and static smoke-node
-  lists with local join readiness and runtime membership discovery.
+- [ ] Replace inventory-wide bootstrap/readiness barriers with local join
+  readiness and runtime membership discovery.
 - [ ] Make Pulumi the common provisioning layer for QEMU, Azure and additional
   VM compute providers; share the node/bootstrap contract across providers.
 - [ ] Remove unused deployment paths, duplicated networking/bootstrap code and
@@ -28,8 +28,8 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   retrieval and bootstrap while preserving initialization/recovery safety.
 - [ ] Separate user-facing configuration from test fixtures; make the role of
   `examples/cluster.json` explicit instead of using it as an implicit CLI default.
-- [ ] Persist complete creation inputs and make resume/teardown ownership and
-  partial-failure handling consistent.
+- [ ] Persist complete creation inputs and make explicit teardown ownership and
+  partial-failure evidence consistent.
 
 ## Reliable bootstrap and networking
 

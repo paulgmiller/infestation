@@ -56,8 +56,8 @@ infestation vm start --name lab --state-dir state/vms
 Node readiness does not prove that pod routes are approved. Run workload checks:
 
 ```sh
-infestation smoke --config state/vms/lab/nodes.json \
-  --state-dir state/vms/lab --kubeconfig "$KUBECONFIG" --tailnet-latency
+infestation-smoke --kubeconfig "$KUBECONFIG" \
+  --out-dir smoke-results --tailnet-latency
 ```
 
 The API Service is declared by node configuration and forwarded by server hosts
@@ -65,6 +65,7 @@ to localhost:6443 with TLS passthrough. Define/approve `svc:k8s-api` in Tailscal
 separately; do not disable Kubernetes certificate validation.
 
 Each provider group owns only its local nodes and private state. Start/stop
-preserve disks. Resume uses original profiles and never regenerates CA/token or
-renews an expired SQL bootstrap credential. Keep partial failure evidence instead
+preserve disks. Failed creation preserves state/resources for inspection. Partial
+provisioning repair is not supported, and expired SQL credentials need deliberate
+recovery. Keep partial failure evidence instead
 of deleting disks or initializing another database.

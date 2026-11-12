@@ -20,7 +20,7 @@ CockroachDB and K3s. Every enrolled member can supply join material afterward.
 The creator workstation does not need to be on the tailnet unless it requests
 `--wait` readiness checks. See [bootstrap](bootstrap.md) for policy and recovery.
 
-Use `vm status|stop|start|resume --name alice` for this provider group.
+Use `vm status|stop|start --name alice` for this provider group.
 `azure create --name alice-cloud --size 1` accepts the same enrollment details;
 Azure region/SKU default to `westus2`/`Standard_B2s`. Each command creates compute
 on only one provider. Each machine retains its own private provider state.
@@ -50,8 +50,8 @@ infestation vm kubeconfig --name alice --out kubeconfig
 ```
 
 Azure uses the same verbs; `status --netcheck` is specific to the local guest
-channel. Start/stop preserve VM disks and identity. Resume retries missing
-infrastructure using original profiles, without replacing CA/token. `kubeconfig`
+channel. Start/stop preserve VM disks and identity. Failed creation retains
+state/resources for inspection; partial provisioning repair is not supported. `kubeconfig`
 requires workstation tailnet access and refuses an existing output unless
 `--force` is supplied. API TLS/client authentication remain enabled.
 

@@ -78,7 +78,7 @@ the host database container for SQL setup.
 After Kine SQL setup succeeds, the node persists `sqlReady` and removes both
 source and runtime copies of the temporary credential. Failed attempts can retry
 within its lifetime. Subsequent starts use Kine credentials. Expiry requires
-deliberate credential recovery; resume must not silently issue a new CA/token.
+deliberate credential recovery; retries must not silently issue a new CA/token.
 Deleting guest files does not remove copies from generated Ignition/provider
 state and does not revoke the certificate.
 

@@ -161,40 +161,6 @@ func azureAction(ctx context.Context, node azureNode, action string, out io.Writ
 	return nil
 }
 
-// ResumeAzure retries only Azure infrastructure from the original
-// private profiles. It never reissues the CA, token or SQL bootstrap credential.
-func ResumeAzure(ctx context.Context, o ClusterOptions, out io.Writer) error {
-	dir, _, err := loadCluster(o.Options)
-	if err != nil {
-		return err
-	}
-	node, ok := loadAzureNode(dir)
-	if !ok {
-		return fmt.Errorf("no mixed-test Azure state")
-	}
-	tag := executil.OSRunner{}.Run(ctx, "az", "group", "show", "--subscription", node.Subscription, "--name", node.Group, "--query", "tags.\"infestation-mixed-id\"", "-o", "tsv")
-	if err := tag.Err("verify mixed resource group ownership"); err != nil {
-		return err
-	}
-	if strings.TrimSpace(tag.Stdout) != node.Ownership {
-		return fmt.Errorf("mixed resource group ownership mismatch")
-	}
-	// Retry saved inputs verbatim; defaults must not resize an existing VM or
-	// replace its credentials.
-	status := executil.OSRunner{}.Run(ctx, "az", "vm", "show", "--subscription", node.Subscription, "--resource-group", node.Group, "--name", node.Node, "--query", "provisioningState", "-o", "tsv")
-	if status.Code != 0 || strings.TrimSpace(status.Stdout) != "Succeeded" {
-		if err = deployAzureNode(ctx, node, dir, out); err != nil {
-			return err
-		}
-	} else {
-		fmt.Fprintln(out, "Preserving provisioned Azure VM:", node.Node)
-	}
-	if o.Wait > 0 {
-		return WaitCluster(ctx, o.Options, out)
-	}
-	return nil
-}
-
 // AzureAction affects only Azure compute, never the local VMs sharing this state.
 func AzureAction(ctx context.Context, o Options, action string, out io.Writer) error {
 	dir, _, err := loadCluster(o)

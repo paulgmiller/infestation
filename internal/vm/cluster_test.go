@@ -263,7 +263,11 @@ func TestProviderInventoryNameAndExistingStateCompatibility(t *testing.T) {
 		{name: "invalid new never falls back", old: true, new: true, broken: true, fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			root, err := os.MkdirTemp("", "inv-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(root) })
 			dir := filepath.Join(root, "inventory")
 			if err := os.Mkdir(dir, 0700); err != nil {
 				t.Fatal(err)
@@ -301,5 +305,35 @@ func TestProviderInventoryNameAndExistingStateCompatibility(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCreateNeverRepairsOrReplacesExistingProviderState(t *testing.T) {
+	root, err := os.MkdirTemp("", "create-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	dir := filepath.Join(root, "existing")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "nodes.json")
+	before := []byte("preserved-partial-state")
+	if err := os.WriteFile(path, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	err = CreateCluster(context.Background(), ClusterOptions{Options: Options{Name: "existing", StateDir: root}, Provider: "qemu", Size: 1}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "state already exists") {
+		t.Fatal("existing state did not block create", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil || string(after) != string(before) {
+		t.Fatal("create modified partial state", readErr)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil || len(entries) != 1 {
+		t.Fatal("create attempted a repair", readErr)
 	}
 }

@@ -69,7 +69,8 @@ the initializer’s workstation.
 A joining VM enrolls in Tailscale, contacts the existing cluster's bootstrap
 endpoint and obtains the settings/join credentials appropriate to its roles.
 Kubernetes and CockroachDB establish membership through their join protocols.
-Health checks and all-pairs smoke tests should discover members at runtime.
+The separate `infestation-smoke` checker discovers all target nodes through the
+Kubernetes API using kubeconfig, without provider inventories or cloud credentials.
 The initial database/control-plane group still needs an explicit, safely fenced
 first-bootstrap step; that group is not a permanent enumeration of the cluster.
 
@@ -84,7 +85,7 @@ acceptable; requiring all peers to be known and present is not the target.
 The public interface is `infestation <vm|azure> create`. Every node runs
 CockroachDB and K3s; `--agent` selects K3s workers without API servers, while the
 default creates servers. Only servers may use `--init`. Both providers share
-`start`, `stop`, `status`, `resume`, `wait` and `kubeconfig` verbs. PKI, Ignition,
+`start`, `stop`, `status`, `wait` and `kubeconfig` verbs. PKI, Ignition,
 image preparation and infrastructure helpers are internal implementation steps.
 
 Each provisioning call targets one provider and writes a private `nodes.json`
@@ -102,7 +103,7 @@ fetch the pinned bundle and start Cockroach/K3s with discovered join seeds. See
 [bootstrap](bootstrap.md) for the protocol and trust boundary.
 
 The shared `cluster.Config` type still represents both provisioning and runtime
-settings. Static examples and some checks still use full inventories; splitting
+settings. Static examples still use full inventories; splitting
 those concerns remains outstanding. Azure enrollment currently supports one VM
 per call; local groups support 1–32. Independent enrollment has protocol/unit
 coverage but needs fresh VM verification. The earlier mixed test used a complete

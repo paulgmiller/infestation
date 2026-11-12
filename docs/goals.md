@@ -30,13 +30,17 @@ that all behavior is implemented or proven. Outstanding work is in [TODO.md](../
 
 - Keep a small, consistent CLI: `infestation <provider> create` always creates
   CockroachDB and K3s. Servers are the default; `--agent` omits the API server
-  and cannot combine with `--init`. Providers share lifecycle verbs.
+  and cannot combine with `--init`. Providers share lifecycle verbs. Connectivity
+  checks belong in a separate kubeconfig-driven CLI, independent of provisioning.
 - Support one cluster per tailnet for now. Use conventional API/bootstrap
   endpoints so friends need no additional cluster selector or global node list.
 - Discover arbitrarily named participants through the tailnet. For now, designate
   one founding node with `--init`; it automatically initializes once two peers
   are ready, or joins an existing database. Defer automatic election until it can
   distinguish an unavailable existing cluster from a new one.
+- Prefer explicit removal and fresh creation over repairing partially provisioned
+  infrastructure. Failed creates retain resources/state for inspection; cleanup
+  must respect resource ownership, existing disks and cluster identity.
 - Provision compute from exactly one provider per command. Mixed clusters use
   separate independent calls, such as local `--init --size 2` and Azure `--size 1`.
 - Support any compatible VM compute provider. QEMU and Azure are the current

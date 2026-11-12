@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"infestation/internal/cluster"
 	"infestation/internal/executil"
 	"infestation/internal/fsutil"
 )
@@ -57,16 +56,16 @@ func parseLatency(raw string) []latencySample {
 	return samples
 }
 
-func latencyManifest(c cluster.Config, runID string) (map[string]any, []latencyPair) {
+func latencyManifest(nodes []Node, runID string) (map[string]any, []latencyPair) {
 	var items []any
 	var pairs []latencyPair
-	for _, from := range c.Nodes {
-		for _, to := range c.Nodes {
+	for _, from := range nodes {
+		for _, to := range nodes {
 			if from.Name == to.Name {
 				continue
 			}
 			name := safeName("latency-" + from.Name + "-" + to.Name + "-" + runID)
-			target := c.NodeAddress(to)
+			target := to.IP
 			pairs = append(pairs, latencyPair{from.Name, to.Name, target, name})
 			items = append(items, map[string]any{
 				"apiVersion": "batch/v1", "kind": "Job", "metadata": map[string]any{"name": name, "namespace": Namespace},
@@ -85,15 +84,15 @@ func latencyManifest(c cluster.Config, runID string) (map[string]any, []latencyP
 	return map[string]any{"apiVersion": "v1", "kind": "List", "items": items}, pairs
 }
 
-func recordLatency(ctx context.Context, runner executil.Runner, c cluster.Config, state, kube, runID string, log io.Writer) error {
-	doc, pairs := latencyManifest(c, runID)
+func recordLatency(ctx context.Context, runner executil.Runner, nodes []Node, state, kube, runID string, log io.Writer) error {
+	doc, pairs := latencyManifest(nodes, runID)
 	manifestPath := filepath.Join(state, "tailnet-latency-jobs-"+runID+".json")
 	reportPath := filepath.Join(state, "tailnet-latency-"+runID+".json")
 	if err := fsutil.WriteJSON(manifestPath, doc); err != nil {
 		return err
 	}
 	run := func(args ...string) executil.Result {
-		return runner.Run(ctx, "kubectl", append([]string{"--kubeconfig", kube}, args...)...)
+		return runner.Run(ctx, "kubectl", kubectlArgs(kube, args...)...)
 	}
 	if err := run("apply", "-f", manifestPath).Err("apply tailnet latency jobs"); err != nil {
 		return err

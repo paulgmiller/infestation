@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"infestation/internal/cluster"
-	"infestation/internal/testutil"
 )
 
 func TestLatencyKeepsRelayTransitionsAndDoesNotStopAtDirect(t *testing.T) {
@@ -14,14 +11,13 @@ func TestLatencyKeepsRelayTransitionsAndDoesNotStopAtDirect(t *testing.T) {
 	if len(samples) != 2 || samples[0].Route != "DERP(sea)" || samples[1].RTTMillis != 0.5 {
 		t.Fatal(samples)
 	}
-	c := testutil.Config()
-	c.Tailscale = &cluster.Tailscale{Domain: "example.ts.net", Version: "v1.104.2"}
-	doc, pairs := latencyManifest(c, "fresh-run")
+	nodes := smokeNodes()
+	doc, pairs := latencyManifest(nodes, "fresh-run")
 	if len(pairs) != 6 {
 		t.Fatal("not all directed pairs measured")
 	}
 	for _, p := range pairs {
-		if p.From == p.To || !strings.HasSuffix(p.Target, ".example.ts.net") {
+		if p.From == p.To || !strings.HasPrefix(p.Target, "100.64.0.") {
 			t.Fatal(p)
 		}
 	}

@@ -2,13 +2,12 @@ package smoke
 
 import (
 	"encoding/json"
-	"infestation/internal/testutil"
 	"strings"
 	"testing"
 )
 
 func TestAllDirectedPairs(t *testing.T) {
-	doc, jobs := Manifest(testutil.Config())
+	doc, jobs := Manifest(smokeNodes())
 	if len(jobs) != 6 {
 		t.Fatal(jobs)
 	}
@@ -26,12 +25,12 @@ func TestAllDirectedPairs(t *testing.T) {
 }
 
 func TestFreshRunsAndLongNodeNames(t *testing.T) {
-	c := testutil.Config()
-	for i := range c.Nodes {
-		c.Nodes[i].Name = strings.Repeat(string(rune('a'+i)), 63)
+	nodes := smokeNodes()
+	for i := range nodes {
+		nodes[i].Name = strings.Repeat(string(rune('a'+i)), 63)
 	}
-	_, first := manifest(c, "first-run")
-	_, second := manifest(c, "second-run")
+	_, first := manifest(nodes, "first-run")
+	_, second := manifest(nodes, "second-run")
 	seen := map[string]bool{}
 	for _, name := range first {
 		if len(name) > 63 {
@@ -44,4 +43,8 @@ func TestFreshRunsAndLongNodeNames(t *testing.T) {
 			t.Fatal("stale or invalid job name", name)
 		}
 	}
+}
+
+func smokeNodes() []Node {
+	return []Node{{Name: "kube-0", IP: "100.64.0.1"}, {Name: "kube-1", IP: "100.64.0.2"}, {Name: "kube-2", IP: "100.64.0.3"}}
 }

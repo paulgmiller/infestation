@@ -7,21 +7,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
 	"time"
 
 	"infestation/internal/azureconfig"
-	"infestation/internal/cluster"
-	"infestation/internal/executil"
 	"infestation/internal/ignition"
-	"infestation/internal/smoke"
 	"infestation/internal/vm"
 )
 
 const usage = `Infestation: Flatcar + CockroachDB + K3s
 
-Usage: infestation <vm|azure> <create|start|stop|status|resume|wait|kubeconfig> [flags]
-       infestation smoke [flags]
+Usage: infestation <vm|azure> <create|start|stop|status|wait|kubeconfig> [flags]
 
 create runs CockroachDB and K3s on every node. --agent omits the API server.
 Use --init on exactly one founding server. Run a command with --help for flags.`
@@ -31,15 +26,12 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		fmt.Fprintln(out, usage)
 		return nil
 	}
-	if args[0] == "smoke" {
-		return runSmoke(ctx, args[1:], out)
-	}
 	provider := args[0]
 	if provider != "vm" && provider != "azure" {
 		return fmt.Errorf("unknown command %q; run infestation --help", provider)
 	}
 	if len(args) == 1 || args[1] == "--help" {
-		fmt.Fprintf(out, "Usage: infestation %s <create|start|stop|status|resume|wait|kubeconfig> [flags]\n", provider)
+		fmt.Fprintf(out, "Usage: infestation %s <create|start|stop|status|wait|kubeconfig> [flags]\n", provider)
 		return nil
 	}
 	action := args[1]
@@ -57,12 +49,37 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 		return vm.ServeArtifacts(ctx, *state)
 	}
 	switch action {
-	case "create", "start", "stop", "status", "resume", "wait", "kubeconfig":
+	case "create", "start", "stop", "status", "wait", "kubeconfig":
 	default:
 		return fmt.Errorf("unknown %s command %q; run infestation %s --help", provider, action, provider)
 	}
 	f := flag.NewFlagSet(provider+" "+action, flag.ContinueOnError)
 	f.SetOutput(out)
+	f.Usage = func() {
+		fmt.Fprintf(out, "Usage: infestation %s %s [flags]\n\n", provider, action)
+		switch action {
+		case "create":
+			fmt.Fprintln(out, "Creates CockroachDB and K3s nodes and saves private provider state.")
+			if provider == "vm" {
+				fmt.Fprintln(out, "Run on the QEMU host that will hold the VM disks.")
+			} else {
+				fmt.Fprintln(out, "Requires Azure CLI login; saves resource identifiers and deployment inputs locally.")
+			}
+		case "start", "stop", "status":
+			if provider == "vm" {
+				fmt.Fprintln(out, "Run on the original QEMU host with its saved provider state, VM disks and local control sockets.")
+			} else {
+				fmt.Fprintln(out, "Requires saved provider state and Azure CLI login. Another machine can manage the VM only if that state is available there; resources are not discovered by name.")
+			}
+			if action == "start" && provider == "azure" {
+				fmt.Fprintln(out, "Azure start currently ignores --wait; use azure wait separately for cluster readiness.")
+			}
+		case "wait", "kubeconfig":
+			fmt.Fprintln(out, "Requires saved provider inventory and workstation tailnet access. Can run elsewhere with that inventory; Azure login is not required.")
+		}
+		fmt.Fprintln(out, "Use the same --name and --state-dir as create. State contents: docs/local-state.md.\n\nFlags:")
+		f.PrintDefaults()
+	}
 	o := vm.ClusterOptions{Provider: "qemu"}
 	cloud := provider == "azure"
 	if cloud {
@@ -86,7 +103,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 			f.StringVar(&o.NodeHelper, "node-helper", "bin/infestation-node", "local Linux helper when not using --helper-source-ref")
 		}
 	}
-	if !cloud && (action == "create" || action == "resume") {
+	if !cloud && action == "create" {
 		f.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image; otherwise use the pinned image")
 		f.StringVar(&o.Accel, "accel", "kvm", "QEMU accelerator: kvm or tcg")
 		f.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
@@ -94,7 +111,7 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	if !cloud && action == "start" {
 		f.StringVar(&o.Accel, "accel", "", "override the stored QEMU accelerator")
 	}
-	if action == "create" || action == "start" || action == "resume" || action == "wait" {
+	if action == "create" || action == "start" || action == "wait" {
 		wait := time.Duration(0)
 		if action == "wait" {
 			wait = 30 * time.Minute
@@ -122,11 +139,6 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	switch action {
 	case "create":
 		return vm.CreateCluster(ctx, o, out)
-	case "resume":
-		if cloud {
-			return vm.ResumeAzure(ctx, o, out)
-		}
-		return vm.ResumeLocal(ctx, o, out)
 	case "wait":
 		return vm.WaitCluster(ctx, o.Options, out)
 	case "kubeconfig":
@@ -142,28 +154,6 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	return vm.ClusterAction(ctx, o.Options, action, out)
 }
 
-func runSmoke(ctx context.Context, args []string, out io.Writer) error {
-	f := flag.NewFlagSet("smoke", flag.ContinueOnError)
-	f.SetOutput(out)
-	config := f.String("config", "", "owned cluster JSON (required)")
-	state := f.String("state-dir", "state", "private report directory")
-	kube := f.String("kubeconfig", "", "admin kubeconfig (default: state directory/kubeconfig)")
-	latency := f.Bool("tailnet-latency", false, "record directed Tailscale latency/path samples")
-	if err := parse(f, args); err != nil {
-		return help(err)
-	}
-	if *config == "" {
-		return fmt.Errorf("--config is required")
-	}
-	c, err := cluster.Load(*config)
-	if err != nil {
-		return err
-	}
-	if *kube == "" {
-		*kube = filepath.Join(*state, "kubeconfig")
-	}
-	return smoke.Run(ctx, executil.OSRunner{Output: out}, c, *state, *kube, smoke.Options{TailnetLatency: *latency, Log: out})
-}
 func help(err error) error {
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
