@@ -13,10 +13,10 @@ Use the same name/state directory for subsequent lifecycle commands.
 Every public command has `--help`, for example `infestation vm start --help` or
 `infestation azure stop --help`. Help describes the state/host requirements.
 
-- Local `start`, `stop` and `status` run on the original QEMU host:
+- Local `start`, `stop`, `remove` and `status` run on the original QEMU host:
   they need its saved state, local disks and QMP control sockets. Copying metadata
   alone does not let another machine operate those local VMs.
-- Azure `start`, `stop` and `status` need saved provider state plus an
+- Azure `start`, `stop`, `remove` and `status` need saved provider state plus an
   authenticated Azure CLI. They can run from another machine if that state is
   available there; the current CLI does not discover resources from the name or
   ownership tags alone. Tailnet membership does not grant Azure compute control.
@@ -67,3 +67,50 @@ and a fresh create must be explicit and preserve any data or identity needed
 for recovery. Expired bootstrap credentials require deliberate recovery.
 Keep state ignored by Git and private;
 never print profiles, kubeconfigs or keys into logs or support messages.
+
+## Remove owned compute
+
+```sh
+infestation vm remove --name lab --state-dir state/vms
+infestation vm remove --name lab --state-dir state/vms --delete-disks
+infestation azure remove --name cloud --state-dir state/vms
+```
+
+QEMU removal terminates each owned emulator through its private QMP monitor,
+waits for the verified process to exit, and removes its socket and PID file.
+This is a forced guest power-off; use `stop` first when a graceful shutdown is
+needed. Disks are preserved by default and `start` can reuse them. The explicit
+`--delete-disks` option permanently removes only each owned `disk.qcow2` overlay,
+including its database data and enrolled identity. Shared base images, profiles,
+reports, credentials and inventory remain. An unavailable monitor with a live
+process, mismatched identity, or an active start lock prevents cleanup.
+[QEMU documents `quit`](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-quit)
+as terminating the emulator.
+
+Azure removal verifies the saved provider/VMSS identity and the resource group's
+`infestation-mixed-id` tag, then deletes the **entire dedicated resource group**.
+This includes the VMSS, its disks, network resources and anything subsequently
+added to that group. It waits for the Azure CLI deletion operation; the
+[Azure CLI group reference](https://learn.microsoft.com/en-us/cli/azure/group#az-group-delete)
+describes this operation. This is permanent data deletion; use `stop` when disks
+must survive. Missing groups are already removed. Ownership failures and deletion
+errors retain all local evidence. Destructive removal requires current
+`provider.json` and `azure-scaleset.json`; older mixed/single-VM records are not
+accepted as authority to delete a resource group.
+
+Both commands retain the private provider directory, including initializer
+CA/token material. Removal can be retried after partial failure. A fresh create
+still refuses that existing directory: preserve it for recovery and use a new
+name, or deliberately archive it before reusing the name. Neither removal drains
+CockroachDB/Kubernetes members nor deregisters tailnet devices, routes or Services.
+These commands are compute teardown, not a cluster member replacement protocol.
+
+### Local validation
+
+Removal is covered by `go test ./...` and `go vet ./...`. QEMU tests simulate a
+QMP monitor and a disposable local process; they cover exit before disk deletion,
+stale control files, repeated removal, interrupted creation, identity/provider
+mismatches, reused PIDs and start locks. Azure tests use a mocked CLI runner to
+check subscription/group scope, ownership rejection, absent groups and deletion
+failure with retained state. These checks do not provision or delete real QEMU
+VMs or Azure resources; live teardown remains unverified.

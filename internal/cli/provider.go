@@ -15,7 +15,7 @@ type nodeAction func(context.Context, vm.ClusterOptions, io.Writer) error
 
 func (p provider) command() *cobra.Command {
 	cmd := &cobra.Command{Use: p.name, Short: "Manage " + p.name + " node groups", Args: noArgs, RunE: showHelp}
-	cmd.AddCommand(p.create(), p.start(), p.stop(), p.status(), p.wait(), p.kubeconfig())
+	cmd.AddCommand(p.create(), p.start(), p.stop(), p.remove(), p.status(), p.wait(), p.kubeconfig())
 	return cmd
 }
 
@@ -88,6 +88,21 @@ func (p provider) stop() *cobra.Command {
 	cmd, _ := p.nodeCommand("stop", "Stop owned VMs while preserving disks and identity", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
 		return p.runAction(ctx, o, "stop", out)
 	})
+	return cmd
+}
+func (p provider) remove() *cobra.Command {
+	var deleteDisks bool
+	description := "Terminate owned QEMU VMs and clean control files; preserve disks and private state"
+	if p.name == "azure" {
+		description = "Delete the owned Azure resource group, including VMSS, disks and networking; preserve local state"
+	}
+	cmd, _ := p.nodeCommand("remove", description, func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
+		return vm.RemoveGroup(ctx, o.Options, o.Provider, deleteDisks, out)
+	})
+	if p.name == "vm" {
+		cmd.Flags().BoolVar(&deleteDisks, "delete-disks", false, "also permanently delete owned QEMU disk overlays (base images and private state are retained)")
+	}
+	cmd.Long += "\nRemoval does not drain cluster members or remove tailnet registrations."
 	return cmd
 }
 func (p provider) status() *cobra.Command {

@@ -20,7 +20,7 @@ func TestHelpShowsOnlyProviderLifecycle(t *testing.T) {
 		}
 	}
 	for _, provider := range []string{"vm", "azure"} {
-		for _, action := range []string{"create", "start", "stop", "status", "wait", "kubeconfig"} {
+		for _, action := range []string{"create", "start", "stop", "remove", "status", "wait", "kubeconfig"} {
 			out.Reset()
 			if err := Run(context.Background(), []string{provider, action, "--help"}, &out); err != nil {
 				t.Fatal(provider, action, err)
@@ -116,5 +116,25 @@ func TestCommandOptionsDoNotLeakBetweenExecutions(t *testing.T) {
 	err := Run(context.Background(), []string{"vm", "create", "--name", "guard", "--agent", "--size", "0"}, &out)
 	if err == nil || !strings.Contains(err.Error(), "--size must be") {
 		t.Fatal("previous command's init flag leaked into a new execution", err)
+	}
+}
+
+func TestRemoveHelpExplainsDataLifecycle(t *testing.T) {
+	for _, provider := range []string{"vm", "azure"} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), []string{provider, "remove", "--help"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		help := out.String()
+		if !strings.Contains(help, "private") || !strings.Contains(help, "tailnet registrations") {
+			t.Fatal("missing removal scope", help)
+		}
+		if (provider == "vm") != strings.Contains(help, "--delete-disks") {
+			t.Fatal("wrong disk deletion flag", help)
+		}
+		out.Reset()
+		if err := Run(context.Background(), []string{provider, "remove"}, &out); err == nil || !strings.Contains(err.Error(), "name") {
+			t.Fatal("remove permits missing name", err)
+		}
 	}
 }

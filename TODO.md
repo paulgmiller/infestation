@@ -47,7 +47,8 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 ## Data safety and maintenance
 
 - [ ] Define/test database drain, instance replacement and disk-retention/backup
-  behavior before exposing VMSS scale-in or deletion. Uniform VMSS cannot rely on
+  behavior for safe member replacement and VMSS scale-in. Explicit group teardown
+  is available but does not drain members. Uniform VMSS cannot rely on
   the Flexible-only OS-disk `Detach` setting; power-off is not instance deletion.
 
 - [ ] Configure and verify clock synchronization on every Flatcar node across

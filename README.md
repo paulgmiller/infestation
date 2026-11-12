@@ -73,7 +73,7 @@ bin/infestation azure create --name cloud --size 1 \
 ```
 
 The public CLI has the same lifecycle verbs for both providers: `create`,
-`start`, `stop`, `status`, `wait` and `kubeconfig`. `vm status --netcheck`
+`start`, `stop`, `remove`, `status`, `wait` and `kubeconfig`. `vm status --netcheck`
 includes guest network diagnostics. The separate `infestation-smoke` CLI runs
 workload connectivity checks using Kubernetes credentials alone.
 Every command has `--help`. Local VM control runs on its QEMU host; Azure control

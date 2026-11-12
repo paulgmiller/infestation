@@ -85,7 +85,7 @@ acceptable; requiring all peers to be known and present is not the target.
 The public interface is `infestation <vm|azure> create`. Every node runs
 CockroachDB and K3s; `--agent` selects K3s workers without API servers, while the
 default creates servers. Only servers may use `--init`. Both providers share
-`start`, `stop`, `status`, `wait` and `kubeconfig` verbs. PKI, Ignition,
+`start`, `stop`, `remove`, `status`, `wait` and `kubeconfig` verbs. PKI, Ignition,
 image preparation and infrastructure helpers are internal implementation steps.
 
 Each provisioning call targets one provider and writes a private `nodes.json`
