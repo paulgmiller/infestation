@@ -1,0 +1,33 @@
+{
+  "tagOwners": {
+    "tag:roach": []
+  },
+  "autoApprovers": {
+    "routes": {
+      "10.42.0.0/16": ["tag:roach"]
+    },
+    "services": {
+      "svc:k8s-api": ["tag:roach"]
+    }
+  },
+  "grants": [
+    {
+      "src": ["autogroup:member", "autogroup:tagged", "10.42.0.0/16"],
+      "dst": ["tag:roach", "10.42.0.0/16"],
+      "ip": ["*"]
+    },
+    {
+      "src": ["autogroup:member", "autogroup:tagged", "10.42.0.0/16"],
+      "dst": ["svc:k8s-api"],
+      "ip": ["tcp:443"]
+    }
+  ],
+  "ssh": [
+    {
+      "action": "accept",
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self", "tag:roach"],
+      "users": ["autogroup:nonroot", "root"]
+    }
+  ]
+}

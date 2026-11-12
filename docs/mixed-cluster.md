@@ -35,6 +35,9 @@ overlap the current test, so concurrent use requires a separate CIDR design.
 
 ## Reproduce with a fresh name
 
+Complete the [tailnet policy setup](tailnet-policy.md), including traffic grants,
+before running the commands below.
+
 Prerequisites: QEMU/KVM, the CLI, an authenticated Azure CLI, and a reusable,
 preauthorized `tag:roach` enrollment key. The tailnet policy needs pod-route
 approval for `10.42.0.0/16`, Service approval for `svc:k8s-api`, network grants,

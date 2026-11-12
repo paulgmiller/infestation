@@ -25,6 +25,10 @@ not encrypted by the host overlay. NetworkPolicy enforcement remains undecided.
 
 ## Enrollment and approvals
 
+Use the complete [tailnet setup guide](tailnet-policy.md) and
+[mergeable policy example](../examples/tailscale-policy.json) for tag ownership,
+SSH, traffic grants, pod-route approval and API-Service host approval.
+
 Use a reusable, preauthorized tagged auth key for enrollment. The CLI accepts an
 argument, environment variable or private file. Private Ignition contains the
 key; guest enrollment removes the guest copy after success. Copies in local
@@ -86,7 +90,8 @@ public IP or load balancer. Replace that shortcut with an explicit egress design
 New Azure subnet defaults changed; this is not a blanket shutdown of existing
 networks. The choices and verification work are in [networking TODOs](networking-todo.md).
 
-Local QEMU supports SLIRP and passt for standalone enrollment. SLIRP requires no
+Current cluster creation uses SLIRP. The QEMU backend also contains passt support
+for network experiments. SLIRP requires no
 host network setup. passt offers a different NAT/forwarding implementation but
 requires the installed helper and working namespace/AppArmor permissions. Guest
 netcheck and directed ping paths, rather than the backend name alone, determine

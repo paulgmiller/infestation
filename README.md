@@ -40,7 +40,8 @@ kubectl and a reachable cluster.
 Use `infestation vm create` for local QEMU and `infestation azure create` for
 Azure. Both create CockroachDB and K3s servers by default. Add `--agent` to omit
 the Kubernetes API server while keeping CockroachDB; agents cannot use `--init`.
-See [independent enrollment](docs/friend-vm.md).
+First apply the one-time [tailnet policy setup](docs/tailnet-policy.md), then see
+[independent enrollment](docs/friend-vm.md).
 
 [Three local VMs](docs/isolated-vm-cluster.md) and the
 [mixed local/Azure runbook](docs/mixed-cluster.md) cover cluster creation. The CLI

@@ -25,6 +25,9 @@ Use `vm status|stop|start --name alice` for this provider group.
 Azure region/SKU default to `westus2`/`Standard_B2s`. Each command creates compute
 on only one provider. Each machine retains its own private provider state.
 
+The person supplying the key first applies the [tailnet setup](tailnet-policy.md),
+including tagged-peer traffic, SSH and route/Service auto-approvals.
+
 ## Install and manage
 
 Use Linux x86-64 with QEMU/KVM and `qemu-img` for local VMs. On Ubuntu/Debian:

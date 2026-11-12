@@ -1,5 +1,6 @@
 # Cluster bootstrap
 
+Apply the one-time [tailnet policy setup](tailnet-policy.md) first.
 Exactly one founding node is explicitly authorized with `--init`:
 
 ```sh
