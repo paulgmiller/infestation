@@ -100,6 +100,18 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   ambiguous reinitialization or new PKI/token. [Bootstrap](docs/bootstrap.md).
 - [ ] Define and test coordinated backup/restore of application data, the Kine
   database and matching K3s credentials. [Operations targets](docs/operations-plan.md).
+- [ ] Provide an operator-initiated disaster recovery workflow: select and verify
+  a usable backup for restore, or explicitly choose manual loss-of-quorum recovery
+  when no suitable backup exists. Before modifying stores, stop writes and
+  snapshot/copy all surviving stores and preserve matching credentials/cluster
+  identity. Collect replica information from every surviving store using the
+  matching CockroachDB version, produce a reviewable recovery plan, report missing
+  ranges and possible data loss/inconsistency, and require explicit approval before
+  applying it. Never initiate forced recovery automatically or treat an unavailable
+  cluster as permission to initialize a new one. Test backup restore and forced
+  recovery separately, including a range with no surviving replica; verify database
+  health and K3s/Kine behavior before resuming workloads. Document the tested
+  version-specific procedure and evidence in a recovery runbook.
 - [ ] Coordinate Flatcar, K3s and Cockroach updates, drains, rollback and rejoin.
 - [ ] Investigate Kine/Cockroach maintenance-status incompatibilities and watch
   timeout logs under sustained WAN latency.
