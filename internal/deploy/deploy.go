@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"gopkg.in/yaml.v3"
 	"github.com/paulgmiller/infestation/internal/azureconfig"
 	"github.com/paulgmiller/infestation/internal/bootstrap"
 	"github.com/paulgmiller/infestation/internal/cluster"
@@ -22,6 +21,7 @@ import (
 	"github.com/paulgmiller/infestation/internal/fsutil"
 	"github.com/paulgmiller/infestation/internal/ignition"
 	"github.com/paulgmiller/infestation/internal/pki"
+	"gopkg.in/yaml.v3"
 )
 
 type Options struct {

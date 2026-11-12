@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/paulgmiller/infestation/internal/blobstore"
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
 // These few native resource registrations avoid pulling in the large generated

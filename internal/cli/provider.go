@@ -6,8 +6,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/paulgmiller/infestation/internal/vm"
+	"github.com/spf13/cobra"
 )
 
 type provider struct{ name string }

@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/tailnet"
+	"gopkg.in/yaml.v3"
 )
 
 // Diagnose sends a bounded, sanitized report through the explicit VM channel.

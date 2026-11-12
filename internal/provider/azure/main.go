@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/paulgmiller/infestation/internal/azureconfig"
 	"github.com/pulumi/pulumi-azure-native-sdk/compute/v3"
 	"github.com/pulumi/pulumi-azure-native-sdk/network/v3"
 	"github.com/pulumi/pulumi-azure-native-sdk/resources/v3"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
-	"github.com/paulgmiller/infestation/internal/azureconfig"
 )
 
 func Run() {

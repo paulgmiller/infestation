@@ -1,0 +1,20 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # Vet and formatting have their own gates. Keep lint focused on static
+  # analysis, unused code and ineffective assignments.
+  default: none
+  enable:
+    - staticcheck
+    - unused
+    - ineffassign
+  exclusions:
+    rules:
+      # Product names legitimately start with capitals in error messages.
+      - linters: [staticcheck]
+        text: 'ST1005:'
+        source: 'fmt\.Errorf\("(Azure|Cockroach|Flatcar|Cilium|Tailscale|Ignition|Uniform)\b'

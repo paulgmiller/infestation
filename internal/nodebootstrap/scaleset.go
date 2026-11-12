@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	"gopkg.in/yaml.v3"
 	"github.com/paulgmiller/infestation/internal/cluster"
 	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/fsutil"
 	"github.com/paulgmiller/infestation/internal/tailnet"
+	"gopkg.in/yaml.v3"
 )
 
 // ScaleSet is the Azure-only identity contract for a shared Ignition profile.

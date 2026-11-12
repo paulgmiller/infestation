@@ -46,8 +46,19 @@ go build -o bin/infestation ./cmd/infestation
 go build -o bin/infestation-smoke ./cmd/infestation-smoke
 go test ./...
 go vet ./...
+./task.sh verify-go
 bin/infestation --help
 ```
+
+`./task.sh verify-go` runs the same formatting, vet, lint and unit-test checks as
+the GitHub Actions PR workflow. Individual checks are `fmt-check`, `vet`, `lint`
+and `test`. Lint installs a pinned golangci-lint release into ignored `bin/` on
+first use and checks staticcheck, unused code and ineffective assignments.
+The [workflow](.github/workflows/go.yml) provides separate `verify`, `vet`,
+`format` and `lint` jobs, using the Go version in `go.mod`. It runs on
+every PR, pushes to `master`/`main`, and merge queues. To enforce these checks
+before merging, select all four job names as required status checks in the
+repository's GitHub branch protection or ruleset after the workflow is pushed.
 
 Builds and unit tests do not provision resources. Running VM commands needs the
 appropriate [QEMU/KVM packages and host access](docs/local-vm-prerequisites.md)

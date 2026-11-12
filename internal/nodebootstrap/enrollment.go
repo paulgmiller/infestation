@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"github.com/paulgmiller/infestation/internal/cluster"
 	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/fsutil"
+	"gopkg.in/yaml.v3"
 )
 
 const MembershipPort = "7444"
@@ -432,7 +432,7 @@ func membershipHandlerWithFetch(c Config, b JoinBundle, root string, fetchConfig
 				return
 			}
 		}
-		http.Error(w, "not ready", 503)
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
 	})
 	mux.HandleFunc("/v1/kubeconfig", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := os.ReadFile(filepath.Join(root, "/etc/infestation/kubeconfig"))
@@ -452,7 +452,7 @@ func membershipHandlerWithFetch(c Config, b JoinBundle, root string, fetchConfig
 					}
 				}
 			}
-			http.Error(w, "not ready", 503)
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
@@ -462,11 +462,11 @@ func membershipHandlerWithFetch(c Config, b JoinBundle, root string, fetchConfig
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		ip, parseErr := netip.ParseAddr(host)
 		if err != nil || parseErr != nil || !netip.MustParsePrefix("100.64.0.0/10").Contains(ip) {
-			http.Error(w, "tailnet only", 403)
+			http.Error(w, "tailnet only", http.StatusForbidden)
 			return
 		}
 		if r.Method != "GET" {
-			http.Error(w, "GET required", 405)
+			http.Error(w, "GET required", http.StatusMethodNotAllowed)
 			return
 		}
 		mux.ServeHTTP(w, r)

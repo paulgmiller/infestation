@@ -178,8 +178,6 @@ func TestAzureResources(t *testing.T) {
 	for _, public := range []bool{false, true} {
 		t.Run(fmt.Sprintf("public=%t", public), func(t *testing.T) {
 			s := fixture(t, true)
-			if public {
-			}
 			d, err := loadDeployment(s)
 			if err != nil {
 				t.Fatal(err)

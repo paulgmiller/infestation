@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"gopkg.in/yaml.v3"
 	"github.com/paulgmiller/infestation/internal/blobstore"
 	"github.com/paulgmiller/infestation/internal/bootstrap"
 	"github.com/paulgmiller/infestation/internal/fsutil"
+	"gopkg.in/yaml.v3"
 )
 
 func Fetch(ctx context.Context, client blobstore.Client, outputs bootstrap.Outputs, path string, overwrite bool) error {

@@ -173,7 +173,7 @@ type ignitionDocument struct {
 	Systemd struct {
 		Units []struct {
 			Name    string
-			Mask bool `json:"mask,omitempty"`
+			Mask    bool `json:"mask,omitempty"`
 			Enabled bool
 		}
 	} `json:"systemd"`

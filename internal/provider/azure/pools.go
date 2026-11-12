@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/paulgmiller/infestation/internal/ignition"
 	"github.com/paulgmiller/infestation/internal/nodebootstrap"
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
 func loadPools(d *Deployment) (*Deployment, error) {

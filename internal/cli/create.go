@@ -1,10 +1,10 @@
 package cli
 
 import (
-	"github.com/spf13/cobra"
 	"github.com/paulgmiller/infestation/internal/azureconfig"
 	"github.com/paulgmiller/infestation/internal/ignition"
 	"github.com/paulgmiller/infestation/internal/vm"
+	"github.com/spf13/cobra"
 )
 
 func (p provider) create() *cobra.Command {

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/fsutil"
+	"gopkg.in/yaml.v3"
 )
 
 const ConfigPath = "/etc/infestation/tailnet.json"

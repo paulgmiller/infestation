@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"golang.org/x/crypto/ssh"
 	"github.com/paulgmiller/infestation/internal/fsutil"
+	"golang.org/x/crypto/ssh"
 )
 
 // DisabledLoginPublicKey satisfies Azure's mandatory Linux authentication
