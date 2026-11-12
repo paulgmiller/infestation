@@ -34,23 +34,25 @@ Builds and unit tests do not provision resources. Running VM commands needs the
 appropriate QEMU/KVM tools or authenticated Azure CLI. Connectivity checks need
 kubectl and a reachable cluster.
 
-## Create a VM or cluster
+## Create nodes
 
-[Create a VM on a friend's tailnet](docs/friend-vm.md) covers standalone enrollment.
-Use its independent cluster enrollment command to join; `vm create` remains an
-enrollment-only diagnostic.
+Use `infestation vm create` for local QEMU and `infestation azure create` for
+Azure. Both create CockroachDB and K3s servers by default. Add `--agent` to omit
+the Kubernetes API server while keeping CockroachDB; agents cannot use `--init`.
+See [independent enrollment](docs/friend-vm.md).
 
 [Three local VMs](docs/isolated-vm-cluster.md) and the
 [mixed local/Azure runbook](docs/mixed-cluster.md) cover cluster creation. The CLI
-records only that provider call’s nodes under `state/vms/<name>/cluster.json`.
+records only that provider call’s nodes under `state/vms/<name>/nodes.json`.
 Each call keeps its own private state; joining machines fetch credentials over
 the tailnet rather than sharing a workstation directory. Keep generated state private.
+[Local state](docs/local-state.md) lists its contents, secrets and lifecycle uses.
 
 The helper can be built on each Flatcar node in a pinned multiarchitecture Go
 container from an immutable source commit:
 
 ```sh
-bin/infestation vm cluster create --name lab --init --size 3 --state-dir state/vms \
+bin/infestation vm create --name lab --init --size 3 --state-dir state/vms \
   --tailnet-domain YOUR-TAILNET.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
@@ -61,13 +63,17 @@ independently enrolled Azure node, use separate calls (which can run on differen
 workstations with different state directories):
 
 ```sh
-bin/infestation vm cluster create --name local --init --size 2 \
+bin/infestation vm create --name local --init --size 2 \
   --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
 bin/infestation azure create --name cloud --size 1 \
   --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
 ```
+
+The public CLI has the same lifecycle verbs for both providers: `create`,
+`start`, `stop`, `status`, `resume`, `wait` and `kubeconfig`. `vm status --netcheck`
+includes guest network diagnostics. `smoke` runs workload connectivity checks.
 
 Only one founding node gets initialization authority. It waits for two database
 peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;
@@ -82,9 +88,10 @@ source/build container. Native arm64 execution remains unverified.
 ## Access and verification
 
 ```sh
+bin/infestation vm kubeconfig --name lab --state-dir state/vms
 export KUBECONFIG="$PWD/state/vms/lab/kubeconfig"
 kubectl get nodes
-bin/infestation smoke --config state/vms/lab/cluster.json \
+bin/infestation smoke --config state/vms/lab/nodes.json \
   --state-dir state/vms/lab --kubeconfig "$KUBECONFIG" --tailnet-latency
 ```
 

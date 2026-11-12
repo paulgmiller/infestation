@@ -32,7 +32,7 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 	if err != nil && !c.DiscoverPeers {
 		return err
 	}
-	if n.Worker() && b.Pool == nil {
+	if n.Worker() && b.Pool == nil && !c.DiscoverPeers {
 		return nil
 	}
 	add := func(path, text string, mode int) {

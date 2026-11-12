@@ -1,372 +1,168 @@
-// Package cli exposes the shared Infestation workflows through one binary.
+// Package cli exposes the provider lifecycle and cluster connectivity checks.
 package cli
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	"infestation/internal/azurecheck"
 	"infestation/internal/azureconfig"
-	"infestation/internal/blobstore"
-	"infestation/internal/bootstrap"
 	"infestation/internal/cluster"
-	"infestation/internal/deploy"
 	"infestation/internal/executil"
 	"infestation/internal/ignition"
-	"infestation/internal/image"
-	"infestation/internal/kubeconfigstore"
-	"infestation/internal/pki"
 	"infestation/internal/smoke"
 	"infestation/internal/vm"
 )
 
-type list []string
+const usage = `Infestation: Flatcar + CockroachDB + K3s
 
-func (l *list) String() string     { return fmt.Sprint([]string(*l)) }
-func (l *list) Set(s string) error { *l = append(*l, s); return nil }
+Usage: infestation <vm|azure> <create|start|stop|status|resume|wait|kubeconfig> [flags]
+       infestation smoke [flags]
+
+create runs CockroachDB and K3s on every node. --agent omits the API server.
+Use --init on exactly one founding server. Run a command with --help for flags.`
+
 func Run(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Infestation: Flatcar + CockroachDB + K3s\n\nCommands: vm create/start/status/stop/netcheck, vm cluster create/resume/start/wait/status/stop/api, validate, pki, ignition, image, azure create/resume/start/status/stop, azure deploy, azure kubeconfig, azure check, smoke\nRun a command with --help for its flags.")
+		fmt.Fprintln(out, usage)
 		return nil
 	}
-	command := args[0]
-	args = args[1:]
-	if command == "azure" || command == "vm" {
-		if len(args) == 0 {
-			return fmt.Errorf("expected a %s subcommand; run --help", command)
-		}
-		command += " " + args[0]
-		args = args[1:]
+	if args[0] == "smoke" {
+		return runSmoke(ctx, args[1:], out)
 	}
-	if command == "vm cluster" {
-		if len(args) == 0 || args[0] == "--help" {
-			fmt.Fprintln(out, "Usage: infestation vm cluster create|resume|start|wait|status|stop|api --name NAME\nRun a subcommand with --help for its flags.")
-			return nil
-		}
-		command += " " + args[0]
-		args = args[1:]
+	provider := args[0]
+	if provider != "vm" && provider != "azure" {
+		return fmt.Errorf("unknown command %q; run infestation --help", provider)
 	}
-	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	flags.SetOutput(out)
-	config, state := "examples/cluster.json", "state"
-	portable := func() {
-		flags.StringVar(&config, "config", config, "cluster JSON inventory")
-		flags.StringVar(&state, "state-dir", state, "private local state directory")
+	if len(args) == 1 || args[1] == "--help" {
+		fmt.Fprintf(out, "Usage: infestation %s <create|start|stop|status|resume|wait|kubeconfig> [flags]\n", provider)
+		return nil
 	}
-	switch command {
-	case "vm artifact-server":
-		flags.StringVar(&state, "state-dir", "", "owned private cluster state")
-		if err := parse(flags, args); err != nil {
+	action := args[1]
+	// Private subprocess entry point for the loopback-only executable server.
+	if provider == "vm" && action == "artifact-server" {
+		f := flag.NewFlagSet("artifact-server", flag.ContinueOnError)
+		f.SetOutput(out)
+		state := f.String("state-dir", "", "owned private state")
+		if err := parse(f, args[2:]); err != nil {
 			return help(err)
 		}
-		if state == "" {
+		if *state == "" {
 			return fmt.Errorf("--state-dir is required")
 		}
-		return vm.ServeArtifacts(ctx, state)
-	case "azure create", "azure resume", "azure start", "azure stop", "azure status", "vm cluster create", "vm cluster resume", "vm cluster start", "vm cluster wait", "vm cluster status", "vm cluster stop", "vm cluster api":
-		o := vm.ClusterOptions{Provider: "qemu"}
-		cloud := strings.HasPrefix(command, "azure ")
-		if cloud {
-			o.Provider = "azure"
-			command = "vm cluster " + strings.TrimPrefix(command, "azure ")
-		}
-		flags.StringVar(&o.Name, "name", "", "provider group name (required; use a distinct name for each group)")
-		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
-		if command == "vm cluster resume" && !cloud {
-			flags.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image")
-			flags.StringVar(&o.Accel, "accel", "kvm", "local VM accelerator")
-			flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "local VM memory MiB")
-		}
-		if command == "vm cluster create" {
-			flags.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS suffix, such as example.ts.net")
-			flags.StringVar(&o.NodeHelper, "node-helper", "bin/infestation-node", "static Linux node helper to embed")
-			flags.StringVar(&o.HelperSourceRef, "helper-source-ref", "", "build helper on each guest from this GitHub tag or commit instead of local binary")
-			size := 3
-			if cloud {
-				size = 1
-			}
-			flags.IntVar(&o.Size, "size", size, "number of nodes to create on this provider in this call")
-			flags.BoolVar(&o.Init, "init", false, "designate one initializer when preparing new founding state")
-			if cloud {
-				flags.StringVar(&o.AzureLocation, "region", azureconfig.DefaultRegion, "Azure region")
-				flags.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
-			}
-			flags.StringVar(&o.HelperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "versioned multiarch golang builder image")
-			flags.StringVar(&o.AuthKey, "tailscale-auth-key", "", "tagged auth key (default: TAILSCALE_AUTH_KEY)")
-			flags.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private auth key file")
-			if !cloud {
-				flags.StringVar(&o.BaseImage, "base-image", "", "trusted Flatcar base (default: download verified image)")
-				flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow tcg")
-				flags.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
-			}
-		}
-		if command == "vm cluster create" || command == "vm cluster resume" || command == "vm cluster start" || command == "vm cluster wait" || command == "vm cluster api" {
-			waitDefault := 30 * time.Minute
-			if command == "vm cluster create" {
-				waitDefault = 0
-			}
-			flags.DurationVar(&o.Wait, "wait", waitDefault, "readiness deadline; 0 returns after provisioning; readiness needs workstation tailnet access")
-		}
-		if command == "vm cluster start" && !cloud {
-			flags.StringVar(&o.Accel, "accel", "", "override stored accelerator for this start (kvm or tcg)")
-		}
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		if o.Wait < 0 {
-			return fmt.Errorf("--wait must not be negative")
-		}
-
-		switch command {
-		case "vm cluster create":
-			return vm.CreateCluster(ctx, o, out)
-		case "vm cluster resume":
-			if cloud {
-				return vm.ResumeAzure(ctx, o, out)
-			}
-			return vm.ResumeLocal(ctx, o, out)
-		case "vm cluster wait":
-			return vm.WaitCluster(ctx, o.Options, out)
-		case "vm cluster start":
-			if cloud {
-				return vm.AzureAction(ctx, o.Options, "start", out)
-			}
-			return vm.ClusterAction(ctx, o.Options, "start", out)
-		case "vm cluster status":
-			if cloud {
-				return vm.AzureAction(ctx, o.Options, "status", out)
-			}
-			return vm.ClusterAction(ctx, o.Options, "status", out)
-		case "vm cluster api":
-			return vm.ConfigureAPIService(ctx, o.Options, out)
-		default:
-			if cloud {
-				return vm.AzureAction(ctx, o.Options, "stop", out)
-			}
-			return vm.ClusterAction(ctx, o.Options, "stop", out)
-		}
-	case "vm create", "vm start", "vm status", "vm stop", "vm netcheck":
-		o := vm.Options{}
-		flags.StringVar(&o.Name, "name", "", "unique VM name (required)")
-		flags.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private VM state directory")
-		if command == "vm create" {
-			flags.StringVar(&o.AuthKey, "tailscale-auth-key", "", "Tailscale auth key for tagged VMs (default: TAILSCALE_AUTH_KEY)")
-			flags.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private file containing the auth key")
-			flags.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar qcow2 (default: download and SHA512-verify pinned release)")
-			flags.StringVar(&o.Accel, "accel", "kvm", "kvm or slow software emulation with tcg")
-		}
-		if command == "vm create" || command == "vm start" {
-			flags.StringVar(&o.Network, "network", "", "network backend: slirp (default) or passt; start overrides for this run only")
-			flags.DurationVar(&o.Wait, "wait", 10*time.Minute, "wait for enrollment confirmation; 0 starts in background")
-		}
-		if command == "vm start" {
-			flags.StringVar(&o.Accel, "accel", "", "override stored accelerator for this start (kvm or tcg)")
-		}
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		if o.Wait < 0 {
-			return fmt.Errorf("--wait must not be negative")
-		}
-		switch command {
-		case "vm create":
-			return vm.Create(ctx, o, out)
-		case "vm start":
-			return vm.Start(ctx, o, out)
-		case "vm status":
-			return vm.Status(ctx, o, out)
-		case "vm netcheck":
-			return vm.Netcheck(ctx, o, out)
-		default:
-			return vm.Stop(ctx, o, out)
-		}
-	case "azure kubeconfig":
-		outputs := flags.String("outputs", "", "deployment outputs JSON containing kubeconfigBlob and apiEndpoint")
-		account := flags.String("account", "", "storage account from Azure portal (alternative to --outputs)")
-		endpoint := flags.String("endpoint", "", "regional HTTPS API endpoint (required with --account)")
-		subscription := flags.String("subscription", "", "Azure subscription for --account (defaults to az account selection)")
-		destination := flags.String("out", "", "destination kubeconfig file (mode 0600)")
-		overwrite := flags.Bool("force", false, "replace an existing destination kubeconfig")
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		if *destination == "" {
-			return fmt.Errorf("--out is required")
-		}
-		var result bootstrap.Outputs
-		if *outputs != "" {
-			if *account != "" || *endpoint != "" || *subscription != "" {
-				return fmt.Errorf("use --outputs or --account/--endpoint/--subscription, not both")
-			}
-			var err error
-			result, err = bootstrap.LoadOutputs(*outputs)
-			if err != nil {
-				return err
-			}
-		} else {
-			if *account == "" || *endpoint == "" {
-				return fmt.Errorf("provide --outputs, or both --account and --endpoint")
-			}
-			result = bootstrap.Outputs{APIEndpoint: *endpoint, KubeconfigBlob: &blobstore.Location{Account: *account, Container: "access", Blob: "kubeconfig.json", SubscriptionID: *subscription}}
-		}
-		if err := kubeconfigstore.Fetch(ctx, blobstore.Client{}, result, *destination, *overwrite); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, *destination)
-		return nil
-	case "validate", "pki", "ignition":
-		portable()
-		var initNode string
-		var helper, tailscaleAuthKey, tailscaleAuthKeyFile, helperSourceRef, helperBuilderImage string
-		if command == "ignition" {
-			flags.StringVar(&initNode, "init", "", "authorize this configured node to initialize the database")
-			flags.StringVar(&helper, "node-helper", "bin/infestation-node", "Linux node bootstrap executable to embed for local VMs")
-			flags.StringVar(&helperSourceRef, "helper-source-ref", "", "build helper on each guest from this GitHub tag or commit")
-			flags.StringVar(&helperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "versioned multiarch golang builder image")
-			flags.StringVar(&tailscaleAuthKey, "tailscale-auth-key", "", "Tailscale enrollment key (secret; embedded in private Ignition)")
-			flags.StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "private file containing the Tailscale enrollment key")
-		}
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		if flags.NArg() != 0 {
-			return fmt.Errorf("unexpected arguments")
-		}
-		c, err := cluster.Load(config)
-		if err != nil {
-			return err
-		}
-		if command == "ignition" {
-			if initNode != "" {
-				if err := c.SelectInitializer(initNode); err != nil {
-					return err
-				}
-			}
-			if len(c.Servers()) > 0 {
-				if _, err := c.Initializer(); err != nil {
-					return err
-				}
-			}
-			if tailscaleAuthKey == "" && tailscaleAuthKeyFile == "" && c.Tailscale != nil && c.Tailscale.AuthKeyFile == "" {
-				tailscaleAuthKey = os.Getenv("TAILSCALE_AUTH_KEY")
-			}
-			if tailscaleAuthKey != "" && tailscaleAuthKeyFile != "" {
-				return fmt.Errorf("use --tailscale-auth-key or --tailscale-auth-key-file, not both")
-			}
-			if tailscaleAuthKey != "" || tailscaleAuthKeyFile != "" {
-				if c.Tailscale == nil {
-					return fmt.Errorf("Tailscale auth flags require a tailscale networking profile")
-				}
-				if c.Tailscale.AuthKeyFile != "" {
-					return fmt.Errorf("use a Tailscale auth flag or inventory auth_key_file, not both")
-				}
-				c.Tailscale.AuthKeyFile = tailscaleAuthKeyFile
-			}
-		}
-		switch command {
-		case "pki":
-			err = pki.Create(c, state)
-		case "ignition":
-			b := ignition.Bootstrap{LocalHelper: helper, TailscaleAuthKey: tailscaleAuthKey}
-			var identity []byte
-			if helperSourceRef != "" {
-				b.HelperSourceCommit, err = ignition.ResolveHelperSource(ctx, helperSourceRef)
-				if err != nil {
-					return err
-				}
-				b.LocalHelper = ""
-				b.HelperBuilderImage = helperBuilderImage
-				identity = []byte(ignition.HelperBuildIdentity(b.HelperSourceCommit, b.HelperBuilderImage))
-				fmt.Fprintln(out, "Guest helper source commit:", b.HelperSourceCommit)
-			} else if len(c.Servers()) > 0 {
-				identity, err = os.ReadFile(helper)
-				if err != nil {
-					return fmt.Errorf("build the node helper first: %w", err)
-				}
-			}
-			if len(c.Servers()) > 0 {
-				id := sha256.Sum256(identity)
-				b.DeploymentID = fmt.Sprintf("%x", id)
-				b.APIEndpoint = "https://" + net.JoinHostPort(c.Servers()[0].IP, "6443")
-				b.Credential, err = pki.BootstrapCredential(state)
-				if err != nil {
-					return err
-				}
-			}
-			err = ignition.Generate(c, state, b)
-		}
-		if err == nil {
-			fmt.Fprintln(out, command+": complete")
-		}
-		return err
-	case "image":
-		version := flags.String("version", "", "exact Flatcar release")
-		flags.StringVar(&state, "state-dir", state, "private image cache directory")
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		path, err := image.Prepare(ctx, state, *version)
-		if err == nil {
-			fmt.Fprintln(out, "Verified base image:", path)
-		}
-		return err
-	case "azure check":
-		o := azurecheck.Options{RepoRoot: ".", StateDir: "state", Region: azureconfig.DefaultRegion, SKU: azureconfig.DefaultSKU, Log: out}
-		flags.StringVar(&o.RepoRoot, "repo", o.RepoRoot, "Infestation checkout root")
-		flags.StringVar(&o.StateDir, "state-dir", o.StateDir, "private parent directory for fresh check state")
-		flags.StringVar(&o.Region, "region", azureconfig.DefaultRegion, "Azure region")
-		flags.StringVar(&o.SKU, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
-		flags.StringVar(&o.FlatcarVersion, "flatcar-version", azurecheck.DefaultFlatcarVersion, "pinned Flatcar image release")
-		flags.StringVar(&o.CockroachVersion, "cockroach-version", azurecheck.DefaultCockroachVersion, "pinned CockroachDB release")
-		flags.StringVar(&o.K3sVersion, "k3s-version", azurecheck.DefaultK3sVersion, "pinned K3s extension release")
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		return azurecheck.Run(ctx, o)
-	case "azure deploy":
-		o := deploy.Options{RepoRoot: ".", Log: out}
-		flags.StringVar(&o.RepoRoot, "repo", ".", "Infestation checkout root")
-		flags.StringVar(&o.ClusterPath, "config", config, "cluster JSON inventory")
-		flags.StringVar(&o.StateDir, "state-dir", "", "private state directory (default state/NAME)")
-		flags.StringVar(&o.Name, "name", "infestation", "Azure resource name prefix")
-		flags.StringVar(&o.Stack, "stack", "", "Pulumi stack (default NAME)")
-		flags.StringVar(&o.Region, "region", azureconfig.DefaultRegion, "Azure region")
-		flags.StringVar(&o.SKU, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
-		flags.StringVar(&o.SubscriptionID, "subscription", "", "Azure subscription (default selected account)")
-		flags.StringVar(&o.FlatcarVersion, "flatcar-version", vm.FlatcarVersion, "pinned Flatcar image release")
-		flags.BoolVar(&o.PreviewOnly, "preview-only", false, "prepare state and preview without provisioning")
-		flags.BoolVar(&o.Yes, "yes", false, "approve the reviewed Pulumi preview without prompting")
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		return deploy.Azure(ctx, o)
-	case "smoke":
-		portable()
-		kube := flags.String("kubeconfig", "", "admin kubeconfig path")
-		tailnetLatency := flags.Bool("tailnet-latency", false, "record ten Tailscale pings per directed node pair, including path and latency")
-		if err := parse(flags, args); err != nil {
-			return help(err)
-		}
-		c, err := cluster.Load(config)
-		if err != nil {
-			return err
-		}
-		if *kube == "" {
-			*kube = filepath.Join(state, "kubeconfig")
-		}
-		return smoke.Run(ctx, executil.OSRunner{Output: out}, c, state, *kube, smoke.Options{TailnetLatency: *tailnetLatency, Log: out})
-	default:
-		return fmt.Errorf("unknown command %q", command)
+		return vm.ServeArtifacts(ctx, *state)
 	}
+	switch action {
+	case "create", "start", "stop", "status", "resume", "wait", "kubeconfig":
+	default:
+		return fmt.Errorf("unknown %s command %q; run infestation %s --help", provider, action, provider)
+	}
+	f := flag.NewFlagSet(provider+" "+action, flag.ContinueOnError)
+	f.SetOutput(out)
+	o := vm.ClusterOptions{Provider: "qemu"}
+	cloud := provider == "azure"
+	if cloud {
+		o.Provider = "azure"
+	}
+	f.StringVar(&o.Name, "name", "", "provider group name (required; distinct in the tailnet)")
+	f.StringVar(&o.StateDir, "state-dir", vm.DefaultStateDir(), "private local provider state")
+	if action == "create" {
+		f.IntVar(&o.Size, "size", 1, "number of nodes created on this provider")
+		f.BoolVar(&o.Agent, "agent", false, "run a K3s agent and CockroachDB, without an API server")
+		f.BoolVar(&o.Init, "init", false, "authorize the first server in this group to initialize the database")
+		f.StringVar(&o.Domain, "tailnet-domain", "", "tailnet MagicDNS domain, such as example.ts.net")
+		f.StringVar(&o.AuthKey, "tailscale-auth-key", "", "tag:roach auth key (default: TAILSCALE_AUTH_KEY)")
+		f.StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "private auth key file")
+		f.StringVar(&o.HelperSourceRef, "helper-source-ref", "", "build helper on the guest from this published GitHub tag/commit")
+		f.StringVar(&o.HelperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "pinned multiarchitecture Go builder")
+		if cloud {
+			f.StringVar(&o.AzureLocation, "region", azureconfig.DefaultRegion, "Azure region")
+			f.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
+		} else {
+			f.StringVar(&o.NodeHelper, "node-helper", "bin/infestation-node", "local Linux helper when not using --helper-source-ref")
+		}
+	}
+	if !cloud && (action == "create" || action == "resume") {
+		f.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image; otherwise use the pinned image")
+		f.StringVar(&o.Accel, "accel", "kvm", "QEMU accelerator: kvm or tcg")
+		f.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
+	}
+	if !cloud && action == "start" {
+		f.StringVar(&o.Accel, "accel", "", "override the stored QEMU accelerator")
+	}
+	if action == "create" || action == "start" || action == "resume" || action == "wait" {
+		wait := time.Duration(0)
+		if action == "wait" {
+			wait = 30 * time.Minute
+		}
+		f.DurationVar(&o.Wait, "wait", wait, "readiness deadline; 0 returns after provisioning/start; requires workstation tailnet access")
+	}
+	var destination string
+	var force, netcheck bool
+	if action == "kubeconfig" {
+		f.StringVar(&destination, "out", "", "destination private file (default: provider state/kubeconfig)")
+		f.BoolVar(&force, "force", false, "replace an existing destination kubeconfig")
+	}
+	if !cloud && action == "status" {
+		f.BoolVar(&netcheck, "netcheck", false, "include the latest guest Tailscale network diagnostics")
+	}
+	if err := parse(f, args[2:]); err != nil {
+		return help(err)
+	}
+	if o.Wait < 0 {
+		return fmt.Errorf("--wait must not be negative")
+	}
+	if o.Init && o.Agent {
+		return fmt.Errorf("--init requires an API server; it cannot be combined with --agent")
+	}
+	switch action {
+	case "create":
+		return vm.CreateCluster(ctx, o, out)
+	case "resume":
+		if cloud {
+			return vm.ResumeAzure(ctx, o, out)
+		}
+		return vm.ResumeLocal(ctx, o, out)
+	case "wait":
+		return vm.WaitCluster(ctx, o.Options, out)
+	case "kubeconfig":
+		return vm.Kubeconfig(ctx, o.Options, destination, force, out)
+	case "status":
+		if netcheck {
+			return vm.GroupNetcheck(ctx, o.Options, out)
+		}
+	}
+	if cloud {
+		return vm.AzureAction(ctx, o.Options, action, out)
+	}
+	return vm.ClusterAction(ctx, o.Options, action, out)
+}
+
+func runSmoke(ctx context.Context, args []string, out io.Writer) error {
+	f := flag.NewFlagSet("smoke", flag.ContinueOnError)
+	f.SetOutput(out)
+	config := f.String("config", "", "owned cluster JSON (required)")
+	state := f.String("state-dir", "state", "private report directory")
+	kube := f.String("kubeconfig", "", "admin kubeconfig (default: state directory/kubeconfig)")
+	latency := f.Bool("tailnet-latency", false, "record directed Tailscale latency/path samples")
+	if err := parse(f, args); err != nil {
+		return help(err)
+	}
+	if *config == "" {
+		return fmt.Errorf("--config is required")
+	}
+	c, err := cluster.Load(*config)
+	if err != nil {
+		return err
+	}
+	if *kube == "" {
+		*kube = filepath.Join(*state, "kubeconfig")
+	}
+	return smoke.Run(ctx, executil.OSRunner{Output: out}, c, *state, *kube, smoke.Options{TailnetLatency: *latency, Log: out})
 }
 func help(err error) error {
 	if errors.Is(err, flag.ErrHelp) {
@@ -374,7 +170,6 @@ func help(err error) error {
 	}
 	return err
 }
-
 func parse(f *flag.FlagSet, args []string) error {
 	if err := f.Parse(args); err != nil {
 		return err

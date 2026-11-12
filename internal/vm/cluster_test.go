@@ -194,7 +194,7 @@ func TestLocalLifecycleRejectsAzureOwnershipBeforeSideEffects(t *testing.T) {
 	}
 	c := clusterConfig(ClusterOptions{Options: Options{Name: "cloud"}, Size: 1, Domain: "example.ts.net"})
 	raw, _ := json.Marshal(c)
-	if err := os.WriteFile(filepath.Join(dir, "cluster.json"), raw, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "nodes.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "provider.json"), []byte(`"azure"`), 0600); err != nil {
@@ -205,5 +205,101 @@ func TestLocalLifecycleRejectsAzureOwnershipBeforeSideEffects(t *testing.T) {
 		if err := ClusterAction(context.Background(), Options{Name: "cloud", StateDir: root}, action, io.Discard); err == nil || !strings.Contains(err.Error(), "use azure") {
 			t.Fatal("local command crossed provider boundary", action, err)
 		}
+	}
+}
+
+func TestAgentProfileKeepsDatabaseWithoutAPIServerOrInit(t *testing.T) {
+	c := clusterConfig(ClusterOptions{Options: Options{Name: "agent"}, Domain: "example.ts.net", Agent: true, Size: 1})
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Databases()) != 1 || len(c.Servers()) != 0 || !c.Nodes[0].Worker() {
+		t.Fatal("agent must keep CockroachDB without an API server")
+	}
+	state := t.TempDir()
+	helper := filepath.Join(state, "helper")
+	if err := os.WriteFile(helper, []byte("test-helper"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ignition.Generate(c, state, ignition.Bootstrap{LocalHelper: helper, TailscaleAuthKey: "tskey-auth-TEST"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(state, "output", "agent-0.ign"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, report, err := config.Parse(raw)
+	if err != nil {
+		t.Fatal(err, report)
+	}
+	units := map[string]bool{}
+	for _, u := range doc.Systemd.Units {
+		units[u.Name] = true
+	}
+	if !units["cockroachdb.service"] || !units["k3s-agent.service"] || !units["infestation-join.service"] || !units["infestation-bootstrap.service"] {
+		t.Fatal("agent is missing database, enrollment or K3s services")
+	}
+	if units["k3s.service"] || units["tailscale-api.service"] || units["infestation-access.service"] {
+		t.Fatal("agent received server/API publication services")
+	}
+	for _, f := range doc.Storage.Files {
+		if f.Path == "/etc/infestation/bootstrap.json" {
+			return
+		}
+	}
+	t.Fatal("agent has no helper enrollment configuration")
+}
+
+func TestProviderInventoryNameAndExistingStateCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		old, new, broken bool
+		want             string
+		fail             bool
+	}{
+		{name: "new", new: true, want: "new"},
+		{name: "existing", old: true, want: "old"},
+		{name: "both prefer new", old: true, new: true, want: "new"},
+		{name: "invalid new never falls back", old: true, new: true, broken: true, fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "inventory")
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			c := clusterConfig(ClusterOptions{Options: Options{Name: "inventory"}, Size: 1, Domain: "example.ts.net"})
+			for _, entry := range []struct {
+				enabled     bool
+				file, label string
+			}{{tc.old, "cluster.json", "old"}, {tc.new, "nodes.json", "new"}} {
+				if !entry.enabled {
+					continue
+				}
+				c.Nodes[0].Locality = "source=" + entry.label
+				raw, _ := json.Marshal(c)
+				if tc.broken && entry.file == "nodes.json" {
+					raw = []byte("invalid-json")
+				}
+				if err := os.WriteFile(filepath.Join(dir, entry.file), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, got, err := loadCluster(Options{Name: "inventory", StateDir: root})
+			if tc.fail {
+				if err == nil {
+					t.Fatal("invalid state was ignored")
+				}
+				return
+			}
+			if err != nil || got.Nodes[0].Locality != "source="+tc.want {
+				t.Fatal("wrong inventory selected", err)
+			}
+			if tc.old && !tc.new {
+				if _, err := os.Stat(filepath.Join(dir, "nodes.json")); !os.IsNotExist(err) {
+					t.Fatal("read-only operation migrated existing state")
+				}
+			}
+		})
 	}
 }

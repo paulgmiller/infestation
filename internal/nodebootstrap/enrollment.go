@@ -333,6 +333,17 @@ func joinMembership(ctx context.Context, c Config, root string, runner executil.
 		return err
 	}
 	k3s["token"] = bundle.Token
+	if local.Worker() {
+		// Prefer a responding server; retain the shared endpoint as a fallback.
+		server := c.Cluster.APITailnetHostname + ":443"
+		for _, n := range c.Cluster.Servers() {
+			if n.Name != bundle.Initializer.Name || len(c.Cluster.Servers()) == 1 {
+				server = net.JoinHostPort(c.Cluster.NodeAddress(n), "6443")
+				break
+			}
+		}
+		k3s["server"] = "https://" + server
+	}
 	raw, err = yaml.Marshal(k3s)
 	if err != nil {
 		return err
@@ -385,6 +396,9 @@ func (w *Worker) discoverTailnet(ctx context.Context) error {
 }
 
 func membershipHandler(c Config, b JoinBundle, root string) http.Handler {
+	return membershipHandlerWithFetch(c, b, root, FetchKubeconfig)
+}
+func membershipHandlerWithFetch(c Config, b JoinBundle, root string, fetchConfig func(context.Context, string) ([]byte, error)) http.Handler {
 	mux := http.NewServeMux()
 	write := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -404,6 +418,21 @@ func membershipHandler(c Config, b JoinBundle, root string) http.Handler {
 	mux.HandleFunc("/v1/kubeconfig", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := os.ReadFile(filepath.Join(root, "/etc/infestation/kubeconfig"))
 		if err != nil {
+			agent := false
+			for _, n := range c.Cluster.Nodes {
+				if n.Name == c.Node {
+					agent = n.Worker()
+				}
+			}
+			if agent {
+				for _, n := range c.Cluster.Servers() {
+					if candidate, e := fetchConfig(r.Context(), c.Cluster.NodeAddress(n)); e == nil {
+						w.Header().Set("Cache-Control", "no-store")
+						w.Write(candidate)
+						return
+					}
+				}
+			}
 			http.Error(w, "not ready", 503)
 			return
 		}

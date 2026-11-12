@@ -28,6 +28,9 @@ that all behavior is implemented or proven. Outstanding work is in [TODO.md](../
 
 ## Portability and simplicity
 
+- Keep a small, consistent CLI: `infestation <provider> create` always creates
+  CockroachDB and K3s. Servers are the default; `--agent` omits the API server
+  and cannot combine with `--init`. Providers share lifecycle verbs.
 - Support one cluster per tailnet for now. Use conventional API/bootstrap
   endpoints so friends need no additional cluster selector or global node list.
 - Discover arbitrarily named participants through the tailnet. For now, designate

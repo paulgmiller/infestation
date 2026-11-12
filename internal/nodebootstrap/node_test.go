@@ -419,3 +419,17 @@ func TestExistingDatabaseDoesNotRequireThreeAvailableListeners(t *testing.T) {
 		t.Fatalf("existing database should be adopted without new initialization: %v", err)
 	}
 }
+
+func TestAgentBootstrapNeverRunsLocalAPIPublication(t *testing.T) {
+	w, r, s := worker(t)
+	w.Config.Node = "kube-2"
+	w.Config.Cluster.Nodes[2].Role = "worker"
+	w.Config.Cluster.SmokeTest = true
+	w.Init = false
+	if err := w.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.inits != 0 || s.writes != 0 {
+		t.Fatal("agent initialized the database or published an admin kubeconfig")
+	}
+}

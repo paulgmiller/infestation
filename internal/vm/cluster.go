@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"infestation/internal/azureconfig"
-	"infestation/internal/bootstrap"
 	"infestation/internal/cluster"
 	"infestation/internal/executil"
 	"infestation/internal/fsutil"
@@ -29,6 +28,7 @@ type ClusterOptions struct {
 	AzureLocation, AzureVMSize          string
 	Provider                            string
 	Size                                int
+	Agent                               bool
 	Init                                bool
 }
 
@@ -36,6 +36,12 @@ func clusterConfig(o ClusterOptions) cluster.Config {
 	c := cluster.Config{DiscoverPeers: true, CockroachImage: "cockroachdb/cockroach:v26.2.7", K3sExtensionVersion: "v1.35.8+k3s1", Architecture: "x86-64", CockroachStorage: "persistent", CockroachCache: "256MiB", CockroachSQLMemory: "256MiB", Tailscale: &cluster.Tailscale{Version: TailscaleVersion, Domain: o.Domain}}
 	for i := 0; i < o.Size; i++ {
 		c.Nodes = append(c.Nodes, cluster.Node{Init: o.Init && i == 0, Name: fmt.Sprintf("%s-%d", o.Name, i), IP: fmt.Sprintf("192.0.2.%d", i+1), Locality: fmt.Sprintf("region=lab,zone=node%d", i)})
+	}
+	if o.Agent {
+		for i := range c.Nodes {
+			c.Nodes[i].Role = "worker"
+			c.Nodes[i].ServerURL = "https://k8s-api." + o.Domain + ":443"
+		}
 	}
 	c.Tailscale.SSH = true
 	c.APITailnetHostname = "k8s-api." + o.Domain
@@ -46,6 +52,9 @@ func clusterConfig(o ClusterOptions) cluster.Config {
 // Only --init creates CA/token/bootstrap credentials. All other nodes enroll
 // through the tailnet after boot and never need the initializer's workstation.
 func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
+	if o.Init && o.Agent {
+		return fmt.Errorf("--init requires an API server; it cannot be combined with --agent")
+	}
 	if o.Provider == "" {
 		o.Provider = "qemu"
 	}
@@ -215,10 +224,24 @@ func prepareCluster(ctx context.Context, o ClusterOptions, dir string, c cluster
 	if err := ignition.Generate(c, dir, b); err != nil {
 		return err
 	}
-	if err := fsutil.WriteJSON(filepath.Join(dir, "cluster.json"), c); err != nil {
+	if err := fsutil.WriteJSON(filepath.Join(dir, "nodes.json"), c); err != nil {
 		return err
 	}
 	return fsutil.WriteJSON(filepath.Join(dir, "provider.json"), o.Provider)
+}
+
+// inventoryPath keeps existing provider state readable without rewriting it.
+// An invalid or inaccessible nodes.json must never fall back to older data.
+func inventoryPath(dir string) string {
+	current := filepath.Join(dir, "nodes.json")
+	if _, err := os.Stat(current); !os.IsNotExist(err) {
+		return current
+	}
+	previous := filepath.Join(dir, "cluster.json")
+	if _, err := os.Stat(previous); err == nil {
+		return previous
+	}
+	return current
 }
 
 func loadCluster(o Options) (string, cluster.Config, error) {
@@ -226,11 +249,11 @@ func loadCluster(o Options) (string, cluster.Config, error) {
 	if err != nil {
 		return "", cluster.Config{}, err
 	}
-	c, err := cluster.Load(filepath.Join(dir, "cluster.json"))
+	c, err := cluster.Load(inventoryPath(dir))
 	if err != nil {
 		return "", c, err
 	}
-	if c.Tailscale == nil || len(c.Nodes) == 0 || len(c.Servers()) != len(c.Nodes) {
+	if c.Tailscale == nil || len(c.Nodes) == 0 {
 		return "", c, fmt.Errorf("expected an owned tailnet provider inventory")
 	}
 	for i, n := range c.Nodes {
@@ -312,37 +335,12 @@ func WaitCluster(ctx context.Context, o Options, out io.Writer) error {
 	defer ticker.Stop()
 	phase, last := "", ""
 	for {
-		found := false
-		for _, n := range c.Servers() {
-			raw, e := latestObject(filepath.Join(dir, n.Name, "access.json"))
-			var data []byte
-			if e == nil {
-				data, _ = json.Marshal(raw)
-			} else if c.DiscoverPeers {
-				data, e = nodebootstrap.FetchKubeconfig(ctx, c.NodeAddress(n))
-				if e != nil {
-					continue
-				}
-			} else {
-				continue
+		encoded, fetchErr := groupKubeconfig(ctx, dir, c)
+		found := fetchErr == nil
+		if found {
+			if err := fsutil.WriteFile(kube, encoded, 0600); err != nil {
+				return err
 			}
-			endpoint := "https://" + c.NodeAddress(n) + ":6443"
-			if c.APITailnetHostname != "" {
-				endpoint = "https://" + c.APITailnetHostname + ":443"
-			}
-			conf, e := bootstrap.PublicKubeconfig(data, endpoint)
-			if e != nil {
-				continue
-			}
-			if c.APITailnetHostname != "" {
-				conf.Clusters[0].Cluster["tls-server-name"] = apiTLSName
-			}
-			encoded, _ := json.Marshal(conf)
-			if e = fsutil.WriteFile(kube, encoded, 0600); e != nil {
-				return e
-			}
-			found = true
-			break
 		}
 		phase = "Waiting for independent node enrollment, Cockroach bootstrap and an API kubeconfig"
 		if found {
@@ -360,7 +358,7 @@ func WaitCluster(ctx context.Context, o Options, out io.Writer) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("cluster is not ready: %w; preserve state and use vm cluster status/wait", ctx.Err())
+			return fmt.Errorf("cluster is not ready: %w; preserve state and use the provider status/wait commands", ctx.Err())
 		case <-ticker.C:
 		}
 	}

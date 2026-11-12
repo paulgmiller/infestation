@@ -1,216 +1,70 @@
-# Three-node cluster with isolated VM networks
+# Three local nodes with independent VM networks
 
-The VM cluster command creates three Flatcar control-plane nodes, each hosting
-CockroachDB. Each QEMU process has its own SLIRP NAT and one virtio NIC. There is
-no common bridge, TAP, virtual switch, host port forward, or public node IP.
-Nodes use host Tailscale for peer communication. They still need internet egress.
-
-This is a local proof of the topology; it does not simulate WAN latency between
-friends' houses or clouds. See the [mixed local/Azure test](mixed-cluster.md)
-for the cross-provider topology.
+Each local QEMU VM has its own SLIRP NAT and uses host Tailscale for cluster
+traffic. No shared bridge, host port forwarding or public node IP is required.
+The independent enrollment flow has protocol/unit coverage; fresh VM verification
+is still pending. See the [mixed test record](mixed-cluster.md) for earlier live
+evidence and [bootstrap](bootstrap.md) for the current trust/recovery contract.
 
 ## Create
 
-On Linux x86-64, install QEMU/KVM, qemu-img and kubectl. Build the CLI and static
-Linux helper from the checkout:
+Install QEMU/KVM, `qemu-img` and the updated CLI on Linux x86-64. Use a published
+source ref containing the updated helper. The tailnet key must enroll `tag:roach`
+nodes, with grants for helper TCP 7444 and cluster traffic. Configure pod-route
+and API-Service approval as described in [networking](networking-plan.md).
 
 ```sh
-go build -o bin/infestation ./cmd/infestation
-CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/infestation-node ./cmd/infestation-node
-
-bin/infestation vm cluster create --name lab --init --size 3 \
-  --tailnet-domain YOUR-TAILNET.ts.net \
-  --tailscale-auth-key-file secrets/tsauth \
-  --state-dir state/vms --wait 30m
-```
-
-Alternatively supply `TAILSCALE_AUTH_KEY` or `--tailscale-auth-key`. The command
-requires a `tag:roach` enrollment key and refuses an existing state directory. It
-creates `lab-0`, `lab-1` and `lab-2`, using 3072 MiB and two virtual CPUs per VM.
-`--memory-mib` sets memory per VM. KVM is the default; `--accel tcg` permits slow
-software emulation. `--base-image` accepts a previously verified Flatcar qcow2;
-otherwise the pinned image is downloaded and SHA512-verified.
-
-The initial bootstrap renders private PKI and a persistent K3s token once. The
-CA signing key and long-lived SQL admin key remain on the workstation. Only
-the explicitly selected first node receives the one-hour SQL bootstrap credential. It initializes
-Cockroach once, configures Kine SQL, then removes that credential. Resume commands
-do not regenerate the CA, token or database identity.
-
-Only a small Ignition document travels through QEMU firmware. A temporary HTTP
-server bound to host loopback serves **only the non-secret node executable**;
-Ignition pins its SHA512 digest. Guest requests use QEMU's local gateway. The
-server does not expose PKI, profiles or credentials and shuts down after API
-readiness. The helper is installed persistently in each VM. No remote service
-or inbound VM port is required for this provisioning transport.
-
-## Approve pod routes and verify
-
-K3s allocates one PodCIDR per node and its native Tailscale/Flannel extension
-backend advertises that route. Approve the advertised routes in the Tailscale
-console. For the default allocation this is:
-
-| Node | Advertised route |
-| --- | --- |
-| lab-0 | 10.42.0.0/24 |
-| lab-1 | 10.42.1.0/24 |
-| lab-2 | 10.42.2.0/24 |
-
-For unattended enrollment, configure scoped route auto-approval for the key's
-tag. With the current `tag:roach` identity, merge this section into the existing
-tailnet policy once:
-
-```json
-"autoApprovers": {
-  "routes": {
-    "10.42.0.0/16": ["tag:roach"]
-  }
-}
-```
-
-This authorizes that tag to advertise the `/16` or its contained subnets, so new
-nodes' `/24` advertisements can be approved automatically. Keep using auth keys
-assigned that tag. K3s assigns the individual node subnets; give separate
-clusters disjoint PodCIDRs. Existing unapproved advertisements need to be
-withdrawn/re-advertised for a newly added auto-approver rule to apply. The current
-three routes were approved manually. See
-[Tailscale auto approvers](https://tailscale.com/docs/reference/syntax/policy-file#auto-approvers).
-
-Also allow the necessary pod-CIDR traffic in the tailnet policy; source
-pod IPs are preserved. See the official
-[K3s Tailscale configuration](https://docs.k3s.io/networking/distributed-multicloud#integration-with-the-tailscale-vpn-provider-experimental).
-An enrollment auth key cannot approve routes or change the policy.
-
-With `--wait 30m`, `create` waits for private API endpoints and Ready nodes, then writes
-`state/vms/lab/kubeconfig` with mode `0600`. **Node readiness does not prove that
-pod routes are approved.** Run the directed DNS/Service workload check:
-
-```sh
-bin/infestation smoke --config state/vms/lab/cluster.json \
-  --state-dir state/vms/lab --kubeconfig state/vms/lab/kubeconfig
-```
-
-This creates test pods and fresh jobs in `infestation-smoke`. It checks DNS and
-ClusterIP HTTP across every directed pair (six for three nodes). Completed jobs
-expire after an hour. After approving routes, rerun to create fresh jobs rather
-than relying on results from a failed attempt.
-
-## Inspect and resume
-
-```sh
-bin/infestation vm cluster status --name lab --state-dir state/vms
-bin/infestation vm cluster wait --name lab --state-dir state/vms
-bin/infestation vm cluster stop --name lab --state-dir state/vms
-# Once all VMs have shut down:
-bin/infestation vm cluster start --name lab --state-dir state/vms
-```
-
-`start --accel kvm` or `--accel tcg` overrides the stored accelerator for that
-start. State, data and identity are preserved. `status` reads private guest
-reports containing service state, sanitized logs, peer resolution, TCP checks and
-routes. Kubeconfigs arrive on a separate private virtio channel, never the
-console. There is no SSH requirement and no automatic disk deletion command.
-
-CoreDNS and kube-proxy remain enabled.
-NetworkPolicy enforcement, public ingress and
-coordinated maintenance are not established by this test. Same-node pod traffic
-is not encrypted. Read the actual test evidence and pending checks in the
-[networking checkpoint](networking-plan.md).
-
-## Stable private API name with HTTPS
-
-Prepare an API TailVIP with the existing cluster CA and client credentials:
-
-```sh
-bin/infestation vm cluster api --name lab --state-dir state/vms
-```
-
-The command verifies the common certificate identity on every API server,
-prepares `kubeconfig.tailvip`, and runs one setup Job on each control-plane
-node. The Jobs mount only the host Tailscale CLI and its local API socket. They
-configure durable host state, with raw TCP forwarding:
-
-```sh
-tailscale serve --service=svc:k8s-api --tcp=443 tcp://127.0.0.1:6443
-```
-
-Define `k8s-api` in the Tailscale Services console with endpoint `tcp:443`, and
-approve the three hosts. For future automatic host approval, merge a `services`
-entry into your existing `autoApprovers`, alongside the pod route rule:
-
-```json
-"autoApprovers": {
-  "routes": {"10.42.0.0/16": ["tag:roach"]},
-  "services": {"svc:k8s-api": ["tag:roach"]}
-}
-```
-
-The tailnet's traffic policy must also permit the intended clients to reach
-`svc:k8s-api` on TCP 443. The enrollment auth key cannot define the Service or
-approve its hosts. See [Tailscale Services](https://tailscale.com/docs/features/tailscale-services).
-
-Kubeconfig uses `server: https://k8s-api.YOUR-TAILNET.ts.net:443` together with
-`tls-server-name: kubernetes.default.svc.cluster.local`. That canonical DNS name
-already appears in the K3s serving certificates. The normal Kubernetes CA
-validation and client-certificate authentication remain enabled. HTTPS ends at
-the API server; Tailscale forwards encrypted bytes. No certificate rotation or
-TLS-verification bypass is needed for this approach.
-
-The original working kubeconfig is preserved until the TailVIP succeeds over
-authenticated HTTPS. The command then saves `kubeconfig.direct` and switches the
-working file. `cluster wait` preserves the stable endpoint on later refreshes.
-This one-time setup does not place a Kubernetes proxy pod in the API traffic
-path. Automatic withdrawal when a host API fails remains separate work.
-
-The live `tail3-1109` kubeconfig has been switched to
-`https://k8s-api.quoll-duck.ts.net:443`. On November 10, authenticated readiness
-and node listing succeeded through this endpoint with TLS validation enabled.
-The console confirms two online Service hosts; acceptance of the third host
-and failover behavior remain unverified. See the networking checkpoint for details.
-
-
-## Build the helper on Flatcar (prototype)
-
-Instead of supplying `--node-helper`, opt into a native guest build:
-
-```sh
-bin/infestation vm cluster create --name source-lab --init --size 3 \
+infestation vm create --name lab --init --size 3 --state-dir state/vms \
   --tailnet-domain YOUR-TAILNET.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
 ```
 
-The source must already be available in `paulgmiller/infestation` on GitHub.
-The CLI resolves tags to a commit before generating profiles. Each VM uses the
-same source commit and official multiarchitecture Go image, currently Go 1.26.10
-Bookworm pinned by manifest digest. Docker selects the node's native architecture;
-no Go installation or custom Flatcar image is required. The container builds
-`./cmd/infestation-node` with CGO disabled, then the host installs the executable
-atomically. The container mounts only a temporary output directory, with no
-host credentials or Docker socket. The executable and build identity/checksum
-are cached across boots. The builder runs before enrollment and needs ordinary
-outbound access to the registry, GitHub, and Go module services.
+This creates `lab-0/1/2` with 3072 MiB and two virtual CPUs each. Only the first
+node has initialization authority. `--size` otherwise defaults to one, and
+`--memory-mib` changes per-VM memory. `--accel tcg` permits slow software emulation.
+`--base-image` uses an existing trusted Flatcar image rather than downloading it.
 
-The same flags are accepted by `infestation ignition`. A versioned official
-builder override is available as `--helper-builder-image`; preserve a multiarch
-manifest digest when pinning it. This path does not migrate existing VMs. Cold builds and artifact
-lifecycle are explicit improvement items after the mixed-cloud test. Only native
-amd64 container compilation has been exercised so far; arm64 profile generation
-is tested, but arm64 execution and a new Flatcar first boot remain unverified.
+Every node hosts CockroachDB and K3s. `--agent` selects K3s agents without API
+servers while keeping CockroachDB. It cannot be combined with `--init`. Create
+agent groups independently after designating one founding server.
 
-## Record node-to-node Tailscale latency
+The official multiarchitecture Go container builds the helper from the supplied
+source ref. The build receives no credentials or host Docker socket. Alternatively,
+local creation accepts an already built `--node-helper`; a loopback artifact
+server supplies only that executable with a pinned checksum. Cluster credentials
+are always private and joiners fetch them over the tailnet.
+
+## Access and lifecycle
+
+Creation returns after provisioning. A tailnet-connected workstation can wait
+for readiness and retrieve the private kubeconfig:
 
 ```sh
-bin/infestation smoke --config state/vms/tail3-1109/cluster.json \
-  --state-dir state/vms/tail3-1109 \
-  --kubeconfig state/vms/tail3-1109/kubeconfig --tailnet-latency
+infestation vm wait --name lab --state-dir state/vms
+infestation vm kubeconfig --name lab --state-dir state/vms
+export KUBECONFIG="$PWD/state/vms/lab/kubeconfig"
+kubectl get nodes
+
+infestation vm status --name lab --state-dir state/vms
+infestation vm status --name lab --state-dir state/vms --netcheck
+infestation vm stop --name lab --state-dir state/vms
+infestation vm start --name lab --state-dir state/vms
 ```
 
-In addition to DNS and Service checks, this creates six fresh host-CLI ping Jobs
-for three nodes. Each makes ten DISCO pings and continues after finding a direct
-path. `tailnet-latency-RUN-ID.json` retains raw output, paths, timestamps, sample
-counts and RTT summaries. Failed or unrecognized samples are recorded and make
-the measurement step fail; the report is saved before returning that error.
-The Jobs temporarily access each host's Tailscale API socket, expire after an
-hour, and do not mount Tailscale identity files. These are host-overlay timings,
-not pod-network or database latency measurements.
+`wait` also saves kubeconfig, so subsequent explicit retrieval may need `--force`.
+Node readiness does not prove that pod routes are approved. Run workload checks:
+
+```sh
+infestation smoke --config state/vms/lab/nodes.json \
+  --state-dir state/vms/lab --kubeconfig "$KUBECONFIG" --tailnet-latency
+```
+
+The API Service is declared by node configuration and forwarded by server hosts
+to localhost:6443 with TLS passthrough. Define/approve `svc:k8s-api` in Tailscale
+separately; do not disable Kubernetes certificate validation.
+
+Each provider group owns only its local nodes and private state. Start/stop
+preserve disks. Resume uses original profiles and never regenerates CA/token or
+renews an expired SQL bootstrap credential. Keep partial failure evidence instead
+of deleting disks or initializing another database.

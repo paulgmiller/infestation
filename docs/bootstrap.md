@@ -3,7 +3,7 @@
 Exactly one founding node is explicitly authorized with `--init`:
 
 ```sh
-infestation vm cluster create --name local --init --size 2 \
+infestation vm create --name local --init --size 2 \
   --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-PUBLISHED-REF
 infestation azure create --name cloud --size 1 \
@@ -24,9 +24,12 @@ the exception. Existing database identity and recorded intent prevent fresh init
 on subsequent starts. If another founding CA is discovered, enrollment stops.
 Never designate two independent initializers: a partition can hide the conflict.
 
-For manually rendered static inventories, `"init": true` marks the selected node;
-`infestation ignition --init NODE` can select it when none is already marked.
-Shared Azure API profiles still fence their initializer to provider instance 0.
+`create` always installs CockroachDB and K3s. By default K3s runs as a server;
+`--agent` selects a worker without an API server. `--agent --init` is rejected
+before state creation, downloads or provisioning. Agents still host a database,
+participate in the three-database bootstrap threshold and share enrollment
+material. They never initialize SQL or advertise the API Service.
+
 There is no automatic election or initializer failover. A future one-time election
 must agree on a durable target; seeing three peers or ranking IPs is insufficient.
 
@@ -54,7 +57,7 @@ ranking. See [Tailscale status fields](https://github.com/tailscale/tailscale/bl
 The joiner validates the bundle, pins it in root-only
 `/var/lib/infestation/join.json`, installs the leaves, and supplies runtime
 Cockroach join seeds and the K3s token before those services start. Existing
-credentials and pins cannot be silently replaced. Every enrolled server serves
+credentials and pins cannot be silently replaced. Every enrolled node serves
 the bundle, so later joins can use another member when the initializer is down.
 `GET /v1/node` reports membership identity for runtime discovery. Shared leaf keys
 match the chosen administrator boundary; rotation/revocation needs further work.
@@ -87,8 +90,10 @@ API Service and retaining normal CA, hostname and client authentication checks.
 The publisher retries and refreshes after source credential changes. Retrieval
 uses Tailscale SSH with `core` + sudo, or the helper’s tailnet-only
 `GET /v1/kubeconfig` endpoint. That endpoint exposes the same admin credentials to
-tailnet administrators; Kubernetes API traffic retains normal TLS. Local QEMU diagnostic/access channels are
-also available for boot inspection.
+tailnet administrators; Kubernetes API traffic retains normal TLS. Agent helpers
+forward kubeconfig requests to a discovered server. Use `<provider> kubeconfig
+--name NAME --out FILE`; the CLI writes mode 0600 and prints only the path.
+Local QEMU diagnostic/access channels are also available for boot inspection.
 
 ## Verification boundary
 

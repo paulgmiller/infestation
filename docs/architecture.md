@@ -81,8 +81,16 @@ acceptable; requiring all peers to be known and present is not the target.
 
 ### Current implementation
 
-Each provisioning call targets one provider and writes a private `cluster.json`
-containing only the nodes that call owns. For example, `vm cluster create --init
+The public interface is `infestation <vm|azure> create`. Every node runs
+CockroachDB and K3s; `--agent` selects K3s workers without API servers, while the
+default creates servers. Only servers may use `--init`. Both providers share
+`start`, `stop`, `status`, `resume`, `wait` and `kubeconfig` verbs. PKI, Ignition,
+image preparation and infrastructure helpers are internal implementation steps.
+
+Each provisioning call targets one provider and writes a private `nodes.json`
+containing only the nodes that call owns, alongside their shared settings. It is
+per provider batch, not a complete cluster membership list.
+[Local state](local-state.md) documents the files and their lifecycle uses. For example, `vm create --init
 --size 2` and `azure create --size 1` use different local state directories and
 may run on different workstations. The node helper discovers runtime membership
 over the tailnet instead of requiring the callers to exchange a global inventory.

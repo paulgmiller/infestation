@@ -130,7 +130,7 @@ func ConfigureAPIService(ctx context.Context, o Options, out io.Writer) error {
 				return err
 			}
 			c.APITailnetHostname = hostname
-			if err = fsutil.WriteJSON(filepath.Join(dir, "cluster.json"), c); err != nil {
+			if err = fsutil.WriteJSON(inventoryPath(dir), c); err != nil {
 				return err
 			}
 			fmt.Fprintln(out, "Authenticated HTTPS through the API TailVIP verified; working kubeconfig now uses", hostname)
@@ -138,7 +138,7 @@ func ConfigureAPIService(ctx context.Context, o Options, out io.Writer) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("API TailVIP is not ready: %w; original kubeconfig preserved; rerun vm cluster api after Service approval", ctx.Err())
+			return fmt.Errorf("API TailVIP is not ready: %w; original kubeconfig preserved; check Service approval before retrying", ctx.Err())
 		case <-tick.C:
 		}
 	}

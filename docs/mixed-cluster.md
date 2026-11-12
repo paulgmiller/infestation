@@ -55,7 +55,7 @@ Use a published ref containing the new enrollment helper, not the historical tes
 commit below. This flow still needs fresh VM verification.
 
 ```sh
-bin/infestation vm cluster create --name local-new --state-dir state/local \
+bin/infestation vm create --name local-new --state-dir state/local \
   --init --size 2 --tailnet-domain quoll-duck.ts.net \
   --tailscale-auth-key-file secrets/tsauth \
   --helper-source-ref YOUR-NEW-PUBLISHED-REF
@@ -74,7 +74,7 @@ Tailnet policy must permit that port between `tag:roach` peers.
 
 Azure region and SKU default to `westus2` and `Standard_B2s`. Creation returns
 after provisioning; from a tailnet-connected workstation, use `--wait 30m` or
-`vm cluster wait` with that workstation’s group name. The first three database
+`vm wait` with that workstation’s group name. The first three database
 participants must arrive within the initializer credential’s one-hour lifetime;
 expiry requires explicit recovery. See [bootstrap](bootstrap.md).
 
@@ -104,7 +104,7 @@ A failed creation preserves profiles, disks and provider metadata. Retry each
 provider separately using its original private state:
 
 ```sh
-bin/infestation vm cluster resume --name local-new --state-dir state/local --wait 0
+bin/infestation vm resume --name local-new --state-dir state/local --wait 0
 bin/infestation azure resume --name cloud-new --state-dir state/cloud --wait 0
 ```
 
@@ -192,7 +192,7 @@ not additional feature work authorized by this test.
 To stop compute while preserving disks and evidence:
 
 ```sh
-bin/infestation vm cluster stop --name mix-1110 --state-dir state/vms
+bin/infestation vm stop --name mix-1110 --state-dir state/vms
 ```
 
 This stops both local VMs and deallocates Azure compute. The Azure resource group

@@ -214,3 +214,57 @@ func TestDiscoveryUsesTaggedTailnetDNSAndStableIDs(t *testing.T) {
 		t.Fatal("incorrect discovery scope", found, err)
 	}
 }
+
+func TestAgentEnrollmentKeepsWorkerRoleAndSelectsServer(t *testing.T) {
+	b, seed := enrollmentFixture(t)
+	c, root, runner := joinFixture(t, b)
+	c.Cluster.Nodes[0].Role = "worker"
+	c.Cluster.Nodes[0].ServerURL = "https://k8s-api.example.ts.net:443"
+	if err := joinMembership(context.Background(), c, root, runner, handlerClient(membershipHandler(seed, b, t.TempDir()))); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(filepath.Join(root, "/etc/infestation/bootstrap.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range cfg.Cluster.Nodes {
+		if n.Name == "locke" && (!n.Worker() || !n.Database() || n.Init) {
+			t.Fatal("agent role or init authority changed")
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "/etc/rancher/k3s/config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "server: https://miller.example.ts.net:6443") {
+		t.Fatal("agent was not given a server join endpoint")
+	}
+}
+func TestOnlyAgentKubeconfigRequestsForwardToServer(t *testing.T) {
+	b, c := enrollmentFixture(t)
+	c.Cluster.Nodes = append(c.Cluster.Nodes, cluster.Node{Name: "other-server", IP: "100.64.0.30"})
+	root := t.TempDir()
+	calls := 0
+	fetch := func(_ context.Context, host string) ([]byte, error) {
+		calls++
+		if host != "miller.example.ts.net" {
+			t.Fatal("forwarded to a non-server", host)
+		}
+		return []byte("disposable-admin-config"), nil
+	}
+	request := func(c Config) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "http://example/v1/kubeconfig", nil)
+		req.RemoteAddr = "100.64.0.20:12345"
+		w := httptest.NewRecorder()
+		membershipHandlerWithFetch(c, b, root, fetch).ServeHTTP(w, req)
+		return w
+	}
+	if w := request(c); w.Code != 503 || calls != 0 {
+		t.Fatal("unready server forwarded recursively")
+	}
+	c.Node = "locke"
+	c.Cluster.Nodes = append(c.Cluster.Nodes, cluster.Node{Name: "locke", IP: "100.64.0.20", Role: "worker"})
+	if w := request(c); w.Code != 200 || calls != 1 || w.Body.String() != "disposable-admin-config" {
+		t.Fatal("agent could not retrieve server kubeconfig")
+	}
+}

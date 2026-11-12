@@ -232,6 +232,14 @@ func (w Worker) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	for _, n := range w.Config.Cluster.Nodes {
+		if n.Name == w.Config.Node && n.Worker() {
+			if w.Init {
+				return fmt.Errorf("a K3s agent cannot initialize the database")
+			}
+			return w.cleanupCredentials()
+		}
+	}
 	initializer, targetErr := w.Config.Cluster.Initializer()
 	if targetErr != nil && !durable.SQLReady {
 		return targetErr

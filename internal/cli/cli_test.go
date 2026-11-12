@@ -7,176 +7,89 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"infestation/internal/blobstore"
-	"infestation/internal/bootstrap"
-	"infestation/internal/cluster"
-	"infestation/internal/testutil"
 )
 
-func TestIgnitionTailscaleAuthFlags(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	state := t.TempDir()
-	c := testutil.Config()
-	c.Tailscale = &cluster.Tailscale{Version: "v1.104.2", Domain: "example.ts.net"}
-	config := filepath.Join(state, "cluster.json")
-	testutil.JSON(t, config, c)
-	helper := filepath.Join(state, "node-helper")
-	keyfile := filepath.Join(state, "authkey")
-	key := "tskey-auth-DISPOSABLE-CLI-TEST"
-	for path, data := range map[string]string{helper: "fake-helper", keyfile: key} {
-		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
+func TestHelpShowsOnlyProviderLifecycleAndSmoke(t *testing.T) {
 	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"pki", "--config", config, "--state-dir", state}, &out); err != nil {
+	if err := Run(context.Background(), nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	base := []string{"ignition", "--config", config, "--state-dir", state, "--node-helper", helper}
-	for _, auth := range [][]string{
-		{"--tailscale-auth-key", key},
-		{"--tailscale-auth-key-file", keyfile},
-	} {
-		args := append(append([]string{}, base...), auth...)
-		if err := Run(context.Background(), args, &out); err != nil {
+	for _, retired := range []string{"vm cluster", "azure deploy", "azure check", "validate,", "pki,", "ignition,", "image,"} {
+		if strings.Contains(out.String(), retired) {
+			t.Fatal("obsolete public command", retired)
+		}
+	}
+	for _, provider := range []string{"vm", "azure"} {
+		for _, action := range []string{"create", "start", "stop", "status", "resume", "wait", "kubeconfig"} {
+			out.Reset()
+			if err := Run(context.Background(), []string{provider, action, "--help"}, &out); err != nil {
+				t.Fatal(provider, action, err)
+			}
+		}
+	}
+}
+func TestCreateUsesSameRolesAndSingleNodeDefault(t *testing.T) {
+	for _, provider := range []string{"vm", "azure"} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), []string{provider, "create", "--help"}, &out); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(out.String(), key) {
-			t.Fatal("key exposed in CLI output")
-		}
-		for _, n := range c.Nodes {
-			info, err := os.Stat(filepath.Join(state, "output", n.Name+".ign"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Mode().Perm() != 0600 {
-				t.Fatal("Ignition is not private")
+		for _, flag := range []string{"-agent", "-init", "-size", "-tailnet-domain", "-tailscale-auth-key", "-helper-source-ref"} {
+			if !strings.Contains(out.String(), flag) {
+				t.Fatal("missing shared creation flag", provider, flag)
 			}
 		}
-	}
-	args := append(base, "--tailscale-auth-key", key, "--tailscale-auth-key-file", keyfile)
-	if err := Run(context.Background(), args, &out); err == nil || strings.Contains(err.Error(), key) {
-		t.Fatal("ambiguous auth sources accepted or exposed", err)
-	}
-}
-
-func TestLocalCommandsWithoutExternalTools(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	state := t.TempDir()
-	config := filepath.Join(state, "cluster.json")
-	testutil.JSON(t, config, testutil.Config())
-	helper := filepath.Join(state, "node-helper")
-	os.WriteFile(helper, []byte("fake-helper"), 0700)
-	var out bytes.Buffer
-	for _, command := range []string{"validate", "pki", "ignition", "ignition"} {
-		args := []string{command, "--config", config, "--state-dir", state}
-		if command == "ignition" {
-			args = append(args, "--node-helper", helper)
+		if !strings.Contains(out.String(), "(default 1)") {
+			t.Fatal("create should default to one node", provider)
 		}
-		if err := Run(context.Background(), args, &out); err != nil {
-			t.Fatalf("%s: %v", command, err)
+		if provider == "azure" && (!strings.Contains(out.String(), "westus2") || !strings.Contains(out.String(), "Standard_B2s")) {
+			t.Fatal("Azure resource defaults missing")
 		}
 	}
-	if err := Run(context.Background(), []string{"pki", "--config", config, "--state-dir", state}, &out); err == nil {
-		t.Fatal("CLI overwrote PKI")
-	}
 }
-
-func TestAzureKubeconfigNeedsOnlyAzureLoginAndDiscovery(t *testing.T) {
+func TestAgentCannotInitializeBeforeAnySideEffects(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "az"), []byte("#!/bin/sh\nprintf 'PRIVATE-AUTH-ERROR' >&2\nexit 1\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", root) // No SSH, Pulumi, Docker, kubectl or inventory.
-	outputs := filepath.Join(root, "outputs.json")
-	testutil.JSON(t, outputs, bootstrap.Outputs{APIEndpoint: "https://api.example.test:6443", KubeconfigBlob: &blobstore.Location{Account: "testaccount", Container: "access", Blob: "kubeconfig.json"}})
-	for _, source := range [][]string{
-		{"--outputs", outputs},
-		{"--account", "testaccount", "--endpoint", "https://api.example.test:6443"},
-	} {
-		var out bytes.Buffer
-		args := append([]string{"azure", "kubeconfig", "--out", filepath.Join(root, "kubeconfig")}, source...)
-		err := Run(context.Background(), args, &out)
-		if err == nil || !strings.Contains(err.Error(), "Azure authentication failed") || strings.Contains(err.Error()+out.String(), "PRIVATE-AUTH-ERROR") {
-			t.Fatalf("unexpected credential handling: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(root, "kubeconfig")); !os.IsNotExist(err) {
-			t.Fatal("failed download wrote credentials")
-		}
-	}
-}
-func TestHelpAndInvalidArguments(t *testing.T) {
-	for _, args := range [][]string{{}, {"--help"}, {"azure", "deploy", "--help"}, {"azure", "kubeconfig", "--help"}, {"azure", "check", "--help"}, {"smoke", "--help"}} {
-		var out bytes.Buffer
-		if err := Run(context.Background(), args, &out); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"validate", "unexpected"}, &out); err == nil {
-		t.Fatal("positional argument accepted")
-	}
-}
-
-func TestAzureCheckRejectsUnpinnedImageBeforeDiscovery(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	for _, version := range []string{"latest", "4757.2"} {
+	for _, provider := range []string{"vm", "azure"} {
 		var out bytes.Buffer
-		if err := Run(context.Background(), []string{"azure", "check", "--flatcar-version", version}, &out); err == nil || !strings.Contains(err.Error(), "exact pinned release") {
-			t.Fatalf("%q: %v", version, err)
+		err := Run(context.Background(), []string{provider, "create", "--agent", "--init", "--name", "guarded", "--state-dir", root}, &out)
+		if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatal("invalid role combination accepted", provider, err)
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("invalid role combination touched state")
+	}
+}
+func TestRemovedUtilitiesFailBeforeExternalCommands(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PATH", root)
+	for _, args := range [][]string{{"vm", "cluster", "create"}, {"azure", "deploy"}, {"azure", "check"}, {"azure", "plan"}, {"validate"}, {"pki"}, {"ignition"}, {"image"}, {"vm", "netcheck"}} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), args, &out); err == nil || !strings.Contains(err.Error(), "unknown") {
+			t.Fatal("removed command still accepted", args, err)
 		}
 	}
 }
-
-func TestRetiredPublicGatewayFlagsFailBeforeSideEffects(t *testing.T) {
-	for _, args := range [][]string{{"smoke", "--public-url", "http://example.test"}} {
-		var out bytes.Buffer
-		err := Run(context.Background(), args, &out)
-		if err == nil || !strings.Contains(out.String()+err.Error(), "flag provided but not defined") {
-			t.Fatalf("retired flag accepted: %v: %v", args, err)
-		}
-	}
-}
-
-func TestAzurePlanningRemovedAndDirectFlagsAvailable(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	var out bytes.Buffer
-	if err := Run(context.Background(), []string{"azure", "plan"}, &out); err == nil || !strings.Contains(err.Error(), "unknown command") {
-		t.Fatal("planning command still accepted", err)
-	}
-	for _, command := range [][]string{{"azure", "deploy"}, {"azure", "check"}, {"azure", "create"}} {
-		out.Reset()
-		if err := Run(context.Background(), append(command, "--help"), &out); err != nil {
-			t.Fatal(err)
-		}
-		text := out.String()
-		if !strings.Contains(text, "-region") || !strings.Contains(text, "westus2") || !strings.Contains(text, "-sku") || !strings.Contains(text, "Standard_B2s") {
-			t.Fatal("direct defaults missing", text)
-		}
-	}
-	for _, args := range [][]string{{"azure", "deploy", "--plan-dir", "unused"}, {"azure", "check", "--skus-file", "unused"}, {"azure", "check", "--rates-file", "unused"}} {
-		out.Reset()
-		if err := Run(context.Background(), args, &out); err == nil {
-			t.Fatal("removed planning flag accepted", args)
-		}
-	}
-}
-
-func TestProviderCreationFlagsAreSeparate(t *testing.T) {
-	for _, command := range [][]string{{"vm", "cluster", "create"}, {"azure", "create"}} {
-		var out bytes.Buffer
-		if err := Run(context.Background(), append(command, "--help"), &out); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(out.String(), "-init") || !strings.Contains(out.String(), "-size") {
-			t.Fatal("missing independent group flags", out.String())
-		}
-	}
-	for _, args := range [][]string{{"vm", "cluster", "create", "--azure"}, {"vm", "cluster", "create", "--region", "westus2"}, {"azure", "create", "--azure"}} {
+func TestProviderFlagsStaySeparateAndKubeconfigUsesTailnet(t *testing.T) {
+	for _, args := range [][]string{{"vm", "create", "--azure"}, {"vm", "create", "--region", "westus2"}, {"azure", "create", "--base-image", "unused"}, {"azure", "kubeconfig", "--account", "unused"}} {
 		var out bytes.Buffer
 		if err := Run(context.Background(), args, &out); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
-			t.Fatal("provider mixing flag accepted", args, err)
+			t.Fatal("unsupported provider flag accepted", args, err)
 		}
+	}
+}
+func TestInvalidArgumentsDoNotCreateState(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{{"vm", "create", "unexpected"}, {"vm", "create", "--wait=-1s"}, {"vm", "kubeconfig", "--out", filepath.Join(root, "kubeconfig")}, {"smoke"}} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), args, &out); err == nil {
+			t.Fatal("invalid command accepted", args)
+		}
+	}
+	entries, _ := os.ReadDir(root)
+	if len(entries) != 0 {
+		t.Fatal("invalid command wrote credentials")
 	}
 }
