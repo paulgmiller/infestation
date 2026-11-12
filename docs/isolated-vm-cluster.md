@@ -8,16 +8,15 @@ evidence and [bootstrap](bootstrap.md) for the current trust/recovery contract.
 
 ## Create
 
-Install QEMU/KVM, `qemu-img` and the updated CLI on Linux x86-64. Use a published
-source ref containing the updated helper. The tailnet key must enroll `tag:roach`
+Install QEMU/KVM, `qemu-img` and the updated CLI on Linux x86-64. The published
+`master` branch must contain the updated helper. The tailnet key must enroll `tag:roach`
 nodes, with grants for helper TCP 7444 and cluster traffic. Configure pod-route
 and API-Service approval as described in [networking](networking-plan.md).
 
 ```sh
 infestation vm create --name lab --init --size 3 --state-dir state/vms \
   --tailnet-domain YOUR-TAILNET.ts.net \
-  --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
+  --tailscale-auth-key-file secrets/tsauth
 ```
 
 This creates `lab-0/1/2` with 3072 MiB and two virtual CPUs each. Only the first
@@ -29,11 +28,11 @@ Every node hosts CockroachDB and K3s. `--agent` selects K3s agents without API
 servers while keeping CockroachDB. It cannot be combined with `--init`. Create
 agent groups independently after designating one founding server.
 
-The official multiarchitecture Go container builds the helper from the supplied
-source ref. The build receives no credentials or host Docker socket. Alternatively,
-local creation accepts an already built `--node-helper`; a loopback artifact
-server supplies only that executable with a pinned checksum. Cluster credentials
-are always private and joiners fetch them over the tailnet.
+Source defaults to `master`; optional `--helper-source-ref` selects another
+branch, tag or commit. The renderer resolves it once before provisioning. Each node
+builds the helper in the official multiarchitecture Go container. The build
+receives no credentials or host Docker socket. Cluster joiners fetch credentials
+from enrolled peers over the tailnet.
 
 ## Access and lifecycle
 

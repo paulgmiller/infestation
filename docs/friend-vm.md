@@ -8,13 +8,13 @@ protocol tests; a fresh independent VM test is still pending.
 ```sh
 infestation vm create --name alice --size 1 \
   --tailnet-domain YOUR-TAILNET.ts.net \
-  --tailscale-auth-key-file /private/path/key \
-  --helper-source-ref YOUR-NEW-PUBLISHED-REF
+  --tailscale-auth-key-file /private/path/key
 ```
 
 Omit `--init` when joining. Exactly one founding group uses it; that group’s first
-node waits for two database peers before initialization. Use a published helper
-ref containing the enrollment protocol. Nodes discover `tag:roach` participants,
+node waits for two database peers before initialization. The published `master`
+branch must contain the enrollment protocol; override `--helper-source-ref` to
+select another published revision. Nodes discover `tag:roach` participants,
 fetch leaf/join credentials over the tailnet on helper port 7444, and start
 CockroachDB and K3s. Every enrolled member can supply join material afterward.
 The creator workstation does not need to be on the tailnet unless it requests

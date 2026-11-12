@@ -44,7 +44,6 @@ wait flag; use `azure wait` separately to check cluster readiness.
 | `azure-resources.json` | Recorded resource inventory for diagnosis. |
 | `pki/` (initializer only) | Workstation CA signing key, SQL admin credentials, node/client leaves and K3s token. Only permitted leaves and a separate one-hour SQL bootstrap credential enter the selected VM. Signing/admin keys remain here. |
 | `kubeconfig` | Admin kubeconfig retrieved by `wait` or `kubeconfig`, mode 0600. It can be retrieved again from an enrolled node. |
-| `artifacts/`, `artifact-server.*` (local helper delivery only) | Cached helper executable and loopback artifact-server bookkeeping. Used when supplying a local helper instead of a guest source build. |
 
 New groups use `nodes.json`. Existing directories with `cluster.json` remain
 readable without an automatic rename. If both exist, `nodes.json` takes

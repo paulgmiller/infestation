@@ -14,20 +14,28 @@ import (
 	"github.com/coreos/ignition/v2/config/v3_3/types"
 )
 
+const DefaultHelperSourceRef = "master"
+
 const DefaultHelperBuilderImage = "golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473"
 const helperRepository = "https://github.com/paulgmiller/infestation.git"
 
 var sourceCommitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 var builderImagePattern = regexp.MustCompile(`^(docker.io/library/)?golang:[0-9]+\.[0-9]+\.[0-9]+-bookworm(@sha256:[a-f0-9]{64})?$`)
 
-// ResolveHelperSource resolves a tag or revision once, on the workstation. Guests
-// fetch the resulting immutable commit, rather than independently resolving tags.
+// ResolveHelperSource resolves master (by default), a branch, tag or revision
+// once on the workstation. Guests fetch the resulting immutable commit.
 func ResolveHelperSource(ctx context.Context, ref string) (string, error) {
+	return resolveHelperSource(ctx, ref, http.DefaultClient)
+}
+func resolveHelperSource(ctx context.Context, ref string, client *http.Client) (string, error) {
+	if ref == "" {
+		ref = DefaultHelperSourceRef
+	}
 	if sourceCommitPattern.MatchString(ref) {
 		return ref, nil
 	}
-	if ref == "" || len(ref) > 200 {
-		return "", fmt.Errorf("helper source reference is required")
+	if len(ref) > 200 {
+		return "", fmt.Errorf("helper source reference is too long")
 	}
 	child, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -35,7 +43,7 @@ func ResolveHelperSource(ctx context.Context, ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("resolve helper source: %w", err)
 	}
@@ -62,8 +70,8 @@ func helperBuildProfile(doc *types.Config, b Bootstrap) error {
 	if !sourceCommitPattern.MatchString(b.HelperSourceCommit) {
 		return fmt.Errorf("helper source must be a resolved 40-character commit")
 	}
-	if b.LocalHelperURL != "" {
-		return fmt.Errorf("choose helper source build or helper download, not both")
+	if b.LocalHelper != "" {
+		return fmt.Errorf("choose a helper source build or an embedded helper")
 	}
 	image := b.HelperBuilderImage
 	if image == "" {

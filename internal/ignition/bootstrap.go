@@ -20,7 +20,6 @@ type Bootstrap struct {
 	HelperSourceCommit, HelperBuilderImage string
 	// Render-only secret: never serialize into the node's bootstrap inventory.
 	TailscaleAuthKey                                 string `json:"-"`
-	LocalHelperURL, LocalHelperSHA512                string
 	Account, HelperSHA256, DeploymentID, APIEndpoint string
 	LocalHelper                                      string
 	Credential                                       []byte

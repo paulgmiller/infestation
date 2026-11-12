@@ -39,6 +39,9 @@ func TestCreateUsesSameRolesAndSingleNodeDefault(t *testing.T) {
 				t.Fatal("missing shared creation flag", provider, flag)
 			}
 		}
+		if !strings.Contains(out.String(), `(default "master")`) {
+			t.Fatal("helper source default missing", provider)
+		}
 		if !strings.Contains(out.String(), "(default 1)") {
 			t.Fatal("create should default to one node", provider)
 		}
@@ -65,7 +68,7 @@ func TestAgentCannotInitializeBeforeAnySideEffects(t *testing.T) {
 func TestRemovedUtilitiesFailBeforeExternalCommands(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("PATH", root)
-	for _, args := range [][]string{{"smoke"}, {"vm", "resume"}, {"azure", "resume"}, {"vm", "cluster", "create"}, {"azure", "deploy"}, {"azure", "check"}, {"azure", "plan"}, {"validate"}, {"pki"}, {"ignition"}, {"image"}, {"vm", "netcheck"}} {
+	for _, args := range [][]string{{"vm", "artifact-server"}, {"smoke"}, {"vm", "resume"}, {"azure", "resume"}, {"vm", "cluster", "create"}, {"azure", "deploy"}, {"azure", "check"}, {"azure", "plan"}, {"validate"}, {"pki"}, {"ignition"}, {"image"}, {"vm", "netcheck"}} {
 		var out bytes.Buffer
 		if err := Run(context.Background(), args, &out); err == nil || !strings.Contains(err.Error(), "unknown") {
 			t.Fatal("removed command still accepted", args, err)
@@ -73,9 +76,9 @@ func TestRemovedUtilitiesFailBeforeExternalCommands(t *testing.T) {
 	}
 }
 func TestProviderFlagsStaySeparateAndKubeconfigUsesTailnet(t *testing.T) {
-	for _, args := range [][]string{{"vm", "create", "--azure"}, {"vm", "create", "--region", "westus2"}, {"azure", "create", "--base-image", "unused"}, {"azure", "kubeconfig", "--account", "unused"}} {
+	for _, args := range [][]string{{"vm", "create", "--node-helper", "unused"}, {"vm", "create", "--azure"}, {"vm", "create", "--region", "westus2"}, {"azure", "create", "--base-image", "unused"}, {"azure", "kubeconfig", "--account", "unused"}} {
 		var out bytes.Buffer
-		if err := Run(context.Background(), args, &out); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		if err := Run(context.Background(), args, &out); err == nil || !strings.Contains(err.Error(), "unknown flag") {
 			t.Fatal("unsupported provider flag accepted", args, err)
 		}
 	}
@@ -91,5 +94,27 @@ func TestInvalidArgumentsDoNotCreateState(t *testing.T) {
 	entries, _ := os.ReadDir(root)
 	if len(entries) != 0 {
 		t.Fatal("invalid command wrote credentials")
+	}
+}
+
+func TestCobraParsingDoesNotEchoPositionalCredentials(t *testing.T) {
+	secret := "tskey-auth-DISPOSABLE-TEST-SECRET"
+	for _, args := range [][]string{{secret}, {"vm", secret}, {"vm", "create", secret}} {
+		var out bytes.Buffer
+		err := Run(context.Background(), args, &out)
+		if err == nil || strings.Contains(err.Error()+out.String(), secret) {
+			t.Fatal("positional credential was accepted or exposed")
+		}
+	}
+}
+func TestCommandOptionsDoNotLeakBetweenExecutions(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"vm", "create", "--name", "guard", "--agent", "--init"}, &out); err == nil {
+		t.Fatal("invalid roles accepted")
+	}
+	err := Run(context.Background(), []string{"vm", "create", "--name", "guard", "--agent", "--size", "0"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "--size must be") {
+		t.Fatal("previous command's init flag leaked into a new execution", err)
 	}
 }

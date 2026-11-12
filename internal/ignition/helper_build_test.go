@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"infestation/internal/pki"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,7 +85,7 @@ func TestGuestBuildRejectsUnpinnedOrUnsafeInputs(t *testing.T) {
 		{HelperSourceCommit: "main"},
 		{HelperSourceCommit: strings.Repeat("a", 40), HelperBuilderImage: "golang:latest"},
 		{HelperSourceCommit: strings.Repeat("a", 40), HelperBuilderImage: "golang:1.26.10-bookworm; echo bad"},
-		{HelperSourceCommit: strings.Repeat("a", 40), LocalHelperURL: "http://example/helper"},
+		{HelperSourceCommit: strings.Repeat("a", 40), LocalHelper: "embedded-helper"},
 	} {
 		if helperBuildProfile(&types.Config{}, b) == nil {
 			t.Fatal("unsafe build configuration accepted")
@@ -137,6 +139,32 @@ func TestGuestBuildServerProfilesDoNotNeedLocalHelperOrBlob(t *testing.T) {
 			if file.Path == "/opt/infestation/bootstrap" {
 				t.Fatal("unexpected cloud downloader")
 			}
+		}
+	}
+}
+
+type sourceTransport func(*http.Request) (*http.Response, error)
+
+func (f sourceTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestSourceDefaultAndOverridesResolveToImmutableCommit(t *testing.T) {
+	commit := strings.Repeat("b", 40)
+	for _, tc := range []struct{ ref, want string }{{"", "master"}, {"master", "master"}, {"release-tag", "release-tag"}, {"feature/branch", "feature/branch"}} {
+		calls := 0
+		client := &http.Client{Transport: sourceTransport(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if req.URL.Host != "api.github.com" || req.URL.Path != "/repos/paulgmiller/infestation/commits/"+tc.want {
+				t.Fatal("unexpected source resolution target", req.URL)
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"sha":"` + commit + `"}`)), Header: make(http.Header)}, nil
+		})}
+		got, err := resolveHelperSource(context.Background(), tc.ref, client)
+		if err != nil || got != commit || calls != 1 {
+			t.Fatal("source not resolved once to a commit", tc.ref, got, err, calls)
+		}
+		got, err = resolveHelperSource(context.Background(), commit, client)
+		if err != nil || got != commit || calls != 1 {
+			t.Fatal("pinned commit unexpectedly re-resolved", got, err, calls)
 		}
 	}
 }

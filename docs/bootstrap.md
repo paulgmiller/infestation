@@ -4,11 +4,9 @@ Exactly one founding node is explicitly authorized with `--init`:
 
 ```sh
 infestation vm create --name local --init --size 2 \
-  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-PUBLISHED-REF
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth
 infestation azure create --name cloud --size 1 \
-  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-PUBLISHED-REF
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth
 ```
 
 These calls can run on different workstations. Each creates nodes on exactly one

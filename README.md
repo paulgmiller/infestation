@@ -49,14 +49,15 @@ Each call keeps its own private state; joining machines fetch credentials over
 the tailnet rather than sharing a workstation directory. Keep generated state private.
 [Local state](docs/local-state.md) lists its contents, secrets and lifecycle uses.
 
-The helper can be built on each Flatcar node in a pinned multiarchitecture Go
-container from an immutable source commit:
+Helper source defaults to the published `master` branch. The creator resolves it
+once to an immutable commit shared by every node in that call. Override with
+`--helper-source-ref TAG-OR-COMMIT` when needed. Each Flatcar node builds the helper
+in a pinned multiarchitecture Go container:
 
 ```sh
 bin/infestation vm create --name lab --init --size 3 --state-dir state/vms \
   --tailnet-domain YOUR-TAILNET.ts.net \
-  --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
+  --tailscale-auth-key-file secrets/tsauth
 ```
 
 Each command creates compute on one provider. For two local nodes and one
@@ -65,11 +66,9 @@ workstations with different state directories):
 
 ```sh
 bin/infestation vm create --name local --init --size 2 \
-  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth
 bin/infestation azure create --name cloud --size 1 \
-  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-PUBLISHED-TAG-OR-COMMIT
+  --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth
 ```
 
 The public CLI has the same lifecycle verbs for both providers: `create`,

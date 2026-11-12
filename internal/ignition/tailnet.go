@@ -34,20 +34,11 @@ func tailnetProfile(doc *types.Config, c cluster.Config, n cluster.Node, options
 		return fmt.Errorf("invalid Tailscale auth key")
 	}
 	if options[0].HelperSourceCommit == "" {
-		var helperFile types.File
-		if options[0].LocalHelperURL != "" {
-			if len(options[0].LocalHelperSHA512) != 128 {
-				return fmt.Errorf("remote local bootstrap helper requires a SHA512 digest")
-			}
-			helperFile = types.File{Node: types.Node{Path: "/opt/infestation/infestation-node", Overwrite: ptr(true)}, FileEmbedded1: types.FileEmbedded1{Mode: ptr(0755), Contents: types.Resource{Source: ptr(options[0].LocalHelperURL), Verification: types.Verification{Hash: ptr("sha512-" + options[0].LocalHelperSHA512)}}}}
-		} else {
-			helper, err := os.ReadFile(options[0].LocalHelper)
-			if err != nil {
-				return err
-			}
-			helperFile = File("/opt/infestation/infestation-node", helper, 0755)
+		helper, err := os.ReadFile(options[0].LocalHelper)
+		if err != nil {
+			return err
 		}
-		doc.Storage.Files = append(doc.Storage.Files, helperFile)
+		doc.Storage.Files = append(doc.Storage.Files, File("/opt/infestation/infestation-node", helper, 0755))
 	}
 	doc.Storage.Files = append(doc.Storage.Files,
 		File(tailnet.AuthPath, []byte(keyText+"\n"), 0600),

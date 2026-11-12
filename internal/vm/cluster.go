@@ -23,7 +23,7 @@ import (
 
 type ClusterOptions struct {
 	Options
-	Domain, NodeHelper                  string
+	Domain                              string
 	HelperSourceRef, HelperBuilderImage string
 	AzureLocation, AzureVMSize          string
 	Provider                            string
@@ -73,9 +73,6 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 			return err
 		}
 		o.AzureLocation, o.AzureVMSize = in.Region, in.SKU
-		if o.HelperSourceRef == "" {
-			return fmt.Errorf("Azure requires --helper-source-ref for guest builds")
-		}
 	}
 	dir, err := directory(o.Options)
 	if err != nil {
@@ -164,20 +161,12 @@ func prepareCluster(ctx context.Context, o ClusterOptions, dir string, c cluster
 		return err
 	}
 	b := ignition.Bootstrap{HelperBuilderImage: o.HelperBuilderImage, TailscaleAuthKey: key}
-	var identity []byte
-	if o.HelperSourceRef != "" {
-		b.HelperSourceCommit, err = ignition.ResolveHelperSource(ctx, o.HelperSourceRef)
-		if err != nil {
-			return err
-		}
-		identity = []byte(ignition.HelperBuildIdentity(b.HelperSourceCommit, b.HelperBuilderImage))
-		fmt.Fprintln(out, "Guest helper source commit:", b.HelperSourceCommit)
-	} else {
-		identity, err = os.ReadFile(o.NodeHelper)
-		if err != nil {
-			return fmt.Errorf("build the Linux node helper first: %w", err)
-		}
+	b.HelperSourceCommit, err = ignition.ResolveHelperSource(ctx, o.HelperSourceRef)
+	if err != nil {
+		return err
 	}
+	identity := []byte(ignition.HelperBuildIdentity(b.HelperSourceCommit, b.HelperBuilderImage))
+	fmt.Fprintln(out, "Guest helper source commit:", b.HelperSourceCommit)
 	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
 		return err
 	}
@@ -209,15 +198,6 @@ func prepareCluster(ctx context.Context, o ClusterOptions, dir string, c cluster
 		if err != nil {
 			return err
 		}
-	}
-	if b.HelperSourceCommit == "" {
-		artifact, err := startArtifacts(ctx, dir, o.NodeHelper)
-		if err != nil {
-			return err
-		}
-		b.LocalHelper = o.NodeHelper
-		b.LocalHelperURL = fmt.Sprintf("http://10.0.2.2:%d/infestation-node", artifact.Port)
-		b.LocalHelperSHA512 = artifact.SHA512
 	}
 	id := sha256.Sum256(identity)
 	b.DeploymentID = fmt.Sprintf("%x", id)
@@ -276,13 +256,6 @@ func ClusterAction(ctx context.Context, o Options, action string, out io.Writer)
 	if provider != "qemu" {
 		return fmt.Errorf("use azure %s for Azure-owned nodes", action)
 	}
-	if action == "start" {
-		if _, e := os.Stat(filepath.Join(dir, "artifacts", "infestation-node")); e == nil {
-			if _, e = startArtifacts(ctx, dir, ""); e != nil {
-				return e
-			}
-		}
-	}
 	for _, n := range c.Nodes {
 		node := Options{Name: n.Name, StateDir: dir, Accel: o.Accel}
 		switch action {
@@ -312,9 +285,6 @@ func ClusterAction(ctx context.Context, o Options, action string, out io.Writer)
 	}
 	if action == "start" && o.Wait > 0 {
 		return WaitCluster(ctx, o, out)
-	}
-	if action == "stop" {
-		stopArtifacts(dir)
 	}
 	return nil
 }
@@ -346,7 +316,6 @@ func WaitCluster(ctx context.Context, o Options, out io.Writer) error {
 		if found {
 			phase = "Kubeconfig received; waiting for this group and at least three Ready tailnet nodes"
 			if clusterAPIsReady(ctx, c, kube) {
-				stopArtifacts(dir)
 				fmt.Fprintln(out, "Provider API endpoints and Ready tailnet nodes verified over Tailscale")
 				fmt.Fprintln(out, "Kubeconfig:", kube)
 				return nil

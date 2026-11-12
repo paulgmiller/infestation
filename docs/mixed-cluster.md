@@ -51,19 +51,18 @@ and SSH access for members to `tag:roach` devices. The tested member SSH rule is
 
 The independent enrollment flow uses two calls and distinct group names. These
 can run on different workstations; only tailnet enrollment details are shared.
-Use a published ref containing the new enrollment helper, not the historical test
-commit below. This flow still needs fresh VM verification.
+Source defaults to the published `master` branch, which must contain the new
+enrollment helper; override `--helper-source-ref` to select a published revision.
+This flow still needs fresh VM verification.
 
 ```sh
 bin/infestation vm create --name local-new --state-dir state/local \
   --init --size 2 --tailnet-domain quoll-duck.ts.net \
-  --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-NEW-PUBLISHED-REF
+  --tailscale-auth-key-file secrets/tsauth
 
 bin/infestation azure create --name cloud-new --state-dir state/cloud \
   --size 1 --tailnet-domain quoll-duck.ts.net \
-  --tailscale-auth-key-file secrets/tsauth \
-  --helper-source-ref YOUR-NEW-PUBLISHED-REF
+  --tailscale-auth-key-file secrets/tsauth
 ```
 
 The first call creates `local-new-0/1`; only `local-new-0` gets `--init` and the
