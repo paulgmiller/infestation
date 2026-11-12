@@ -46,6 +46,40 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Data safety and maintenance
 
+- [ ] Model shared failure domains explicitly for replica placement: VMs on one
+  QEMU host and instances in one VMSS/resource group share a failure/removal
+  boundary, in addition to site/region/Azure-zone failures. Accept stable,
+  operator-supplied domains where providers cannot infer them; do not use VM
+  ordinals as independent zones. Keep locality tiers consistent across providers.
+  Design and verify voting-replica placement across at least three independent
+  domains for three-voter ranges, including system and Kine data. Locality labels
+  alone are not a verified survival guarantee. Test loss of an entire VMSS and
+  an entire QEMU host, and report unsatisfied placement constraints.
+- [ ] Make both providers' `stop` and `remove` cordon and gracefully drain owned
+  Kubernetes nodes before powering off compute, respecting disruption budgets
+  and pod termination grace periods. Keep stopped nodes registered and restore
+  scheduling after a successful start. For `remove`, delete the Kubernetes Node
+  objects after compute is confirmed stopped so kubelets cannot re-register;
+  support retrying cleanup of already stopped/NotReady nodes. Define bounded
+  waits, failure behavior and an explicit force path for unavailable clusters.
+  Coordinate host-level CockroachDB drain/decommission separately; Kubernetes
+  draining does not cover the database or establish safe quorum/data retention.
+- [ ] Gate normal `remove` on completed CockroachDB decommissioning while target
+  stores are still online: resolve and verify database node/store IDs against
+  owned instances, preflight the remaining capacity and placement constraints,
+  wait for replica relocation and completed decommissioning, and verify remaining
+  range health before deleting any compute/disks. Refuse unsafe shrink (including
+  only two eligible stores remaining with three-replica requirements); require
+  replacement capacity rather than silently reducing replication. Keep admin
+  credentials on the workstation. Drain temporary `stop` targets without
+  permanently decommissioning them, and check the whole batch's quorum impact.
+  Define retryable checkpoints and a distinct explicit destructive teardown path
+  for an abandoned/unavailable cluster. See CockroachDB v26.2
+  [node shutdown](https://docs.cockroachlabs.com/docs/v26.2/node-shutdown) and
+  [replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
+- [ ] Drain `svc:k8s-api` advertisements before stopping/removing API hosts,
+  restore them on start only after API readiness, and test client failover.
+  See [Tailscale Service drain](https://tailscale.com/docs/reference/tailscale-cli/serve).
 - [ ] Define/test database drain, instance replacement and disk-retention/backup
   behavior for safe member replacement and VMSS scale-in. Explicit group teardown
   is available but does not drain members. Uniform VMSS cannot rely on
