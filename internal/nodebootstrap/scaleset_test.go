@@ -95,3 +95,44 @@ func TestScaleSetRejectsWrongOrMalformedMetadata(t *testing.T) {
 		t.Fatal("agent role not preserved", err)
 	}
 }
+
+func TestScaleSetLocalityRecordsActualPlacementAndRemovalBoundary(t *testing.T) {
+	s := ScaleSet{Name: "pool", Group: "pool-rg", Location: "westus2"}
+	for _, zone := range []string{"", "1", "3"} {
+		var previous string
+		for _, ordinal := range []string{"0", "7"} {
+			m := scaleMetadata(ordinal)
+			m.Compute.Zone = zone
+			// Azure resource group identity is case insensitive.
+			m.Compute.ResourceGroupName = "POOL-RG"
+			n, err := s.node(m, cluster.Node{Name: "template", Locality: "zone=fake"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "cloud=azure,region=westus2"
+			if zone != "" {
+				want += ",zone=" + zone
+			} else {
+				want += ",zone=unknown"
+			}
+			want += ",site=unknown,subscription=sub,resource_group=pool-rg,host=unknown"
+			if n.Locality != want || (previous != "" && previous != n.Locality) {
+				t.Fatalf("incorrect locality: %s", n.Locality)
+			}
+			previous = n.Locality
+		}
+	}
+	for _, value := range []string{"1,host=fake", "1\nINJECT=yes", "0"} {
+		m := scaleMetadata("0")
+		m.Compute.Zone = value
+		if _, err := s.node(m, cluster.Node{}); err == nil {
+			t.Fatal("accepted malformed zone")
+		}
+	}
+	m := scaleMetadata("0")
+	m.Compute.SubscriptionID = "sub,host=fake"
+	m.Compute.ResourceID = strings.Replace(m.Compute.ResourceID, "/sub/", "/sub,host=fake/", 1)
+	if _, err := s.node(m, cluster.Node{}); err == nil {
+		t.Fatal("accepted locality injection from subscription")
+	}
+}

@@ -131,6 +131,10 @@ ordinary Services and CoreDNS provides Kubernetes DNS.
 
 ## Database and access
 
+Node [locality](locality.md) records provider placement, Azure resource groups and
+QEMU physical hosts/sites. These labels aid replica diversity; enforced placement
+and verified host/site/zone failure survival remain outstanding.
+
 CockroachDB is a TLS-enabled, systemd-managed host container outside Kubernetes.
 K3s servers connect through Kine. The selected initializer performs the guarded
 first SQL setup using a separate one-hour credential, then removes it. Its current

@@ -501,7 +501,7 @@ func TestUniformPools(t *testing.T) {
 			if res.Inputs["orchestrationMode"].StringValue() != "Uniform" || res.Inputs["overprovision"].BoolValue() || !res.Inputs["zones"].IsNull() {
 				t.Error("wrong orchestration/placement")
 			}
-			if res.Inputs["placement"].ObjectValue()["zonePlacementPolicy"].StringValue() != "auto" {
+			if res.Inputs["placement"].ObjectValue()["zonePlacementPolicy"].StringValue() != "Auto" {
 				t.Error("missing automatic zone placement")
 			}
 			profile := plain(res.Inputs["virtualMachineProfile"]).ObjectValue()

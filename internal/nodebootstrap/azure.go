@@ -93,7 +93,11 @@ func (p AzurePool) Identity(m Metadata) (AzureIdentity, error) {
 	if err != nil || !ip.Is4() || !subnet.Contains(ip) {
 		return out, fmt.Errorf("IMDS primary address is outside pool subnet")
 	}
-	return AzureIdentity{Name: p.Role + "-" + parts[9], Address: ip.String(), Locality: "cloud=azure,region=" + c.Location + ",zone=" + c.Zone, Subscription: c.SubscriptionID, Group: c.ResourceGroupName}, nil
+	locality, err := azureLocality(m)
+	if err != nil {
+		return out, err
+	}
+	return AzureIdentity{Name: p.Role + "-" + parts[9], Address: ip.String(), Locality: locality, Subscription: c.SubscriptionID, Group: c.ResourceGroupName}, nil
 }
 
 func ReadMetadata(ctx context.Context) (Metadata, error) {

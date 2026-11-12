@@ -14,7 +14,7 @@ func TestUniformIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, err := p.Identity(m)
-	if err != nil || id.Name != "api-0" || id.Locality != "cloud=azure,region=westus2,zone=3" {
+	if err != nil || id.Name != "api-0" || id.Locality != "cloud=azure,region=westus2,zone=3,site=unknown,subscription=sub,resource_group=test-rg,host=unknown" {
 		t.Fatalf("%+v %v", id, err)
 	}
 	for _, tc := range []struct{ old, new string }{{`"zone":"3"`, `"zone":""`}, {"test-api", "test-worker"}, {"virtualMachines/0", "virtualMachines/not-zero"}, {"192.168.1.12", "203.0.113.4"}, {"test-rg", "other-rg"}, {`"location":"westus2"`, `"location":"eastus"`}} {

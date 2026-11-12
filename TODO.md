@@ -48,9 +48,10 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   environment values. Verify reboot recreates runtime files without manual repairs.
 - [ ] Live-verify status identifies bootstrap blockers, including enrollment/
   membership, failed dependencies, discovered peers and database listeners.
-- [ ] Replace placeholder database locality with explicit, accurate host/site/cloud
-  failure domains. Independent groups must not imply separate failure domains
-  merely from node indices; omit optional locality cleanly when unspecified.
+- [ ] Live-verify host/site and IMDS region/zone/subscription/resource-group
+  locality after independent enrollment. Plan safe updates of existing profiles
+  with placeholder labels. Map Azure logical zones to physical domains across
+  subscriptions before claiming cross-subscription zone isolation.
 - [ ] Verify three-node database health and directed workload DNS/HTTP connectivity
   after independent enrollment; Kubernetes Ready alone is insufficient evidence.
 - [ ] Replace Azure default outbound access with an explicit egress design;
@@ -66,12 +67,44 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Data safety and maintenance
 
-- [ ] Model shared failure domains explicitly for replica placement: VMs on one
-  QEMU host and instances in one VMSS/resource group share a failure/removal
-  boundary, in addition to site/region/Azure-zone failures. Accept stable,
-  operator-supplied domains where providers cannot infer them; do not use VM
-  ordinals as independent zones. Keep locality tiers consistent across providers.
-  Design and verify voting-replica placement across at least three independent
+- [ ] Define a durable, private home for cluster credentials independent of
+  disposable provider-group state: CockroachDB CA/signing key, admin credentials,
+  K3s token and cluster trust/settings needed for enrollment and recovery. Specify
+  ownership, permissions, encrypted backup/restore and how lifecycle commands
+  reference the credential store. Provider removal/replacement must not delete or
+  regenerate these credentials; joining nodes receive only permitted leaf/join
+  material, never CA signing or long-lived admin keys. Distinguish credential
+  preservation from database/Kine backup: credentials alone cannot restore the
+  cluster's data or identity after all stores are lost.
+- [ ] Design adaptive CockroachDB voting-replica counts as cluster membership
+  grows or deliberately shrinks: consider three voters below ten nodes and five
+  above ten, defining behavior at ten, hysteresis and a healthy settling period.
+  Three voters require quorum two; five require quorum three. Gate increases on
+  eligible healthy capacity and independent contributor/site domains, preserving
+  survival of any one contributor's withdrawal. Reconcile effective replication
+  and voter settings, including system-range defaults and child overrides, then
+  verify actual per-range voter placement after convergence. Reduce replication
+  only during an explicit guarded shrink while quorum is healthy, before removing
+  capacity; never interpret unreachable nodes as authorization to lower replication
+  or treat a voter-count change as recovery from lost quorum. Test transitions,
+  threshold flapping, partial convergence and contributor/site outages. See
+  [CockroachDB v26.2 replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
+- [ ] Model contributors as failure boundaries across providers/sites. Issue each
+  contributor a distinct Tailscale auth key carrying `tag:roach` plus exactly one
+  administrator-controlled `tag:contributor-<id>` tag. Derive a leading
+  `contributor=<id>` CockroachDB locality tier from the enrolled device's
+  `tailscale status --json` tags, preserving the common physical locality tiers;
+  reject missing or ambiguous contributor identities before database startup.
+  Keep contributor-tag assignment restricted through tailnet `tagOwners`.
+  Enforce and verify a surviving voting majority for every range after loss of
+  any one contributor's entire contribution, including system and Kine ranges.
+  For the three-contributor test, verify one voter per contributor per three-voter
+  range, then test withdrawal of all of one contributor's home and Azure nodes.
+  Locality preference alone is not a quorum guarantee. See
+  [Tailscale auth keys](https://tailscale.com/docs/features/access-control/auth-keys),
+  [tag ownership](https://tailscale.com/docs/features/tags) and
+  [CockroachDB v26.2 replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
+- [ ] Enforce and verify voting-replica placement across at least three independent
   domains for three-voter ranges, including system and Kine data. Locality labels
   alone are not a verified survival guarantee. Test loss of an entire VMSS and
   an entire QEMU host, and report unsatisfied placement constraints.

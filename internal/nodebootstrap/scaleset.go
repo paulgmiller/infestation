@@ -47,12 +47,9 @@ func (s ScaleSet) node(m Metadata, template cluster.Node) (cluster.Node, error) 
 	}
 	template.Init = s.Initialize && ordinal == 0
 	template.IP = "192.0.2.1" // Tailscale preparation assigns the actual address later.
-	template.Locality = "cloud=azure,region=" + s.Location
-	if c.Zone != "" {
-		if !regexp.MustCompile(`^[1-9][0-9]*$`).MatchString(c.Zone) {
-			return cluster.Node{}, fmt.Errorf("invalid Azure zone")
-		}
-		template.Locality += ",zone=" + c.Zone
+	template.Locality, err = azureLocality(m)
+	if err != nil {
+		return cluster.Node{}, err
 	}
 	return template, nil
 }

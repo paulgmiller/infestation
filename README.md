@@ -3,7 +3,9 @@
 A kubernetes cluster that runs on any latency proximage (<30ms) compute using tailscale as the connective tissue.
 Availability requires a surviving voting majority for every CockroachDB range;
 two surviving machines alone do not guarantee it. Failure-domain placement and
-safe database decommissioning remain outstanding work.
+safe database decommissioning remain outstanding work. [Locality](docs/locality.md)
+records cloud placement and local host/site boundaries; labels alone do not
+establish zonal failure survival.
 
 Infestation provisions Flatcar VMs running host-level CockroachDB and K3s over
 Tailscale. Nodes need outbound connectivity; cluster communication does not
@@ -14,6 +16,7 @@ QEMU and Azure are the current compute providers. The goal is to support any
 compatible VM compute provider, preferably through Pulumi, with shared node
 preparation and bootstrap. See [goals](docs/goals.md), [architecture](docs/architecture.md)
 and the outstanding work in [TODO.md](TODO.md).
+Related projects and architectural comparisons are in [prior art](docs/prior-art.md).
 
 This is a prototype. The [mixed local/Azure test](docs/mixed-cluster.md) verified
 three Ready nodes, three healthy database members and all six directed DNS/HTTP

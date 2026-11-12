@@ -5,7 +5,12 @@ Set** with capacity two. Each instance runs CockroachDB and K3s, with an API
 server by default or a K3s agent when `--agent` is supplied. The CLI currently
 accepts 1–32 instances per call, matching the local provider's count bound.
 Azure's `sku.capacity` is the instance count; see the
-[VMSS schema](https://learn.microsoft.com/en-us/azure/templates/microsoft.compute/2024-07-01/virtualmachinescalesets#sku).
+[VMSS schema](https://learn.microsoft.com/en-us/azure/templates/microsoft.compute/2026-03-01/virtualmachinescalesets#sku).
+
+New templates request `placement.zonePlacementPolicy: Auto` and leave zone
+selection to Azure, without explicit zones or strict balancing. The guest records
+actual IMDS region/zone and subscription/resource-group [locality](locality.md).
+Automatic placement alone does not establish database zonal survival.
 
 The deployment contains the VMSS, a VNet/subnet and NSG. Instances share that
 subnet, but cluster traffic uses Tailscale; the NSG denies unsolicited inbound
@@ -60,7 +65,8 @@ resources and evidence; there is no partial repair command.
 ## Verification
 
 Unit/mocked tests cover VMSS capacity, shared secure profile, permitted resources,
-manual upgrade mode, host identity ordering, instance-zero authority, temporary
+automatic zone selection without a zone list, manual upgrade mode, host identity
+ordering, IMDS locality including unknown zones, instance-zero authority, temporary
 credential cleanup and lifecycle ownership guards. The shared profile is checked
 against the custom-data size limit. This VMSS path has not been provisioned live;
 the earlier mixed test used standalone Azure compute and does not verify it.

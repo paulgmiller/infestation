@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"infestation/internal/azureconfig"
@@ -27,6 +29,7 @@ type ClusterOptions struct {
 	HelperSourceRef, HelperBuilderImage string
 	AzureLocation, AzureVMSize          string
 	Provider                            string
+	Host, Site                          string
 	Size                                int
 	Agent                               bool
 	Init                                bool
@@ -34,8 +37,13 @@ type ClusterOptions struct {
 
 func clusterConfig(o ClusterOptions) cluster.Config {
 	c := cluster.Config{DiscoverPeers: true, CockroachImage: "cockroachdb/cockroach:v26.2.7", K3sExtensionVersion: "v1.35.8+k3s1", Architecture: "x86-64", CockroachStorage: "persistent", CockroachCache: "256MiB", CockroachSQLMemory: "256MiB", Tailscale: &cluster.Tailscale{Version: TailscaleVersion, Domain: o.Domain}}
+	topology := cluster.Topology{Cloud: "qemu", Site: o.Site, Host: o.Host}
+	if o.Provider == "azure" {
+		// IMDS adds the actual zone and subscription before enrollment.
+		topology = cluster.Topology{Cloud: "azure", Region: o.AzureLocation, ResourceGroup: o.Name + "-rg"}
+	}
 	for i := 0; i < o.Size; i++ {
-		c.Nodes = append(c.Nodes, cluster.Node{Init: o.Init && i == 0, Name: fmt.Sprintf("%s-%d", o.Name, i), IP: fmt.Sprintf("192.0.2.%d", i+1), Locality: fmt.Sprintf("region=lab,zone=node%d", i)})
+		c.Nodes = append(c.Nodes, cluster.Node{Init: o.Init && i == 0, Name: fmt.Sprintf("%s-%d", o.Name, i), IP: fmt.Sprintf("192.0.2.%d", i+1), Locality: topology.Locality()})
 	}
 	if o.Agent {
 		for i := range c.Nodes {
@@ -61,6 +69,14 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	if o.Provider != "qemu" && o.Provider != "azure" {
 		return fmt.Errorf("unknown compute provider")
 	}
+	for _, value := range []string{o.Host, o.Site} {
+		if value != "" && !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(value) {
+			return fmt.Errorf("host/site labels must contain only letters, digits, dots, underscores or dashes")
+		}
+	}
+	if o.Provider == "azure" && (o.Host != "" || o.Site != "") {
+		return fmt.Errorf("host/site labels apply only to QEMU; Azure locality comes from IMDS")
+	}
 	if o.Size < 1 || o.Size > 32 {
 		return fmt.Errorf("--size must be between 1 and 32")
 	}
@@ -70,6 +86,15 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 			return err
 		}
 		o.AzureLocation, o.AzureVMSize = in.Region, in.SKU
+	} else if o.Host == "" {
+		// Host identity must be shared by separate creates on the same machine.
+		// Never publish the workstation's raw machine-id in node profiles.
+		raw, err := os.ReadFile("/etc/machine-id")
+		if err != nil || len(strings.TrimSpace(string(raw))) == 0 {
+			return fmt.Errorf("cannot determine QEMU host identity; supply --host with a stable unique host label")
+		}
+		id := sha256.Sum256([]byte("infestation-host:" + strings.TrimSpace(string(raw))))
+		o.Host = fmt.Sprintf("host-%x", id[:16])
 	}
 	dir, err := directory(o.Options)
 	if err != nil {

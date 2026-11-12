@@ -142,8 +142,7 @@ func deployPools(ctx *pulumi.Context, d *Deployment, group, location pulumi.Stri
 		vmss, err := artifactResourceNew(ctx, "compute/v20260301:VirtualMachineScaleSet", role+"-pool", pulumi.Map{
 			"vmScaleSetName": pulumi.String(s.Name + "-" + role), "resourceGroupName": group, "location": location,
 			"orchestrationMode": pulumi.String("Uniform"), "overprovision": pulumi.Bool(false), "singlePlacementGroup": pulumi.Bool(false),
-			"placement":   pulumi.Map{"zonePlacementPolicy": pulumi.String("auto")},
-			"zoneBalance": pulumi.Bool(true), "resiliencyPolicy": pulumi.Map{"zoneAllocationPolicy": pulumi.Map{"maxZoneCount": pulumi.Int(3)}},
+			"placement":     pulumi.Map{"zonePlacementPolicy": pulumi.String("Auto")},
 			"sku":           pulumi.Map{"name": pulumi.String(s.VMSize), "tier": pulumi.String("Standard"), "capacity": pulumi.Int(count)},
 			"identity":      pulumi.Map{"type": pulumi.String("UserAssigned"), "userAssignedIdentities": identities},
 			"upgradePolicy": pulumi.Map{"mode": pulumi.String("Manual")}, "virtualMachineProfile": profile,

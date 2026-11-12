@@ -63,6 +63,15 @@ func TestAzureScaleSetCapacityAndPrivateProfile(t *testing.T) {
 		t.Fatal("size is not VMSS capacity")
 	}
 	properties := set["properties"].(map[string]any)
+	if set["apiVersion"] != "2026-03-01" || set["placement"].(map[string]any)["zonePlacementPolicy"] != "Auto" || properties["singlePlacementGroup"] != false {
+		t.Fatal("missing automatic Azure zone placement")
+	}
+	if _, ok := set["zones"]; ok {
+		t.Fatal("zone numbers must be selected by Azure")
+	}
+	if _, ok := properties["zoneBalance"]; ok {
+		t.Fatal("must not impose explicit zone balancing")
+	}
 	if properties["orchestrationMode"] != "Uniform" || properties["overprovision"] != false || properties["upgradePolicy"].(map[string]any)["mode"] != "Manual" {
 		t.Fatal("unexpected scale-set lifecycle")
 	}

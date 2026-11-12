@@ -16,6 +16,33 @@ import (
 	"infestation/internal/pki"
 )
 
+func TestLocalVMsSharePhysicalHostAcrossCreateGroups(t *testing.T) {
+	for _, group := range []string{"first", "second"} {
+		c := clusterConfig(ClusterOptions{Size: 3, Host: "desktop-a", Site: "home", Domain: "example.ts.net", Options: Options{Name: group}})
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range c.Nodes {
+			if n.Locality != "cloud=qemu,region=unknown,zone=unknown,site=home,subscription=unknown,resource_group=unknown,host=desktop-a" {
+				t.Fatalf("VM identity created a fake failure domain: %s", n.Locality)
+			}
+		}
+	}
+	c := clusterConfig(ClusterOptions{Size: 1, Host: "desktop-b"})
+	if c.Nodes[0].Locality != "cloud=qemu,region=unknown,zone=unknown,site=unknown,subscription=unknown,resource_group=unknown,host=desktop-b" {
+		t.Fatal("unspecified site must remain unknown")
+	}
+}
+
+func TestCreateRejectsLocalityInjectionBeforeProvisioning(t *testing.T) {
+	for _, labels := range [][2]string{{"a,host=b", ""}, {"a", "home\nINJECT=yes"}} {
+		err := CreateCluster(context.Background(), ClusterOptions{Size: 1, Host: labels[0], Site: labels[1]}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "host/site labels") {
+			t.Fatal("accepted malformed labels", err)
+		}
+	}
+}
+
 func TestClusterProfileKeepsCredentialsLocalAndNodesIsolated(t *testing.T) {
 	c := clusterConfig(ClusterOptions{Size: 3, Init: true, Options: Options{Name: "isolated"}, Domain: "example.ts.net"})
 	if err := c.Validate(); err != nil {
