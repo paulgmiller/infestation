@@ -5,6 +5,14 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Consolidate deployment
 
+- [ ] Ensure a working `stop` command is available for both QEMU and Azure,
+  preserving disks and private state.
+- [ ] Ensure helper builds use `github.com/paulgmiller/infestation`'s published
+  `master` branch by default, rather than local workstation source.
+- [ ] Show more progress output while `create` runs, including the current stage
+  and what it is waiting for.
+- [ ] Make the Azure resource group clear in CLI output, including which group
+  is being created or used.
 - [ ] Verify independent enrollment from separate workstations with two local VMs
   (`--init --size 2`) and one Azure VM (`--size 1`), without shared local state.
   Publish the updated helper source before testing; earlier helper refs lack the
