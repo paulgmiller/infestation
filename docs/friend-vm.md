@@ -22,7 +22,8 @@ The creator workstation does not need to be on the tailnet unless it requests
 
 Use `vm status|stop|start --name alice` for this provider group.
 `azure create --name alice-cloud --size 1` accepts the same enrollment details;
-Azure region/SKU default to `westus2`/`Standard_B2s`. Each command creates compute
+Azure creates a VMSS with capacity from `--size`; region/SKU default to
+`westus2`/`Standard_B2s`. See [VMSS behavior](azure-vmss.md). Each command creates compute
 on only one provider. Each machine retains its own private provider state.
 
 The person supplying the key first applies the [tailnet setup](tailnet-policy.md),

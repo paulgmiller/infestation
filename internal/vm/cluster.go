@@ -65,9 +65,6 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 		return fmt.Errorf("--size must be between 1 and 32")
 	}
 	if o.Provider == "azure" {
-		if o.Size != 1 {
-			return fmt.Errorf("Azure enrollment batches currently support --size 1")
-		}
 		in, err := (azureconfig.Inputs{Region: o.AzureLocation, SKU: o.AzureVMSize}).Defaults()
 		if err != nil {
 			return err
@@ -108,12 +105,12 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	if err := prepareCluster(ctx, o, dir, c, out); err != nil {
 		return err
 	}
-	for _, n := range c.Nodes {
-		if o.Provider == "azure" {
-			if err := createAzureNode(ctx, o, dir, n.Name, out); err != nil {
-				return err
-			}
-		} else {
+	if o.Provider == "azure" {
+		if err := createAzureNodes(ctx, o, dir, c.Nodes, out, executil.OSRunner{}); err != nil {
+			return err
+		}
+	} else {
+		for _, n := range c.Nodes {
 			raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
 			if err != nil {
 				return err
@@ -161,6 +158,9 @@ func prepareCluster(ctx context.Context, o ClusterOptions, dir string, c cluster
 		return err
 	}
 	b := ignition.Bootstrap{HelperBuilderImage: o.HelperBuilderImage, TailscaleAuthKey: key}
+	if o.Provider == "azure" {
+		b.ScaleSet = &nodebootstrap.ScaleSet{Name: o.Name, Group: o.Name + "-rg", Location: o.AzureLocation, Initialize: o.Init}
+	}
 	b.HelperSourceCommit, err = ignition.ResolveHelperSource(ctx, o.HelperSourceRef)
 	if err != nil {
 		return err

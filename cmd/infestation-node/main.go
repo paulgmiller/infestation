@@ -27,6 +27,8 @@ func main() {
 	if err == nil {
 		if len(os.Args) > 1 && os.Args[1] == "diagnose" {
 			err = nodebootstrap.Diagnose(ctx, config)
+		} else if len(os.Args) > 1 && os.Args[1] == "identity" {
+			err = nodebootstrap.PrepareScaleSet(ctx, config, "/", executil.OSRunner{})
 		} else if len(os.Args) > 1 && os.Args[1] == "enroll" {
 			err = nodebootstrap.JoinMembership(ctx, config, "/", executil.OSRunner{})
 		} else if len(os.Args) > 1 && os.Args[1] == "membership" {

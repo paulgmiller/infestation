@@ -11,6 +11,31 @@ func membershipProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Bo
 	if n.Init {
 		doc.Storage.Files = append(doc.Storage.Files, File(nodebootstrap.JoinBundlePath, b.JoinBundle, 0600))
 	}
+	if b.ScaleSet != nil {
+		identity := `[Unit]
+Description=Derive node identity from Azure VMSS instance metadata
+Requires=infestation-helper-build.service
+After=infestation-helper-build.service network-online.target
+Before=infestation-tailnet.service
+StartLimitIntervalSec=0
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/infestation/infestation-node identity
+TimeoutStartSec=120s
+Restart=on-failure
+RestartSec=15s
+[Install]
+WantedBy=multi-user.target
+`
+		doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: "infestation-instance-identity.service", Enabled: ptr(true), Contents: &identity})
+		for i := range doc.Systemd.Units {
+			if doc.Systemd.Units[i].Name == "infestation-tailnet.service" {
+				dependency := "[Unit]\nRequires=infestation-instance-identity.service\nAfter=infestation-instance-identity.service\n"
+				doc.Systemd.Units[i].Dropins = append(doc.Systemd.Units[i].Dropins, types.Dropin{Name: "15-instance-identity.conf", Contents: &dependency})
+			}
+		}
+	}
 	join := `[Unit]
 Description=Discover cluster and install leaf credentials over the tailnet
 Requires=infestation-tailnet.service

@@ -81,8 +81,9 @@ requires saved provider state and Azure login. See [where commands run](docs/loc
 
 Only one founding node gets initialization authority. It waits for two database
 peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;
-override `--region` and `--sku` directly. Azure enrollment currently creates one
-VM per call. Creation returns after provisioning by default; `--wait` also needs
+override `--region` and `--sku` directly. Azure creates one Uniform VM Scale Set
+per call; `--size` sets its instance count (1–32), with manual upgrades. See
+[Azure VMSS behavior](docs/azure-vmss.md). Creation returns after provisioning by default; `--wait` also needs
 tailnet access from the workstation. This independent flow has unit/protocol
 coverage and still needs a fresh VM test. See [bootstrap](docs/bootstrap.md).
 

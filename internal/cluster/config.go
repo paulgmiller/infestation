@@ -199,10 +199,12 @@ func (c Config) validate(surge bool) error {
 		return fmt.Errorf("peer discovery requires Tailscale")
 	}
 	if ts := c.Tailscale; ts != nil {
-		if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(ts.Version) ||
-			!ValidSAN(ts.Domain) || !strings.HasSuffix(ts.Domain, ".ts.net") ||
+		if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(ts.Version) {
+			return fmt.Errorf("tailscale version must be an exact release such as v1.104.2")
+		}
+		if !ValidSAN(ts.Domain) || !strings.HasSuffix(ts.Domain, ".ts.net") ||
 			len(strings.Split(ts.Domain, ".")) != 3 || ts.Domain != strings.ToLower(ts.Domain) {
-			return fmt.Errorf("tailscale requires an exact version and <tailnet>.ts.net domain")
+			return fmt.Errorf("tailnet domain must be <tailnet>.ts.net (for example quoll-duck.ts.net), without a host or service prefix")
 		}
 		if c.CockroachStorage == "azure-temporary" {
 			return fmt.Errorf("Tailscale is currently supported by the disposable VM profile only; Azure migration is pending")

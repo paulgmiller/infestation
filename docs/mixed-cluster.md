@@ -84,8 +84,10 @@ The historical run below used source commit
 `138c5676d497f665517d6fc67c1d5a0712e7a15e` and a static three-node inventory. Its
 latency/topology evidence does not verify independent enrollment.
 
-The Azure resource group is `cloud-new-rg`. Its resources are one VM, one
-managed OS disk, a NIC, a VNet/subnet and an NSG. It contains no storage account,
+The new Azure resource group is `cloud-new-rg`. It holds one VMSS plus a
+VNet/subnet and NSG, with Azure-managed disks/NICs per instance. `--size` sets
+the scale-set capacity. This is a change from the historical single-VM run below;
+see [VMSS behavior and validation limits](azure-vmss.md). It contains no storage account,
 load balancer, public IP resource, managed identity, private DNS zone, or remote
 execution extension. Boot diagnostics are disabled. The subnet explicitly opts
 into Azure default outbound access; it uses Azure-provided egress NAT and is not

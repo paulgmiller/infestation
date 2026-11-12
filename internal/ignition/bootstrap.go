@@ -16,6 +16,7 @@ import (
 )
 
 type Bootstrap struct {
+	ScaleSet                               *nodebootstrap.ScaleSet
 	JoinBundle                             []byte // private leaf credentials/token; never CA/admin signing keys
 	HelperSourceCommit, HelperBuilderImage string
 	// Render-only secret: never serialize into the node's bootstrap inventory.
@@ -52,7 +53,11 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 	if c.Tailscale != nil {
 		endpoint = "https://" + net.JoinHostPort(c.NodeAddress(n), "6443")
 	}
-	config, err := json.Marshal(nodebootstrap.Config{Cluster: c, Node: n.Name, Account: b.Account, DeploymentID: b.DeploymentID, APIEndpoint: endpoint, Azure: b.Pool})
+	nodeConfig := c
+	if c.DiscoverPeers {
+		nodeConfig.Nodes = []cluster.Node{n}
+	}
+	config, err := json.Marshal(nodebootstrap.Config{ScaleSet: b.ScaleSet, Cluster: nodeConfig, Node: n.Name, Account: b.Account, DeploymentID: b.DeploymentID, APIEndpoint: endpoint, Azure: b.Pool})
 	if err != nil {
 		return err
 	}

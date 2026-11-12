@@ -29,6 +29,14 @@ before state creation, downloads or provisioning. Agents still host a database,
 participate in the three-database bootstrap threshold and share enrollment
 material. They never initialize SQL or advertise the API Service.
 
+Azure uses one shared VMSS profile per create call. Before Tailscale enrollment,
+the helper checks IMDS against the configured group/set/region, derives
+`NAME-<instance-id>`, and updates the hostname, K3s and tailnet identities.
+Instance 0 retains `--init` only when the group was created with it. All other
+instances clear the init command and remove their temporary SQL root copies.
+Database advertise addresses and locality are supplied after runtime discovery.
+See [Azure VMSS](azure-vmss.md).
+
 There is no automatic election or initializer failover. A future one-time election
 must agree on a durable target; seeing three peers or ranking IPs is insufficient.
 

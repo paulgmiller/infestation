@@ -320,7 +320,7 @@ func joinMembership(ctx context.Context, c Config, root string, runner executil.
 	for _, n := range c.Cluster.Databases() {
 		seeds = append(seeds, net.JoinHostPort(c.Cluster.NodeAddress(n), "26257"))
 	}
-	if err := fsutil.WriteFile(filepath.Join(root, "/run/infestation/cluster.env"), []byte("INFESTATION_SEEDS="+strings.Join(seeds, ",")+"\n"), 0600); err != nil {
+	if err := fsutil.WriteFile(filepath.Join(root, "/run/infestation/cluster.env"), []byte("INFESTATION_SEEDS="+strings.Join(seeds, ",")+"\nINFESTATION_DATABASE_ADDRESS="+net.JoinHostPort(c.Cluster.NodeAddress(local), "26257")+"\nINFESTATION_LOCALITY="+local.Locality+"\n"), 0600); err != nil {
 		return err
 	}
 	configPath := filepath.Join(root, "/etc/rancher/k3s/config.yaml")

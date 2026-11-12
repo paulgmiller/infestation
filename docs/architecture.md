@@ -104,8 +104,10 @@ fetch the pinned bundle and start Cockroach/K3s with discovered join seeds. See
 
 The shared `cluster.Config` type still represents both provisioning and runtime
 settings. Static examples still use full inventories; splitting
-those concerns remains outstanding. Azure enrollment currently supports one VM
-per call; local groups support 1–32. Independent enrollment has protocol/unit
+those concerns remains outstanding. Both providers support 1–32 nodes per call.
+Azure creates one Uniform VMSS whose capacity comes from `--size`; shared guest
+profiles derive identity from IMDS before tailnet enrollment. See
+[Azure VMSS behavior](azure-vmss.md). Independent enrollment has protocol/unit
 coverage but needs fresh VM verification. The earlier mixed test used a complete
 static inventory and does not verify this new path.
 

@@ -317,6 +317,10 @@ WantedBy=multi-user.target
 	if c.DiscoverPeers {
 		unit = strings.Replace(unit, "[Service]\n", "[Service]\nEnvironmentFile=/run/infestation/cluster.env\n", 1)
 		unit = strings.Replace(unit, join, " --join=${INFESTATION_SEEDS}", 1)
+		unit = strings.Replace(unit, "--advertise-addr="+net.JoinHostPort(c.NodeAddress(n), "26257"), "--advertise-addr=${INFESTATION_DATABASE_ADDRESS}", 1)
+		if locality != "" {
+			unit = strings.Replace(unit, locality, " --locality=${INFESTATION_LOCALITY}", 1)
+		}
 		unit = strings.Replace(unit, "[Unit]\n", "[Unit]\nRequires=infestation-join.service\nAfter=infestation-join.service\n", 1)
 	}
 	return unit

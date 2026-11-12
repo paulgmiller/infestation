@@ -39,7 +39,7 @@ wait flag; use `azure wait` separately to check cluster readiness.
 | `<node>/machine.json`, `<node>/config.ign` | Saved QEMU launch settings and the VM's original first-boot profile. |
 | `<node>/qmp.sock`, PID/lock files | Local process control used by start, stop and status. These are not backups. |
 | `<node>/*.log`, diagnostic JSON and access reports | Boot/network troubleshooting and private VM-to-host reports. Access reports may contain Kubernetes admin credentials. |
-| `azure-node.json` | Subscription, resource group, VM, region and ownership identity for Azure lifecycle commands. |
+| `azure-scaleset.json` | Subscription, resource group, VMSS name, region, initial capacity and ownership identity. Start/stop/status target the entire owned set. Earlier single-VM state remains readable without resource migration. |
 | `azure-template.json`, `azure-parameters.json` | Saved Azure deployment request, retained for inspection and diagnosis. Parameters contain private Ignition. |
 | `azure-resources.json` | Recorded resource inventory for diagnosis. |
 | `pki/` (initializer only) | Workstation CA signing key, SQL admin credentials, node/client leaves and K3s token. Only permitted leaves and a separate one-hour SQL bootstrap credential enter the selected VM. Signing/admin keys remain here. |

@@ -8,10 +8,10 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 - [ ] Verify independent enrollment from separate workstations with two local VMs
   (`--init --size 2`) and one Azure VM (`--size 1`), without shared local state.
   Publish the updated helper source before testing; earlier helper refs lack the
-  enrollment endpoint. Test delayed peers and joining while the initializer is down.
+  enrollment endpoint/VMSS identity setup. Include a two-instance Azure VMSS,
+  delayed peers and joining while the initializer is down.
 - [ ] Split cluster settings, per-node settings and per-owner state in the Go API;
   remove static fixture/default assumptions about complete membership.
-- [ ] Generalize Azure enrollment batches beyond the current one-VM-per-call limit.
 - [ ] Design rotation/revocation of shared database/Kine leaf credentials, cluster
   tokens and cached enrollment bundles while preserving the pinned cluster identity.
 - [ ] Future: replace explicit `--init` with automatic one-time bootstrap election over discovered tailnet peers:
@@ -45,6 +45,16 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 - [ ] Verify kubeconfig publication across credential renewal.
 
 ## Data safety and maintenance
+
+- [ ] Define/test database drain, instance replacement and disk-retention/backup
+  behavior before exposing VMSS scale-in or deletion. Uniform VMSS cannot rely on
+  the Flexible-only OS-disk `Detach` setting; power-off is not instance deletion.
+
+- [ ] Configure and verify clock synchronization on every Flatcar node across
+  local hosts and cloud providers. Check compatible leap-second smearing, Azure
+  host-time interactions, time-source health, startup convergence and drift
+  after suspend/reboot or network loss, following CockroachDB's
+  [clock synchronization guidance](https://docs.cockroachlabs.com/docs/stable/deploy-cockroachdb-on-premises#step-1-synchronize-clocks).
 
 - [ ] Investigate removing redundant CockroachDB inter-node TLS when all peer
   communication is enforced over Tailscale/WireGuard. Confirm a supported

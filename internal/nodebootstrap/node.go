@@ -21,6 +21,7 @@ import (
 )
 
 type Config struct {
+	ScaleSet     *ScaleSet      `json:"scaleSet,omitempty"`
 	Cluster      cluster.Config `json:"cluster"`
 	Azure        *AzurePool     `json:"azure,omitempty"`
 	Node         string         `json:"node"`
