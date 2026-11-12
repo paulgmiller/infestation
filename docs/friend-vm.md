@@ -31,10 +31,11 @@ including tagged-peer traffic, SSH and route/Service auto-approvals.
 
 ## Install and manage
 
-Use Linux x86-64 with QEMU/KVM and `qemu-img` for local VMs. On Ubuntu/Debian:
+First follow the [local VM prerequisites](local-vm-prerequisites.md) for
+Ubuntu/Debian or Arch Linux package installation, KVM kernel support and
+`/dev/kvm` permissions. Then install the CLI from this repository:
 
 ```sh
-sudo apt-get install qemu-system-x86 qemu-utils
 go install ./cmd/infestation
 ```
 

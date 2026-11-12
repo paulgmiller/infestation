@@ -8,7 +8,8 @@ evidence and [bootstrap](bootstrap.md) for the current trust/recovery contract.
 
 ## Create
 
-Install QEMU/KVM, `qemu-img` and the updated CLI on Linux x86-64. The published
+Follow the [local VM prerequisites](local-vm-prerequisites.md) to install
+QEMU and the CLI and check KVM access on Linux x86-64. The published
 `master` branch must contain the updated helper. The tailnet key must enroll `tag:roach`
 nodes, with grants for helper TCP 7444 and cluster traffic. Configure pod-route
 and API-Service approval as described in [networking](networking-plan.md).
