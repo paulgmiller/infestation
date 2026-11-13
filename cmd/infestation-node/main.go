@@ -37,10 +37,6 @@ func main() {
 			err = nodebootstrap.JoinMembership(ctx, config, "/", executil.OSRunner{})
 		} else if len(os.Args) > 1 && os.Args[1] == "membership" {
 			err = nodebootstrap.ServeMembership(ctx, config, executil.OSRunner{})
-		} else if len(os.Args) > 1 && os.Args[1] == "prepare" {
-			err = nodebootstrap.PrepareAzure(ctx, config, "/")
-		} else if len(os.Args) > 1 && os.Args[1] == "join" {
-			err = nodebootstrap.JoinAzure(ctx, config, "/")
 		} else {
 			flags := flag.NewFlagSet("infestation-node", flag.ContinueOnError)
 			init := flags.Bool("init", false, "authorize first database initialization on this node")

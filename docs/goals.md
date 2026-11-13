@@ -45,14 +45,15 @@ that all behavior is implemented or proven. Outstanding work is in [TODO.md](../
   separate independent calls, such as local `--init --size 2` and Azure `--size 1`.
 - Support any compatible VM compute provider. QEMU and Azure are the current
   providers; other clouds, hosts and friends' machines should use the same node
-  contract. Pulumi is the preferred provisioning layer.
+  contract. Use direct Go libraries: Azure Go SDK for cloud management and
+  go-qemu for local QMP, with QEMU processes and disks managed from Go.
 - Make it simple to give friends the repository/binary and an enrollment key so
   they can create a VM on the supplied tailnet. Accept a command argument or
   environment variable as well as a private key file.
 - Allow the creator to start nodes across hosts/providers, then let friends
   independently add VMs using tailnet enrollment details and the cluster
   name/endpoint. No complete shared node inventory or central edit is required.
-  Each host/Pulumi stack owns its own resources; cluster membership is discovered.
+  Each provider group owns its own resources; cluster membership is discovered.
 - Prefer standard Flatcar images and shared Ignition/bootstrap logic. Build the
   helper natively in a Go container from a pinned source revision so deployment
   does not require a custom image or published helper binary per architecture.
@@ -64,6 +65,16 @@ that all behavior is implemented or proven. Outstanding work is in [TODO.md](../
 
 ## Access, availability and evidence
 
+- Creator workstations must be disposable once provisioning and credential
+  handoff complete. Cluster operation, enrollment, credential renewal, safe
+  decommissioning and disaster recovery must not depend on their continued
+  availability or retained local files. Durable credential custody and recovery
+  access must exist elsewhere, including when the cluster itself is unavailable.
+  Recoverable provider ownership records must allow another authorized operator
+  to manage cloud resources. Local QEMU compute still depends on its physical
+  host; losing a creator workstation is distinct from losing a VM host and disks.
+  This is a design goal; workstation-only signing/admin custody remains a current
+  implementation limitation pending the credential-store design.
 - Treat the tailnet as the administrator security boundary. Tailnet members
   should be able to access SSH and retrieve kubeconfig; routine sessions use
   `core` with sudo.

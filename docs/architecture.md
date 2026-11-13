@@ -2,8 +2,9 @@
 
 Infestation is intended to run on any compatible VM compute provider. QEMU and
 Azure are the current providers; they are implementations of the provisioning
-boundary, not requirements of the cluster architecture. Pulumi is the preferred
-layer for describing infrastructure, previews, resource ownership and lifecycle.
+boundary, not requirements of the cluster architecture. The target is direct Go
+provider implementations using Azure Go SDK and go-qemu, with explicit resource
+ownership and lifecycle state.
 
 ## Provider contract
 
@@ -21,11 +22,10 @@ public node address or an external ingress load balancer. A cloud can require
 its own VNet/subnet for a NIC without making that network the cluster transport.
 Egress infrastructure is provider-specific and remains an explicit design choice.
 
-Provider implementations should be small Pulumi components around this contract.
+Provider implementations should share a small Go contract around these operations.
 Cluster topology, credentials and bootstrap should not depend on a provider's
 managed identity, object storage, private DNS or remote command service.
-Existing Pulumi project IDs must remain stable so changing code does not replace
-resources or lose ownership of stored state.
+Changes must preserve resource identities, disks and ownership of saved state.
 
 ## Cluster configuration and independent enrollment
 
@@ -41,7 +41,7 @@ Configuration should have three separate scopes:
 - **Node settings:** that node's identity, selected roles, storage, resources and
   locality. Roles determine whether it joins Kubernetes, the database, or both.
 - **Provisioning state:** only the VMs/disks/network resources owned by a person's
-  host or Pulumi stack. One stack need not manage everybody else's machines.
+  host or provider group. One group need not manage everybody else's machines.
 
 For now there is one cluster per tailnet. Participants can have arbitrary names,
 such as `miller`, `sullivan` and `locke`, and come from different people/providers.
@@ -149,9 +149,15 @@ with sudo.
 ## Implementation boundary
 
 The tested VM CLI directly starts QEMU processes and provisions the Azure test
-through ARM and the Azure CLI. Pulumi provider packages also exist. These paths
-are not yet unified: consolidating them under Pulumi is outstanding work, not an
-already implemented provider abstraction.
+through ARM and the Azure CLI, and currently uses a handwritten QMP transport.
+The unused Pulumi provider packages, entry points and legacy deployment/check
+paths have been removed, along with their Azure Blob/private-DNS bootstrap path.
+Migration to Azure Go SDK, go-qemu and a shared Go provider contract remains
+outstanding; current CLI behavior and saved provider state are retained.
+
+Backward compatibility is not required before the v1 tag. Retired interfaces and
+profile formats can be removed without guards or migration support. Private
+state and VM disks remain protected from deletion during source refactoring.
 
 The [mixed test](mixed-cluster.md) proves the repaired topology can communicate
 across local and Azure networks. It does not prove unattended fresh bootstrap,

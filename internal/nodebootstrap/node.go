@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paulgmiller/infestation/internal/blobstore"
 	"github.com/paulgmiller/infestation/internal/bootstrap"
 	"github.com/paulgmiller/infestation/internal/cluster"
 	"github.com/paulgmiller/infestation/internal/executil"
@@ -23,17 +22,15 @@ import (
 type Config struct {
 	ScaleSet     *ScaleSet      `json:"scaleSet,omitempty"`
 	Cluster      cluster.Config `json:"cluster"`
-	Azure        *AzurePool     `json:"azure,omitempty"`
 	Node         string         `json:"node"`
 	APIEndpoint  string         `json:"apiEndpoint"`
-	Account      string         `json:"account"`
 	DeploymentID string         `json:"deploymentID"`
 }
 
 type Store interface {
-	Get(context.Context, blobstore.Location) ([]byte, error)
-	Put(context.Context, blobstore.Location, []byte) error
-	Create(context.Context, blobstore.Location, []byte) error
+	Get(context.Context, string) ([]byte, error)
+	Put(context.Context, string, []byte) error
+	Create(context.Context, string, []byte) error
 }
 
 type Worker struct {
@@ -47,10 +44,6 @@ type Worker struct {
 	RuntimeCredentialDir string
 	CAPath               string
 	bootstrapSQL         bool
-}
-
-func (w Worker) location(name string) blobstore.Location {
-	return blobstore.Location{Account: w.Config.Account, Container: "access", Blob: name}
 }
 
 func (w Worker) command(ctx context.Context, name string, args ...string) executil.Result {
@@ -103,8 +96,8 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 		}
 	}
 	var marker bootstrap.Marker
-	raw, err := w.Store.Get(ctx, w.location("bootstrap-state.json"))
-	if err != nil && !errors.Is(err, blobstore.ErrNotFound) {
+	raw, err := w.Store.Get(ctx, "bootstrap-state.json")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
 	if err == nil && json.Unmarshal(raw, &marker) != nil {
@@ -148,9 +141,9 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 		}
 		marker.InitializationAttempted = true
 		intent, _ := json.Marshal(marker)
-		// A create-only remote intent survives replacement of the bootstrap VM.
+		// A create-only intent persists on the node's disk across helper restarts.
 		// Even an ambiguous write/init outcome is never retried as a fresh init.
-		if err := w.Store.Create(ctx, w.location("bootstrap-state.json"), intent); err != nil {
+		if err := w.Store.Create(ctx, "bootstrap-state.json", intent); err != nil {
 			return "", err
 		}
 		w.command(ctx, "docker", "exec", "--user", "0", "cockroachdb", "/cockroach/cockroach", "init", "--certs-dir="+RuntimeCredentialDir, "--host="+net.JoinHostPort(w.Config.Cluster.NodeAddress(initializer), "26257"))
@@ -169,7 +162,7 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 		return id, w.cleanupCredentials()
 	}
 	data, _ := json.Marshal(marker)
-	if err := w.Store.Put(ctx, w.location("bootstrap-state.json"), data); err != nil {
+	if err := w.Store.Put(ctx, "bootstrap-state.json", data); err != nil {
 		return "", err
 	}
 	r := w.sql(ctx, w.Config.Cluster.NodeAddress(initializer), bootstrap.BootstrapSQL)
@@ -178,7 +171,7 @@ func (w Worker) Database(ctx context.Context) (string, error) {
 	}
 	marker.SQLReady = true
 	data, _ = json.Marshal(marker)
-	if err := w.Store.Put(ctx, w.location("bootstrap-state.json"), data); err != nil {
+	if err := w.Store.Put(ctx, "bootstrap-state.json", data); err != nil {
 		return "", err
 	}
 	return id, w.cleanupCredentials()
@@ -189,47 +182,14 @@ func (w Worker) Run(ctx context.Context) error {
 		w.Runner = executil.OSRunner{}
 	}
 	if w.Store == nil {
-		if w.Config.Account == "" {
-			w.Store = localStore{}
-		} else {
-			w.Store = blobstore.Client{Token: blobstore.ManagedIdentityToken}
-		}
+		w.Store = localStore{dir: "/var/lib/infestation"}
 	}
 	if w.Config.Cluster.DiscoverPeers {
 		if err := w.discoverTailnet(ctx); err != nil {
 			return err
 		}
 	}
-	var durable bootstrap.Marker
-	if w.Config.Azure != nil {
-		if w.Config.Azure.Role == "worker" {
-			return w.cleanupCredentials()
-		}
-		raw, err := w.Store.Get(ctx, w.location("bootstrap-state.json"))
-		if err != nil && !errors.Is(err, blobstore.ErrNotFound) {
-			return err
-		}
-		if err == nil && json.Unmarshal(raw, &durable) != nil {
-			return fmt.Errorf("invalid persistent bootstrap marker")
-		}
-		if durable.SQLReady && durable.ClusterID == "" {
-			return fmt.Errorf("bootstrap SQL marker is missing its cluster identity")
-		}
-		if err := w.discoverAzure(ctx, durable.SQLReady); err != nil {
-			return err
-		}
-		if w.Config.Node != "api-0" {
-			if err := w.cleanupCredentials(); err != nil {
-				return err
-			}
-		}
-	}
-	var err error
-	if w.Config.Azure != nil && durable.SQLReady {
-		err = w.Config.Cluster.ValidateDiscovered()
-	} else {
-		err = w.Config.Cluster.Validate()
-	}
+	err := w.Config.Cluster.Validate()
 	if err != nil {
 		return err
 	}
@@ -242,24 +202,17 @@ func (w Worker) Run(ctx context.Context) error {
 		}
 	}
 	initializer, targetErr := w.Config.Cluster.Initializer()
-	if targetErr != nil && !durable.SQLReady {
+	if targetErr != nil {
 		return targetErr
 	}
-	leader := targetErr == nil && initializer.Name == w.Config.Node
-	if w.Init && !leader && w.Config.Azure == nil {
+	leader := initializer.Name == w.Config.Node
+	if w.Init && !leader {
 		return fmt.Errorf("--init is only authorized on the configured initializer")
 	}
-	id := durable.ClusterID
-	if !durable.SQLReady && leader && w.Init {
+	id := ""
+	if leader && w.Init {
 		id, err = w.Database(ctx)
 		if err != nil {
-			return err
-		}
-	} else if durable.SQLReady {
-		// Once initialized, every API member may verify/publish readiness. Ordinal
-		// zero retains exclusive fresh-init authority but is no longer a dependency
-		// for normal operation or a complete rolling replacement of the API pool.
-		if err := w.cleanupCredentials(); err != nil {
 			return err
 		}
 	}
@@ -279,20 +232,20 @@ func (w Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("local kubeconfig is not ready")
 	}
 	data, _ = json.Marshal(conf)
-	if err := w.Store.Put(ctx, w.location("kubeconfig.json"), data); err != nil {
+	if err := w.Store.Put(ctx, "kubeconfig.json", data); err != nil {
 		return err
 	}
-	if w.Config.Cluster.Tailscale != nil && w.Config.Azure == nil {
+	if w.Config.Cluster.Tailscale != nil {
 		if err := publishVMAccess(data); err != nil {
 			return err
 		}
 	}
 	// Operator access must remain available when a worker cannot register or
-	// Cilium is unhealthy. Role reconciliation gates readiness, not publication.
+	// networking is unhealthy. Role reconciliation gates readiness, not publication.
 	if err := w.labelWorkers(ctx, local); err != nil {
 		return err
 	}
-	if !leader && !durable.SQLReady {
+	if !leader {
 		return nil
 	}
 	for _, n := range w.Config.Cluster.Databases() {
@@ -311,7 +264,7 @@ func (w Worker) Run(ctx context.Context) error {
 		ClusterID    string `json:"clusterID"`
 		Ready        bool   `json:"ready"`
 	}{w.Config.DeploymentID, id, true})
-	return w.Store.Put(ctx, w.location("bootstrap-status.json"), status)
+	return w.Store.Put(ctx, "bootstrap-status.json", status)
 }
 
 // Kubernetes reserves role labels; apply them with the server's admin identity,
@@ -329,23 +282,24 @@ func (w Worker) labelWorkers(ctx context.Context, kubeconfig string) error {
 	return nil
 }
 
-type localStore struct{}
+// localStore retains bootstrap identity and published access on the node disk.
+type localStore struct{ dir string }
 
-func (localStore) Get(_ context.Context, l blobstore.Location) ([]byte, error) {
-	data, err := os.ReadFile(filepath.Join("/var/lib/infestation", filepath.Base(l.Blob)))
+func (s localStore) Get(_ context.Context, name string) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(s.dir, filepath.Base(name)))
 	if os.IsNotExist(err) {
-		return nil, blobstore.ErrNotFound
+		return nil, os.ErrNotExist
 	}
 	return data, err
 }
-func (localStore) Put(_ context.Context, l blobstore.Location, data []byte) error {
-	return fsutil.WriteFile(filepath.Join("/var/lib/infestation", filepath.Base(l.Blob)), data, 0600)
+func (s localStore) Put(_ context.Context, name string, data []byte) error {
+	return fsutil.WriteFile(filepath.Join(s.dir, filepath.Base(name)), data, 0600)
 }
-func (localStore) Create(_ context.Context, l blobstore.Location, data []byte) error {
-	if err := os.MkdirAll("/var/lib/infestation", 0700); err != nil {
+func (s localStore) Create(_ context.Context, name string, data []byte) error {
+	if err := fsutil.PrivateDir(s.dir); err != nil {
 		return err
 	}
-	return fsutil.CreatePrivateFile(filepath.Join("/var/lib/infestation", filepath.Base(l.Blob)), data)
+	return fsutil.CreatePrivateFile(filepath.Join(s.dir, filepath.Base(name)), data)
 }
 
 func Load(path string) (Config, error) {

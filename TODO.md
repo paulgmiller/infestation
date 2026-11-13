@@ -1,7 +1,78 @@
 # Infestation TODO
 
-Outstanding work, in priority order. [Goals](docs/goals.md) and
-[architecture](docs/architecture.md) describe the intended system.
+Outstanding work, with the current priorities first. The provider direction is
+direct Go libraries for Azure and QEMU/QMP, replacing Pulumi and legacy deployment
+paths. See [goals](docs/goals.md) and [architecture](docs/architecture.md) for the
+provider boundary and current implementation.
+
+## Current priorities
+
+- [ ] Gate normal `remove` on completed CockroachDB decommissioning while target
+  stores are still online: resolve and verify database node/store IDs against
+  owned instances, preflight the remaining capacity and placement constraints,
+  wait for replica relocation and completed decommissioning, and verify remaining
+  range health before deleting any compute/disks. Refuse unsafe shrink (including
+  only two eligible stores remaining with three-replica requirements); require
+  replacement capacity rather than silently reducing replication. Use authorized
+  operator credentials without depending on the creator workstation or embedding
+  long-lived admin keys in node profiles. Drain temporary `stop` targets without
+  permanently decommissioning them, and check the whole batch's quorum impact.
+  Define retryable checkpoints and a distinct explicit destructive teardown path
+  for an abandoned/unavailable cluster. See CockroachDB v26.2
+  [node shutdown](https://docs.cockroachlabs.com/docs/v26.2/node-shutdown) and
+  [replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
+- [ ] Define one shared Go provider contract for create/start/stop/status/remove,
+  persistent disks, private Ignition delivery and explicit egress. Keep node
+  preparation and enrollment provider-independent. Preserve resource ownership
+  checks, VM disks and private state across the SDK migrations; backward
+  compatibility with retired interfaces/formats is not required before v1.
+- [ ] Replace Azure CLI subprocesses for provisioning and lifecycle operations
+  with the Azure Go SDK. Preserve VMSS behavior, resource identities, ownership
+  validation, saved state and disk semantics. Define authentication/subscription
+  selection, cancellation, long-running operation polling and retryable partial
+  failures. Test lifecycle behavior and refusal to modify unowned resources.
+- [ ] Replace handwritten QMP transport with digitalocean/go-qemu's direct socket
+  client, without libvirt. Keep QEMU process launch and qemu-img disk preparation
+  managed from Go. Preserve existing VM launch settings, private sockets, process
+  identity checks, graceful shutdown, bounded waits and retained disks. Test QMP
+  errors/disconnects without provisioning.
+- [ ] Bulletproof unattended bootstrap: live-verify joiners starting before the
+  initializer, delayed enrollment and temporarily unavailable databases. Verify
+  automatic recovery of canceled dependency jobs and stuck K3s startup/shutdown
+  without manual service commands; fix any remaining gaps.
+- [ ] Design durable cluster credential custody independent of creator
+  workstations and disposable provider-group state. Choose an off-workstation
+  authoritative store and independent encrypted recovery copy for CockroachDB
+  CA/signing keys, admin credentials, K3s token and cluster trust/settings. Define
+  authorized operator access from a replacement workstation, encryption/key
+  custody, availability during cluster outages, rotation and recovery. Never make
+  the failed cluster the only source of the secrets needed to restore it. Provider
+  removal/replacement must not delete or regenerate credentials. Joining nodes
+  receive only permitted leaf/join material, never CA signing or long-lived admin
+  keys. Update the workstation-only custody rules when the replacement design is
+  selected; do not distribute signing/admin keys through ordinary node profiles.
+  Define recovery/discovery of provider ownership metadata so loss of the creator
+  workstation does not strand cloud lifecycle operations. Test permanent loss of
+  that workstation, enrollment, decommissioning and recovery from another operator
+  machine. Credentials alone cannot restore database/Kine data after store loss;
+  coordinate with the separate data backup/restore work.
+- [ ] Model contributors as failure boundaries across providers/sites. Issue each
+  contributor a distinct Tailscale auth key carrying `tag:roach` plus exactly one
+  administrator-controlled `tag:contributor-<id>` tag. Derive a leading
+  `contributor=<id>` CockroachDB locality tier from the enrolled device's
+  `tailscale status --json` tags, preserving the common physical locality tiers;
+  reject missing or ambiguous contributor identities before database startup.
+  Keep contributor-tag assignment restricted through tailnet `tagOwners`.
+  Enforce and verify a surviving voting majority for every range after loss of
+  any one contributor's entire contribution, including system and Kine ranges.
+  For the three-contributor test, verify one voter per contributor per three-voter
+  range, then test withdrawal of all of one contributor's home and Azure nodes.
+  Locality preference alone is not a quorum guarantee. See
+  [Tailscale auth keys](https://tailscale.com/docs/features/access-control/auth-keys),
+  [tag ownership](https://tailscale.com/docs/features/tags) and
+  [CockroachDB v26.2 replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
+- [ ] Replace Azure default outbound access with an explicit egress design;
+  evaluate dependency cost, failure scope and NAT traversal.
 
 ## Consolidate deployment
 
@@ -13,11 +84,6 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   and what it is waiting for.
 - [ ] Make the Azure resource group clear in CLI output, including which group
   is being created or used.
-- [ ] Verify independent enrollment from separate workstations with two local VMs
-  (`--init --size 2`) and one Azure VM (`--size 1`), without shared local state.
-  Publish the updated helper source before testing; earlier helper refs lack the
-  enrollment endpoint/VMSS identity setup. Include a two-instance Azure VMSS,
-  delayed peers and joining while the initializer is down.
 - [ ] Split cluster settings, per-node settings and per-owner state in the Go API;
   remove static fixture/default assumptions about complete membership.
 - [ ] Design rotation/revocation of shared database/Kine leaf credentials, cluster
@@ -28,12 +94,6 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   treat failure to discover an initialized database as proof none exists.
 - [ ] Replace inventory-wide bootstrap/readiness barriers with local join
   readiness and runtime membership discovery.
-- [ ] Make Pulumi the common provisioning layer for QEMU, Azure and additional
-  VM compute providers; share the node/bootstrap contract across providers.
-- [ ] Remove unused deployment paths, duplicated networking/bootstrap code and
-  resource configuration. Preserve existing stack identities, disks, CA and token.
-- [ ] Remove required cloud object storage from helper delivery, kubeconfig
-  retrieval and bootstrap while preserving initialization/recovery safety.
 - [ ] Separate user-facing configuration from test fixtures; make the role of
   `examples/cluster.json` explicit instead of using it as an implicit CLI default.
 - [ ] Persist complete creation inputs and make explicit teardown ownership and
@@ -41,9 +101,6 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Reliable bootstrap and networking
 
-- [ ] Verify unattended bootstrap with joiners starting before the initializer,
-  delayed enrollment and temporarily unavailable databases. Recover canceled
-  dependency jobs and stuck K3s startup/shutdown without manual service commands.
 - [ ] Live-verify rejection of incompatible pinned helpers and missing database
   environment values. Verify reboot recreates runtime files without manual repairs.
 - [ ] Live-verify status identifies bootstrap blockers, including enrollment/
@@ -54,8 +111,6 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   subscriptions before claiming cross-subscription zone isolation.
 - [ ] Verify three-node database health and directed workload DNS/HTTP connectivity
   after independent enrollment; Kubernetes Ready alone is insufficient evidence.
-- [ ] Replace Azure default outbound access with an explicit egress design;
-  evaluate dependency cost, failure scope and NAT traversal.
 - [ ] Validate container DNS, delayed peers, MTU, packet loss and pod routes from
   ordinary tailnet clients. [Detailed networking work](docs/networking-todo.md).
 - [ ] Add readiness-aware API Service withdrawal/failover and redundant DNS.
@@ -75,15 +130,6 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 ## Data safety and maintenance
 
-- [ ] Define a durable, private home for cluster credentials independent of
-  disposable provider-group state: CockroachDB CA/signing key, admin credentials,
-  K3s token and cluster trust/settings needed for enrollment and recovery. Specify
-  ownership, permissions, encrypted backup/restore and how lifecycle commands
-  reference the credential store. Provider removal/replacement must not delete or
-  regenerate these credentials; joining nodes receive only permitted leaf/join
-  material, never CA signing or long-lived admin keys. Distinguish credential
-  preservation from database/Kine backup: credentials alone cannot restore the
-  cluster's data or identity after all stores are lost.
 - [ ] Design adaptive CockroachDB voting-replica counts as cluster membership
   grows or deliberately shrinks: consider three voters below ten nodes and five
   above ten, defining behavior at ten, hysteresis and a healthy settling period.
@@ -96,21 +142,6 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   capacity; never interpret unreachable nodes as authorization to lower replication
   or treat a voter-count change as recovery from lost quorum. Test transitions,
   threshold flapping, partial convergence and contributor/site outages. See
-  [CockroachDB v26.2 replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
-- [ ] Model contributors as failure boundaries across providers/sites. Issue each
-  contributor a distinct Tailscale auth key carrying `tag:roach` plus exactly one
-  administrator-controlled `tag:contributor-<id>` tag. Derive a leading
-  `contributor=<id>` CockroachDB locality tier from the enrolled device's
-  `tailscale status --json` tags, preserving the common physical locality tiers;
-  reject missing or ambiguous contributor identities before database startup.
-  Keep contributor-tag assignment restricted through tailnet `tagOwners`.
-  Enforce and verify a surviving voting majority for every range after loss of
-  any one contributor's entire contribution, including system and Kine ranges.
-  For the three-contributor test, verify one voter per contributor per three-voter
-  range, then test withdrawal of all of one contributor's home and Azure nodes.
-  Locality preference alone is not a quorum guarantee. See
-  [Tailscale auth keys](https://tailscale.com/docs/features/access-control/auth-keys),
-  [tag ownership](https://tailscale.com/docs/features/tags) and
   [CockroachDB v26.2 replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
 - [ ] Enforce and verify voting-replica placement across at least three independent
   domains for three-voter ranges, including system and Kine data. Locality labels
@@ -125,19 +156,6 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
   waits, failure behavior and an explicit force path for unavailable clusters.
   Coordinate host-level CockroachDB drain/decommission separately; Kubernetes
   draining does not cover the database or establish safe quorum/data retention.
-- [ ] Gate normal `remove` on completed CockroachDB decommissioning while target
-  stores are still online: resolve and verify database node/store IDs against
-  owned instances, preflight the remaining capacity and placement constraints,
-  wait for replica relocation and completed decommissioning, and verify remaining
-  range health before deleting any compute/disks. Refuse unsafe shrink (including
-  only two eligible stores remaining with three-replica requirements); require
-  replacement capacity rather than silently reducing replication. Keep admin
-  credentials on the workstation. Drain temporary `stop` targets without
-  permanently decommissioning them, and check the whole batch's quorum impact.
-  Define retryable checkpoints and a distinct explicit destructive teardown path
-  for an abandoned/unavailable cluster. See CockroachDB v26.2
-  [node shutdown](https://docs.cockroachlabs.com/docs/v26.2/node-shutdown) and
-  [replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
 - [ ] Drain `svc:k8s-api` advertisements before stopping/removing API hosts,
   restore them on start only after API readiness, and test client failover.
   See [Tailscale Service drain](https://tailscale.com/docs/reference/tailscale-cli/serve).
@@ -189,3 +207,11 @@ Outstanding work, in priority order. [Goals](docs/goals.md) and
 
 Further questions: [research](docs/research-questions.md). Test evidence lives in
 [the mixed-cluster record](docs/mixed-cluster.md), outside the TODO lists.
+
+## Completed
+
+- [x] Verify independent enrollment from separate workstations with two local VMs
+  (`--init --size 2`) and one Azure VM (`--size 1`), without shared local state.
+  Publish the updated helper source before testing; earlier helper refs lack the
+  enrollment endpoint/VMSS identity setup. Include a two-instance Azure VMSS,
+  delayed peers and joining while the initializer is down.

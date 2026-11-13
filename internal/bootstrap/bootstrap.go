@@ -9,17 +9,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/paulgmiller/infestation/internal/blobstore"
 	"github.com/paulgmiller/infestation/internal/executil"
-	"github.com/paulgmiller/infestation/internal/fsutil"
 	"gopkg.in/yaml.v3"
 )
 
-type Outputs struct {
-	PublicIPs      map[string]string   `json:"publicIPs"`
-	APIEndpoint    string              `json:"apiEndpoint"`
-	KubeconfigBlob *blobstore.Location `json:"kubeconfigBlob,omitempty"`
-}
 type Marker struct {
 	ClusterID               string `json:"clusterID,omitempty"`
 	InitializationAttempted bool   `json:"initializationAttempted,omitempty"`
@@ -52,38 +45,6 @@ func ParseIdentity(result executil.Result) (string, error) {
 		return "", err
 	}
 	return rows[1][0], nil
-}
-
-func Healthy(data string, count int) error {
-	rows, err := csv.NewReader(strings.NewReader(data)).ReadAll()
-	if err != nil || len(rows) < 2 {
-		return fmt.Errorf("invalid database status")
-	}
-	cols := map[string]int{}
-	for i, k := range rows[0] {
-		cols[k] = i
-	}
-	for _, k := range []string{"is_live", "ranges_unavailable", "ranges_underreplicated"} {
-		if _, ok := cols[k]; !ok {
-			return fmt.Errorf("missing database status column %s", k)
-		}
-	}
-	live := 0
-	for _, row := range rows[1:] {
-		if len(row) != len(rows[0]) {
-			return fmt.Errorf("malformed database status row")
-		}
-		if row[cols["is_live"]] == "true" {
-			live++
-			if row[cols["ranges_unavailable"]] != "0" || row[cols["ranges_underreplicated"]] != "0" {
-				return fmt.Errorf("database replicas not healthy")
-			}
-		}
-	}
-	if live < count {
-		return fmt.Errorf("not all database nodes are live")
-	}
-	return nil
 }
 
 // BootstrapSQL is idempotent and embedded so binaries work outside the checkout.
@@ -128,11 +89,4 @@ func PublicKubeconfig(data []byte, endpoint string) (Kubeconfig, error) {
 	c.Contexts = []map[string]any{{"name": "infestation", "context": map[string]string{"cluster": "infestation", "user": "infestation-admin"}}}
 	c.CurrentContext = "infestation"
 	return c, nil
-}
-
-// LoadOutputs parses Pulumi's non-secret stack outputs without logging them.
-func LoadOutputs(path string) (Outputs, error) {
-	var o Outputs
-	err := fsutil.ReadJSON(path, &o)
-	return o, err
 }

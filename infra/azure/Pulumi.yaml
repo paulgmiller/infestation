@@ -1,3 +1,0 @@
-name: flatcar-k3s-azure
-runtime: go
-description: Infestation on an Azure Uniform VM Scale Sets (stable legacy project ID)

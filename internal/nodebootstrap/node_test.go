@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paulgmiller/infestation/internal/blobstore"
 	"github.com/paulgmiller/infestation/internal/bootstrap"
 	"github.com/paulgmiller/infestation/internal/cluster"
 	"github.com/paulgmiller/infestation/internal/executil"
@@ -31,25 +30,25 @@ type memoryStore struct {
 	writes     int
 }
 
-func (s *memoryStore) Get(_ context.Context, l blobstore.Location) ([]byte, error) {
-	if b, ok := s.blobs[l.Blob]; ok {
+func (s *memoryStore) Get(_ context.Context, name string) ([]byte, error) {
+	if b, ok := s.blobs[name]; ok {
 		return b, nil
 	}
-	return nil, blobstore.ErrNotFound
+	return nil, os.ErrNotExist
 }
-func (s *memoryStore) Put(_ context.Context, l blobstore.Location, b []byte) error {
-	s.blobs[l.Blob] = append([]byte{}, b...)
+func (s *memoryStore) Put(_ context.Context, name string, b []byte) error {
+	s.blobs[name] = append([]byte{}, b...)
 	s.writes++
 	return nil
 }
-func (s *memoryStore) Create(ctx context.Context, l blobstore.Location, b []byte) error {
-	if _, ok := s.blobs[l.Blob]; ok {
-		return blobstore.ErrExists
+func (s *memoryStore) Create(ctx context.Context, name string, b []byte) error {
+	if _, ok := s.blobs[name]; ok {
+		return os.ErrExist
 	}
 	if s.failCreate {
-		return fmt.Errorf("ambiguous blob request")
+		return fmt.Errorf("ambiguous marker write")
 	}
-	return s.Put(ctx, l, b)
+	return s.Put(ctx, name, b)
 }
 
 type dbRunner struct {
@@ -137,7 +136,7 @@ func worker(t *testing.T) (*Worker, *dbRunner, *memoryStore) {
 	s := &memoryStore{blobs: map[string][]byte{}}
 	r := &dbRunner{t: t, store: s, target: "192.168.1.101"}
 	c := testutil.Config()
-	w := &Worker{Init: true, Config: Config{Cluster: c, Node: c.Servers()[0].Name, Account: "testaccount", APIEndpoint: "https://regional.example.test:6443", DeploymentID: "test"}, Runner: r, Store: s, Reachable: func(context.Context, string) bool { return true }}
+	w := &Worker{Init: true, Config: Config{Cluster: c, Node: c.Servers()[0].Name, APIEndpoint: "https://regional.example.test:6443", DeploymentID: "test"}, Runner: r, Store: s, Reachable: func(context.Context, string) bool { return true }}
 	root := t.TempDir()
 	w.CredentialDir, w.RuntimeCredentialDir, w.CAPath = filepath.Join(root, "source"), filepath.Join(root, "runtime"), filepath.Join(root, "ca.crt")
 	raw, ca := credentialFixture(t)

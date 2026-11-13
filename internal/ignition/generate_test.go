@@ -27,7 +27,7 @@ func TestTemporarySQLCredentialOnlyOnExplicitInitializer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := Bootstrap{Account: "testaccount", HelperSHA256: strings.Repeat("a", 64), DeploymentID: "test", APIEndpoint: "https://api.example.test:6443", Credential: credential}
+	options := Bootstrap{HelperSourceCommit: strings.Repeat("a", 40), DeploymentID: "test", APIEndpoint: "https://api.example.test:6443", Credential: credential}
 	if err := Generate(c, state, options); err != nil {
 		t.Fatal(err)
 	}

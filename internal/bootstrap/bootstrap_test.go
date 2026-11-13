@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"fmt"
 	"github.com/paulgmiller/infestation/internal/fsutil"
 	"os"
 	"path/filepath"
@@ -47,14 +46,6 @@ users:
 		t.Fatal("changed cluster identity accepted")
 	}
 }
-func TestMalformedStatusFailsClosed(t *testing.T) {
-	for _, data := range []string{"garbage", "is_live,ranges_unavailable,ranges_underreplicated\ntrue,1,0\n", "is_live,ranges_unavailable,ranges_underreplicated\ntrue,0,0\n"} {
-		if err := Healthy(data, 3); err == nil {
-			t.Fatal(fmt.Sprint("accepted ", data))
-		}
-	}
-}
-
 func TestInitializationIdentityGuard(t *testing.T) {
 	var m Marker
 	if !m.CanInitialize(true) || m.CanInitialize(false) {

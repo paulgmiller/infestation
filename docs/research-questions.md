@@ -5,7 +5,7 @@ choices within [the project goals](goals.md).
 
 ## VM compute provider boundary
 
-What is the smallest common Pulumi component for VM, disk, Ignition delivery and
+What is the smallest common Go provider contract for VM, disk, Ignition delivery and
 egress? How should topology, roles and locality stay provider-independent? How do
 we preserve state and ownership across partial creation, retries and deletion?
 Which host prerequisites and capabilities must a provider report explicitly?

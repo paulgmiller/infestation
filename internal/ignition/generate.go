@@ -61,9 +61,6 @@ func Token(c cluster.Config, state string) (string, error) {
 }
 
 func Generate(c cluster.Config, state string, options ...Bootstrap) error {
-	if len(options) > 0 && options[0].Pool != nil {
-		return GeneratePools(c, state, options[0])
-	}
 	if err := c.Validate(); err != nil {
 		return err
 	}

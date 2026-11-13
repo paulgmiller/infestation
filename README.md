@@ -13,7 +13,7 @@ require a shared underlay, public node addresses or an external ingress load
 balancer. K3s uses its native Tailscale/Flannel integration, kube-proxy and CoreDNS.
 
 QEMU and Azure are the current compute providers. The goal is to support any
-compatible VM compute provider, preferably through Pulumi, with shared node
+compatible VM compute provider through Go libraries, with shared node
 preparation and bootstrap. See [goals](docs/goals.md), [architecture](docs/architecture.md)
 and the outstanding work in [TODO.md](TODO.md).
 Related projects and architectural comparisons are in [prior art](docs/prior-art.md).
@@ -158,10 +158,8 @@ internal/ignition/         first-boot files and systemd configuration
 internal/nodebootstrap/    node-local SQL setup and readiness
 internal/tailnet/          host enrollment and runtime address configuration
 internal/vm/               VM CLI and mixed-cluster prototype
-internal/provider/         Pulumi provider implementations
 internal/smoke/            workload connectivity and host latency checks
-infra/                     Pulumi entry points
 ```
 
 Never overwrite an existing CA/token or replace disks as a generic retry.
-Infrastructure changes must preserve resource ownership and stack identity.
+Infrastructure changes must preserve resource ownership and saved provider identity.

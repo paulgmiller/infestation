@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -20,11 +19,10 @@ type Bootstrap struct {
 	JoinBundle                             []byte // private leaf credentials/token; never CA/admin signing keys
 	HelperSourceCommit, HelperBuilderImage string
 	// Render-only secret: never serialize into the node's bootstrap inventory.
-	TailscaleAuthKey                                 string `json:"-"`
-	Account, HelperSHA256, DeploymentID, APIEndpoint string
-	LocalHelper                                      string
-	Credential                                       []byte
-	Pool                                             *nodebootstrap.AzurePool
+	TailscaleAuthKey          string `json:"-"`
+	DeploymentID, APIEndpoint string
+	LocalHelper               string
+	Credential                []byte
 }
 
 func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Bootstrap) error {
@@ -32,7 +30,7 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 	if err != nil && !c.DiscoverPeers {
 		return err
 	}
-	if n.Worker() && b.Pool == nil && !c.DiscoverPeers {
+	if n.Worker() && !c.DiscoverPeers {
 		return nil
 	}
 	add := func(path, text string, mode int) {
@@ -57,7 +55,7 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 	if c.DiscoverPeers {
 		nodeConfig.Nodes = []cluster.Node{n}
 	}
-	config, err := json.Marshal(nodebootstrap.Config{ScaleSet: b.ScaleSet, Cluster: nodeConfig, Node: n.Name, Account: b.Account, DeploymentID: b.DeploymentID, APIEndpoint: endpoint, Azure: b.Pool})
+	config, err := json.Marshal(nodebootstrap.Config{ScaleSet: b.ScaleSet, Cluster: nodeConfig, Node: n.Name, DeploymentID: b.DeploymentID, APIEndpoint: endpoint})
 	if err != nil {
 		return err
 	}
@@ -74,28 +72,7 @@ func bootstrapProfile(doc *types.Config, c cluster.Config, n cluster.Node, b Boo
 			doc.Storage.Files = append(doc.Storage.Files, File(executable, binary, 0755))
 		}
 	} else {
-		if !regexp.MustCompile(`^[a-z0-9]{3,24}$`).MatchString(b.Account) || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(b.HelperSHA256) {
-			return fmt.Errorf("invalid node helper storage or checksum")
-		}
-		// The shell is only a tiny authenticated downloader. All orchestration is Go.
-		loader := fmt.Sprintf(`#!/bin/sh
-set -eu
-umask 077
-mkdir -p /opt/infestation
-if ! echo '%s  /opt/infestation/infestation-node' | sha256sum -c --status; then
-  token=$(curl --noproxy '*' -fsS --connect-timeout 5 --max-time 20 -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%%3A%%2F%%2Fstorage.azure.com%%2F' | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-  test -n "$token"
-  tmp=$(mktemp /opt/infestation/.node-XXXXXX)
-  trap 'rm -f "$tmp"' EXIT
-  printf 'header = "Authorization: Bearer %%s"\n' "$token" | curl -fsS --connect-timeout 10 --max-time 120 --config - -H 'x-ms-version: 2023-11-03' 'https://%s.blob.core.windows.net/bootstrap-assets/infestation-node-%s' -o "$tmp"
-  echo "%s  $tmp" | sha256sum -c --status
-  chmod 0755 "$tmp"
-  mv "$tmp" /opt/infestation/infestation-node
-fi
-exec /opt/infestation/infestation-node "$@"
-`, b.HelperSHA256, b.Account, b.HelperSHA256, b.HelperSHA256)
-		add("/opt/infestation/bootstrap", loader, 0755)
-		executable = "/opt/infestation/bootstrap"
+		return fmt.Errorf("node helper source commit or local binary is required")
 	}
 	if n.Init {
 		executable += " --init"
@@ -146,12 +123,12 @@ spec:
 }
 
 // Cilium must reach the API before it can implement Kubernetes Service IPs.
-// Azure pools use the public API LB; static/local inventories can use a server.
+// Static/local inventories can use a server.
 func ciliumAPIEndpoint(c cluster.Config, b Bootstrap) (string, string, error) {
 	endpoint := b.APIEndpoint
 	if endpoint == "" {
-		if b.Pool != nil || len(c.Servers()) == 0 {
-			return "", "", fmt.Errorf("Cilium requires a direct HTTPS API endpoint for Azure pools")
+		if len(c.Servers()) == 0 {
+			return "", "", fmt.Errorf("Cilium requires a direct HTTPS API endpoint")
 		}
 		endpoint = "https://" + net.JoinHostPort(c.Servers()[0].IP, "6443")
 	}

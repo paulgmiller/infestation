@@ -3,7 +3,7 @@
 The goal is a cluster whose nodes need only outbound connectivity and do not
 rely on a shared or connected underlay. Current implementations target local
 QEMU and Azure; the architecture should work with any compatible VM compute
-provider, preferably provisioned through Pulumi. See [project goals](goals.md).
+provider, managed through Go libraries. See [project goals](goals.md).
 
 ## Component ownership
 

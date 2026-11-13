@@ -12,7 +12,7 @@ import (
 )
 
 func tailnetProfile(doc *types.Config, c cluster.Config, n cluster.Node, options []Bootstrap) error {
-	if len(options) == 0 || (options[0].LocalHelper == "" && options[0].HelperSourceCommit == "") || options[0].Pool != nil {
+	if len(options) == 0 || (options[0].LocalHelper == "" && options[0].HelperSourceCommit == "") {
 		return fmt.Errorf("Tailscale currently requires a static VM profile and a node helper; Azure support is pending")
 	}
 	keyText := options[0].TailscaleAuthKey

@@ -5,12 +5,13 @@ Infestation is one Go module at this repository root. Read README.md first.
 - `cmd/infestation` is the CLI; portable logic lives under `internal/`.
 - Read `docs/goals.md` and `docs/architecture.md` for the intended provider
   boundary. QEMU and Azure are the current providers; any compatible VM compute
-  provider should be supportable, preferably through Pulumi. Shared bootstrap
+  provider should be supportable through Go libraries. Shared bootstrap
   must not depend on a provider's object storage, private DNS or remote execution.
 - `internal/cluster`, `pki`, and `ignition` are shared node preparation.
-  `internal/provider/{azure,qemu}` defines Pulumi infrastructure; `infra/` holds
-  thin entry points and stack configuration. Preserve existing Pulumi project
-  IDs and state; refactoring is not a reason to replace live resources.
+  `internal/vm` currently manages QEMU processes/QMP and Azure ARM/CLI lifecycle.
+  The target is Azure Go SDK and go-qemu behind a shared Go provider contract.
+  Pulumi and its legacy deployment paths are retired. Preserve saved ownership,
+  disks and private state; refactoring is not a reason to replace live resources.
 - CockroachDB runs as a TLS-enabled host Docker service, outside Kubernetes.
   K3s servers use Kine/CockroachDB; workers run agents. Database hosting defaults
   on for both roles. Use host Tailscale and K3s's native Tailscale/Flannel
@@ -27,6 +28,9 @@ Infestation is one Go module at this repository root. Read README.md first.
   may use it and other instances remove their copies. Shared node leaf credentials
   are permitted for pooled profiles and independent tailnet enrollment; never substitute admin/CA signing keys.
   Remove temporary credentials after SQL setup succeeds.
+- Before the v1 tag, backward compatibility is not required. Remove obsolete
+  interfaces and formats without compatibility shims or retired-profile guards.
+  Continue protecting resource ownership, VM disks and private state.
 - Use `go test ./...` and `go vet ./...` for local validation without provisioning.
   Add meaningful tests for identity, storage, bootstrap/recovery guards and
   infrastructure lifecycle changes. Distinguish mocks from live verification.
