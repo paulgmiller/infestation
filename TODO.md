@@ -7,6 +7,15 @@ provider boundary and current implementation.
 
 ## Current priorities
 
+- [ ] Investigate why dead-store replica replacement did not move range r4's
+  voters onto shitbox before beeroach became unreachable. Map database node IDs
+  n1/n3 to the removed instances; reconstruct removal, join and failure times;
+  inspect the effective `server.time_until_store_dead`, eligible store capacity,
+  placement constraints and allocator/snapshot errors. Explain the pre-outage
+  replication-queue rejection of shitbox's s5 as `suspect` and the report of 27
+  failing replicas with no eligible destination. Do not assume a timeout
+  failed or that Kubernetes Ready establishes database replication health. See
+  [captured evidence](docs/bootstrap-troubleshooting.md#queenbee-join-blocked-by-lost-quorum-2026-11-13).
 - [ ] Gate normal `remove` on completed CockroachDB decommissioning while target
   stores are still online: resolve and verify database node/store IDs against
   owned instances, preflight the remaining capacity and placement constraints,
@@ -111,6 +120,17 @@ provider boundary and current implementation.
   subscriptions before claiming cross-subscription zone isolation.
 - [ ] Verify three-node database health and directed workload DNS/HTTP connectivity
   after independent enrollment; Kubernetes Ready alone is insufficient evidence.
+- [ ] Surface host CockroachDB health in Kubernetes and mark database-hosting
+  nodes NotReady when their database/store is unavailable or suspect and cannot
+  accept replicas. Expose actionable Node conditions/events with database node
+  and store IDs, liveness/suspect state, replica-placement blockers and lost-quorum
+  details so `kubectl describe node` explains the failure. Integrate with kubelet
+  readiness without racing its managed Ready condition; define debounce and
+  recovery behavior for transient suspect periods and restore readiness after
+  stable database health. Keep local store health distinct from cluster-wide
+  range health and avoid blocking database recovery when Kubernetes is unavailable.
+  Test that Kubernetes cannot report a database-hosting node Ready while its
+  store remains ineligible due to suspect status, plus recovery and API outages.
 - [ ] Validate container DNS, delayed peers, MTU, packet loss and pod routes from
   ordinary tailnet clients. [Detailed networking work](docs/networking-todo.md).
 - [ ] Add readiness-aware API Service withdrawal/failover and redundant DNS.
@@ -130,6 +150,20 @@ provider boundary and current implementation.
 
 ## Data safety and maintenance
 
+- [ ] Benchmark nodes before admitting them to CockroachDB membership, especially
+  voting-replica placement. Measure durable disk write/fsync latency, CPU capacity,
+  scheduling stalls and tailnet latency/loss under representative sustained load;
+  report distributions and worst stalls rather than averages alone. Define
+  configurable minimum thresholds and a stable observation period, with clear
+  results visible through CLI diagnostics and Kubernetes conditions/events.
+  Quarantine failing or unmeasured stores before database join so they cannot
+  receive voting replicas; define whether they may contribute Kubernetes worker
+  capacity independently. Recheck after admission to detect degradation, with
+  guarded replica evacuation that preserves quorum and capacity. Do not infer
+  fitness from VM/provider type or Kubernetes Ready, automatically delete failing
+  nodes, or equate a benchmark failure with proven cause of a liveness incident.
+  Test admission/refusal, overrides, transient stalls and insufficient healthy
+  founding capacity without silently weakening replication requirements.
 - [ ] Design adaptive CockroachDB voting-replica counts as cluster membership
   grows or deliberately shrinks: consider three voters below ten nodes and five
   above ten, defining behavior at ten, hysteresis and a healthy settling period.
