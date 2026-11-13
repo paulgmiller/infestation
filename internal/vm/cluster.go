@@ -25,14 +25,14 @@ import (
 
 type ClusterOptions struct {
 	Options
-	Domain                              string
-	HelperSourceRef, HelperBuilderImage string
-	AzureLocation, AzureVMSize          string
-	Provider                            string
-	Host, Site                          string
-	Size                                int
-	Agent                               bool
-	Init                                bool
+	Domain                                        string
+	HelperSourceRef, HelperBuilderImage           string
+	AzureLocation, AzureVMSize, AzureSubscription string
+	Provider                                      string
+	Host, Site                                    string
+	Size                                          int
+	Agent                                         bool
+	Init                                          bool
 }
 
 func clusterConfig(o ClusterOptions) cluster.Config {
@@ -86,6 +86,10 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 			return err
 		}
 		o.AzureLocation, o.AzureVMSize = in.Region, in.SKU
+		o.AzureSubscription, err = azureSubscription(o.AzureSubscription)
+		if err != nil {
+			return err
+		}
 	} else if o.Host == "" {
 		// Host identity must be shared by separate creates on the same machine.
 		// Never publish the workstation's raw machine-id in node profiles.
@@ -136,7 +140,11 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 		return err
 	}
 	if o.Provider == "azure" {
-		if err := createAzureNodes(ctx, o, dir, c.Nodes, out, executil.OSRunner{}); err != nil {
+		client, err := newAzureClient()
+		if err != nil {
+			return err
+		}
+		if err := createAzureNodes(ctx, o, dir, c.Nodes, out, client); err != nil {
 			return err
 		}
 	} else {
@@ -174,10 +182,6 @@ func groupProvider(dir string) (string, error) {
 		return provider, nil
 	} else if !os.IsNotExist(err) {
 		return "", err
-	}
-	// Old mixed state remains inspectable, but cannot trigger cross-provider actions.
-	if _, mixed := loadAzureNode(dir); mixed {
-		return "", fmt.Errorf("mixed provider state is read-only; use individual VM controls")
 	}
 	return "qemu", nil
 }

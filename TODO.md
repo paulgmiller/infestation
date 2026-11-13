@@ -26,11 +26,11 @@ provider boundary and current implementation.
   preparation and enrollment provider-independent. Preserve resource ownership
   checks, VM disks and private state across the SDK migrations; backward
   compatibility with retired interfaces/formats is not required before v1.
-- [ ] Replace Azure CLI subprocesses for provisioning and lifecycle operations
-  with the Azure Go SDK. Preserve VMSS behavior, resource identities, ownership
-  validation, saved state and disk semantics. Define authentication/subscription
-  selection, cancellation, long-running operation polling and retryable partial
-  failures. Test lifecycle behavior and refusal to modify unowned resources.
+- [ ] Live-verify typed Azure Go SDK provisioning and lifecycle: credentials and
+  subscription selection, VMSS bootstrap, power operations, paginated status,
+  canceled/failed creation evidence and retryable owned-group removal. Verify
+  disks survive stop and ownership mismatches prevent mutation. Run only when
+  provisioning is explicitly requested.
 - [ ] Replace handwritten QMP transport with digitalocean/go-qemu's direct socket
   client, without libvirt. Keep QEMU process launch and qemu-img disk preparation
   managed from Go. Preserve existing VM launch settings, private sockets, process
@@ -202,7 +202,16 @@ provider boundary and current implementation.
 - [ ] Test native arm64 first boot, enrollment and workloads.
 - [ ] Review guest build cost, availability, caching, provenance, update/rollback
   and diagnostics before enrollment.
-- [ ] Add VM compute providers once the shared contract and egress design are clear.
+- [ ] Add an AWS provider using the official Go SDK: EC2 Launch Templates and
+  Auto Scaling Groups behind the shared provider contract. Coordinate replacement
+  and scale-in with database decommissioning and explicit disk-retention rules.
+- [ ] Add a Google Cloud provider using the official Go SDK: Instance Templates
+  and Managed Instance Groups behind the shared provider contract. Coordinate
+  replacement and scale-in with database decommissioning and disk retention.
+- [ ] Add a Vultr VM provider behind the shared Go provider contract, with shared
+  Ignition/enrollment, explicit egress, ownership checks and disk lifecycle.
+  Establish the provider capabilities after the shared contract and egress design
+  are clear.
 - [ ] Design highly available public application ingress using outbound tunnels.
 
 Further questions: [research](docs/research-questions.md). Test evidence lives in

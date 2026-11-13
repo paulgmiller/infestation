@@ -8,8 +8,8 @@ Infestation is one Go module at this repository root. Read README.md first.
   provider should be supportable through Go libraries. Shared bootstrap
   must not depend on a provider's object storage, private DNS or remote execution.
 - `internal/cluster`, `pki`, and `ignition` are shared node preparation.
-  `internal/vm` currently manages QEMU processes/QMP and Azure ARM/CLI lifecycle.
-  The target is Azure Go SDK and go-qemu behind a shared Go provider contract.
+  `internal/vm` manages QEMU processes/QMP and Azure through typed Go SDK clients.
+  The remaining target is go-qemu behind a shared Go provider contract.
   Pulumi and its legacy deployment paths are retired. Preserve saved ownership,
   disks and private state; refactoring is not a reason to replace live resources.
 - CockroachDB runs as a TLS-enabled host Docker service, outside Kubernetes.

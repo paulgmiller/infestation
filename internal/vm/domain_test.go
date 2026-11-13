@@ -74,6 +74,7 @@ func TestDomainDiscoveryRejectsUnavailableOrAmbiguousIdentityWithoutLeakingOutpu
 }
 
 func TestMissingDomainFailsBeforeCreatingProviderState(t *testing.T) {
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "subscription")
 	t.Setenv("PATH", t.TempDir())
 	for _, provider := range []string{"qemu", "azure"} {
 		root := t.TempDir()

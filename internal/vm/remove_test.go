@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
@@ -113,23 +112,11 @@ func TestQEMURemovalRejectsForeignStateBeforeMutation(t *testing.T) {
 	}
 }
 
-type removalRunner struct {
-	azureRunner
-	failDelete bool
-}
-
-func (r *removalRunner) Run(ctx context.Context, name string, args ...string) executil.Result {
-	result := r.azureRunner.Run(ctx, name, args...)
-	if len(args) > 1 && args[0] == "group" && args[1] == "delete" && r.failDelete {
-		return executil.Result{Code: 1}
-	}
-	return result
-}
 func TestAzureRemovalOwnershipRetryAndFailure(t *testing.T) {
 	for _, scenario := range []string{"success", "absent", "foreign", "failure", "provider", "invalid-record"} {
 		t.Run(scenario, func(t *testing.T) {
 			o, dir := removalState(t, "azure")
-			r := &removalRunner{azureRunner: azureRunner{exists: true, owner: "pool"}}
+			r := &azureFake{exists: true, owner: "pool"}
 			switch scenario {
 			case "absent":
 				r.exists = false
@@ -148,7 +135,7 @@ func TestAzureRemovalOwnershipRetryAndFailure(t *testing.T) {
 				t.Fatal("wrong result", err)
 			}
 			calls := strings.Join(r.calls, "\n")
-			deleted := strings.Contains(calls, "az group delete --subscription sub --name pool-rg --yes")
+			deleted := strings.Contains(calls, "delete sub pool-rg pool")
 			if deleted != (scenario == "success" || scenario == "failure") {
 				t.Fatal("wrong deletion scope", calls)
 			}

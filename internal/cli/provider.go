@@ -52,7 +52,7 @@ func (p provider) requirements(action string) string {
 		if p.name == "vm" {
 			return "Run on the QEMU host that will hold the VM disks. Saves private provider state."
 		}
-		return "Requires Azure CLI login; saves resource identifiers and deployment inputs locally."
+		return "Uses Azure SDK credentials (DefaultAzureCredential); requires --subscription or AZURE_SUBSCRIPTION_ID. Saves resource identifiers and private SDK inputs locally."
 	}
 	if action == "wait" || action == "kubeconfig" {
 		return "Requires saved provider inventory and workstation tailnet access. Can run elsewhere with that inventory; Azure login is not required."
@@ -60,7 +60,7 @@ func (p provider) requirements(action string) string {
 	if p.name == "vm" {
 		return "Run on the original QEMU host with its saved provider state, VM disks and local control sockets."
 	}
-	text := "Requires saved provider state and Azure CLI login. Another machine can manage the VM only if that state is available there; resources are not discovered by name."
+	text := "Requires saved provider state and Azure SDK credentials (DefaultAzureCredential). Another machine can manage the VM only if that state is available there; resources are not discovered by name."
 	if action == "start" {
 		text += "\nAzure start currently ignores --wait; use azure wait separately for cluster readiness."
 	}

@@ -17,7 +17,7 @@ Every public command has `--help`, for example `infestation vm start --help` or
   they need its saved state, local disks and QMP control sockets. Copying metadata
   alone does not let another machine operate those local VMs.
 - Azure `start`, `stop`, `remove` and `status` need saved provider state plus an
-  authenticated Azure CLI. They can run from another machine if that state is
+  Azure SDK credentials (`DefaultAzureCredential`). They can run from another machine if that state is
   available there; the current CLI does not discover resources from the name or
   ownership tags alone. Tailnet membership does not grant Azure compute control.
 - `wait` and `kubeconfig` need the saved node inventory and tailnet connectivity
@@ -39,8 +39,9 @@ wait flag; use `azure wait` separately to check cluster readiness.
 | `<node>/machine.json`, `<node>/config.ign` | Saved QEMU launch settings and the VM's original first-boot profile. |
 | `<node>/qmp.sock`, PID/lock files | Local process control used by start, stop and status. These are not backups. |
 | `<node>/*.log`, diagnostic JSON and access reports | Boot/network troubleshooting and private VM-to-host reports. Access reports may contain Kubernetes admin credentials. |
-| `azure-scaleset.json` | Subscription, resource group, VMSS name, region, initial capacity and ownership identity. Start/stop/status target the entire owned set. Earlier single-VM state remains readable without resource migration. |
-| `azure-template.json`, `azure-parameters.json` | Saved Azure deployment request, retained for inspection and diagnosis. Parameters contain private Ignition. |
+| `azure-scaleset.json` | Subscription, resource group, VMSS name, region, initial capacity and ownership identity. Start/stop/status target the entire owned set. |
+| `azure-request.json` | Private typed Azure SDK objects saved before provisioning, including Ignition customData. |
+| `azure-progress.json` | Current/last provisioning stage, retained when an operation fails or is canceled. |
 | `azure-resources.json` | Recorded resource inventory for diagnosis. |
 | `pki/` (initializer only) | Workstation CA signing key, SQL admin credentials, node/client leaves and K3s token. Only permitted leaves and a separate one-hour SQL bootstrap credential enter the selected VM. Signing/admin keys remain here. |
 | `kubeconfig` | Admin kubeconfig retrieved by `wait` or `kubeconfig`, mode 0600. It can be retrieved again from an enrolled node. |
@@ -90,9 +91,9 @@ as terminating the emulator.
 Azure removal verifies the saved provider/VMSS identity and the resource group's
 `infestation-mixed-id` tag, then deletes the **entire dedicated resource group**.
 This includes the VMSS, its disks, network resources and anything subsequently
-added to that group. It waits for the Azure CLI deletion operation; the
-[Azure CLI group reference](https://learn.microsoft.com/en-us/cli/azure/group#az-group-delete)
-describes this operation. This is permanent data deletion; use `stop` when disks
+added to that group. It waits for the Azure SDK deletion poller;
+[SDK long-running operations](https://learn.microsoft.com/en-us/azure/developer/go/control-plane#long-running-operations)
+describe this pattern. This is permanent data deletion; use `stop` when disks
 must survive. Missing groups are already removed. Ownership failures and deletion
 errors retain all local evidence. Destructive removal requires current
 `provider.json` and `azure-scaleset.json`; older mixed/single-VM records are not

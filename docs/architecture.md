@@ -148,12 +148,18 @@ with sudo.
 
 ## Implementation boundary
 
-The tested VM CLI directly starts QEMU processes and provisions the Azure test
-through ARM and the Azure CLI, and currently uses a handwritten QMP transport.
-The unused Pulumi provider packages, entry points and legacy deployment/check
-paths have been removed, along with their Azure Blob/private-DNS bootstrap path.
-Migration to Azure Go SDK, go-qemu and a shared Go provider contract remains
-outstanding; current CLI behavior and saved provider state are retained.
+The VM CLI directly starts QEMU processes using a handwritten QMP transport.
+Azure uses typed Go SDK objects and clients for resource groups, NSGs, VNets and
+Uniform VMSS. Creation waits for each dependency before creating the next;
+start/stop/remove wait on SDK long-running operations. Status reads every page
+of instance views and prints only identity and health fields. No ARM deployment
+template or Azure CLI control-plane subprocess is used.
+
+Azure authentication uses DefaultAzureCredential. Create selects a subscription
+from `--subscription` or `AZURE_SUBSCRIPTION_ID`; lifecycle operations use the
+saved subscription. See [Azure authentication](azure-vmss.md#authentication).
+Migration to go-qemu and a shared Go provider contract remains outstanding.
+The Azure SDK path has local mocked transport coverage and needs live validation.
 
 Backward compatibility is not required before the v1 tag. Retired interfaces and
 profile formats can be removed without guards or migration support. Private
