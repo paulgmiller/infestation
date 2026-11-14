@@ -3,6 +3,12 @@
 /secrets/
 /pki/
 /output/
+# Private image exports, including exports outside state/.
+*.vhd
+*.vhdx
+*.qcow2
+*.ign
+/exports/
 /lab/
 # Preserve ignored credentials and VM disks from the retired Python scaffold.
 /flatcar-crdb-k3s/lab/

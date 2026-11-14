@@ -20,6 +20,7 @@ func (p provider) create() *cobra.Command {
 	f.StringVar(&o.HelperBuilderImage, "helper-builder-image", ignition.DefaultHelperBuilderImage, "pinned multiarchitecture Go builder")
 	f.DurationVar(&o.Wait, "wait", 0, "readiness deadline; 0 returns after provisioning; requires workstation tailnet access")
 	if p.name == "azure" {
+		f.StringVar(&o.AzureSubscription, "subscription", "", "Azure subscription ID (default: AZURE_SUBSCRIPTION_ID)")
 		f.StringVar(&o.AzureLocation, "region", azureconfig.DefaultRegion, "Azure region")
 		f.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
 	} else {

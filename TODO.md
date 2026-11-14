@@ -7,39 +7,27 @@ provider boundary and current implementation.
 
 ## Current priorities
 
-- [ ] Investigate why dead-store replica replacement did not move range r4's
-  voters onto shitbox before beeroach became unreachable. Map database node IDs
-  n1/n3 to the removed instances; reconstruct removal, join and failure times;
-  inspect the effective `server.time_until_store_dead`, eligible store capacity,
-  placement constraints and allocator/snapshot errors. Explain the pre-outage
-  replication-queue rejection of shitbox's s5 as `suspect` and the report of 27
-  failing replicas with no eligible destination. Do not assume a timeout
-  failed or that Kubernetes Ready establishes database replication health. See
-  [captured evidence](docs/bootstrap-troubleshooting.md#queenbee-join-blocked-by-lost-quorum-2026-11-13).
-- [ ] Gate normal `remove` on completed CockroachDB decommissioning while target
-  stores are still online: resolve and verify database node/store IDs against
-  owned instances, preflight the remaining capacity and placement constraints,
-  wait for replica relocation and completed decommissioning, and verify remaining
-  range health before deleting any compute/disks. Refuse unsafe shrink (including
-  only two eligible stores remaining with three-replica requirements); require
-  replacement capacity rather than silently reducing replication. Use authorized
-  operator credentials without depending on the creator workstation or embedding
-  long-lived admin keys in node profiles. Drain temporary `stop` targets without
-  permanently decommissioning them, and check the whole batch's quorum impact.
-  Define retryable checkpoints and a distinct explicit destructive teardown path
-  for an abandoned/unavailable cluster. See CockroachDB v26.2
-  [node shutdown](https://docs.cockroachlabs.com/docs/v26.2/node-shutdown) and
-  [replication controls](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones).
-- [ ] Define one shared Go provider contract for create/start/stop/status/remove,
-  persistent disks, private Ignition delivery and explicit egress. Keep node
-  preparation and enrollment provider-independent. Preserve resource ownership
-  checks, VM disks and private state across the SDK migrations; backward
-  compatibility with retired interfaces/formats is not required before v1.
-- [ ] Replace Azure CLI subprocesses for provisioning and lifecycle operations
-  with the Azure Go SDK. Preserve VMSS behavior, resource identities, ownership
-  validation, saved state and disk semantics. Define authentication/subscription
-  selection, cancellation, long-running operation polling and retryable partial
-  failures. Test lifecycle behavior and refusal to modify unowned resources.
+- [ ] Close the remaining historical gaps in the replica-replacement incident:
+  recover n1/n3/beeroach identity mappings and removal times, effective dead-store
+  and suspect settings, constraints/capacity, and which suspect predicate renewed
+  on s5 during the reported Ready interval. The captured logs establish suspect
+  destination rejection; source explains why a suspect store can still count as
+  live, but neither proves its root cause or continuous duration. Use the
+  [investigation and collection runbook](docs/quorum-investigation.md).
+- [ ] Live-verify the [normal removal guard](docs/removal.md): strict whole-batch
+  CockroachDB decommissioning, placement/capacity refusal, zero-replica completion
+  and healthy survivors before compute deletion. Implement safe retry reconciliation
+  when an earlier attempt has already stopped/deleted some verified targets;
+  current normal retries require every target identity reachable. Add whole-batch
+  quorum checks and temporary database draining for `stop` without permanent
+  decommissioning; public stop currently refuses until those guards exist.
+  Coordinate Kubernetes workload drain/API withdrawal and credential custody with
+  their separate TODOs. Never lower replication to bypass insufficient capacity.
+- [ ] Live-verify typed Azure Go SDK provisioning and lifecycle: credentials and
+  subscription selection, VMSS bootstrap, power operations, paginated status,
+  canceled/failed creation evidence and retryable owned-group removal. Verify
+  disks survive stop and ownership mismatches prevent mutation. Run only when
+  provisioning is explicitly requested.
 - [ ] Replace handwritten QMP transport with digitalocean/go-qemu's direct socket
   client, without libvirt. Keep QEMU process launch and qemu-img disk preparation
   managed from Go. Preserve existing VM launch settings, private sockets, process
@@ -236,16 +224,17 @@ provider boundary and current implementation.
 - [ ] Test native arm64 first boot, enrollment and workloads.
 - [ ] Review guest build cost, availability, caching, provenance, update/rollback
   and diagnostics before enrollment.
-- [ ] Add VM compute providers once the shared contract and egress design are clear.
+- [ ] Add an AWS provider using the official Go SDK: EC2 Launch Templates and
+  Auto Scaling Groups behind the shared provider contract. Coordinate replacement
+  and scale-in with database decommissioning and explicit disk-retention rules.
+- [ ] Add a Google Cloud provider using the official Go SDK: Instance Templates
+  and Managed Instance Groups behind the shared provider contract. Coordinate
+  replacement and scale-in with database decommissioning and disk retention.
+- [ ] Add a Vultr VM provider behind the shared Go provider contract, with shared
+  Ignition/enrollment, explicit egress, ownership checks and disk lifecycle.
+  Establish the provider capabilities after the shared contract and egress design
+  are clear.
 - [ ] Design highly available public application ingress using outbound tunnels.
 
 Further questions: [research](docs/research-questions.md). Test evidence lives in
 [the mixed-cluster record](docs/mixed-cluster.md), outside the TODO lists.
-
-## Completed
-
-- [x] Verify independent enrollment from separate workstations with two local VMs
-  (`--init --size 2`) and one Azure VM (`--size 1`), without shared local state.
-  Publish the updated helper source before testing; earlier helper refs lack the
-  enrollment endpoint/VMSS identity setup. Include a two-instance Azure VMSS,
-  delayed peers and joining while the initializer is down.

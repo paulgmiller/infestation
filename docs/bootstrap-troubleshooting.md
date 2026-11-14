@@ -85,3 +85,10 @@ automatically erase their votes or allow a minority to change range membership.
 See [node shutdown and dead-node handling](https://docs.cockroachlabs.com/docs/v26.2/node-shutdown)
 and [CockroachDB's self-repair design](https://github.com/cockroachdb/cockroach/blob/master/docs/design.md#self-repair).
 No stores, database membership or infrastructure were modified during diagnosis.
+
+The [source review and investigation runbook](quorum-investigation.md) records
+the incident timeline, exact v26.2.7 suspect predicates and outstanding evidence.
+In particular, a suspect store can count toward the allocator's reported live
+store count while being excluded as a replica destination. A read-only SQL
+collection recipe is included for a recurrence; it has not been run against a
+live database. The several-hour placement mystery remains open.

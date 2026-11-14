@@ -62,7 +62,8 @@ repository's GitHub branch protection or ruleset after the workflow is pushed.
 
 Builds and unit tests do not provision resources. Running VM commands needs the
 appropriate [QEMU/KVM packages and host access](docs/local-vm-prerequisites.md)
-or authenticated Azure CLI. Connectivity checks need
+or Azure SDK credentials. Azure create requires `--subscription ID` or
+`AZURE_SUBSCRIPTION_ID`; see [Azure authentication](docs/azure-vmss.md#authentication). Connectivity checks need
 kubectl and a reachable cluster.
 
 ## Create nodes
@@ -108,12 +109,16 @@ bin/infestation azure create --name cloud --size 1 \
   --tailnet-domain YOUR-TAILNET.ts.net --tailscale-auth-key-file secrets/tsauth
 ```
 
+For a manually managed Proxmox host, use `infestation proxmox export` to create
+a VHD and private enrollment profile. See the [manual Proxmox setup](docs/friend-vm.md#proxmox);
+this does not manage Proxmox lifecycle or generate helper scripts.
+
 The public CLI has the same lifecycle verbs for both providers: `create`,
 `start`, `stop`, `remove`, `status`, `wait` and `kubeconfig`. `vm status --netcheck`
 includes guest network diagnostics. The separate `infestation-smoke` CLI runs
 workload connectivity checks using Kubernetes credentials alone.
 Every command has `--help`. Local VM control runs on its QEMU host; Azure control
-requires saved provider state and Azure login. See [where commands run](docs/local-state.md#where-lifecycle-commands-run).
+requires saved provider state and Azure SDK credentials. See [where commands run](docs/local-state.md#where-lifecycle-commands-run).
 
 Only one founding node gets initialization authority. It waits for two database
 peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;
@@ -157,7 +162,7 @@ internal/pki/              certificates and token preparation
 internal/ignition/         first-boot files and systemd configuration
 internal/nodebootstrap/    node-local SQL setup and readiness
 internal/tailnet/          host enrollment and runtime address configuration
-internal/vm/               VM CLI and mixed-cluster prototype
+internal/vm/               QEMU lifecycle and typed Azure SDK provider
 internal/smoke/            workload connectivity and host latency checks
 ```
 

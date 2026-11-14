@@ -10,20 +10,25 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/paulgmiller/infestation/internal/executil"
-	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
-// RemoveGroup removes only compute owned by this saved provider group. Local
-// credentials and inventory survive both successful removal and failed retries.
-func RemoveGroup(ctx context.Context, o Options, provider string, deleteDisks bool, out io.Writer) error {
+// RemoveGroup gates compute deletion on database evacuation unless the
+// caller explicitly abandons the cluster. Ownership checks apply to both paths.
+func RemoveGroup(ctx context.Context, o Options, provider string, removal RemovalOptions, out io.Writer) error {
+	deleteDisks := removal.DeleteDisks
 	if provider == "azure" {
-		return removeAzureGroup(ctx, o, out, executil.OSRunner{})
+		client, err := newAzureClient()
+		if err != nil {
+			return err
+		}
+		return removeAzureGroup(ctx, o, removal, out, client)
 	}
 	if provider != "qemu" {
 		return fmt.Errorf("unknown compute provider")
@@ -72,6 +77,9 @@ func RemoveGroup(ctx context.Context, o Options, provider string, deleteDisks bo
 			}
 		}
 	}
+	if err := prepareRemoval(ctx, dir, c, removal, out, executil.OSRunner{}); err != nil {
+		return err
+	}
 	for _, n := range c.Nodes {
 		if err := removeMachine(ctx, Options{Name: n.Name, StateDir: dir}, deleteDisks); err != nil {
 			return fmt.Errorf("%s: %w", n.Name, err)
@@ -85,48 +93,49 @@ func RemoveGroup(ctx context.Context, o Options, provider string, deleteDisks bo
 	return nil
 }
 
-func removeAzureGroup(ctx context.Context, o Options, out io.Writer, runner executil.Runner) error {
-	dir, _, err := loadCluster(o)
+func removeAzureGroup(ctx context.Context, o Options, removal RemovalOptions, out io.Writer, client azureAPI) error {
+	dir, set, err := loadAzureSet(o)
 	if err != nil {
 		return err
 	}
-	// Require explicit provider metadata for destructive operations. Legacy mixed
-	// inventories are intentionally read-only rather than guessed from filenames.
-	var provider string
-	if err := fsutil.ReadJSON(filepath.Join(dir, "provider.json"), &provider); err != nil {
+	_, config, err := loadCluster(o)
+	if err != nil {
 		return err
 	}
-	if provider != "azure" {
-		return fmt.Errorf("Azure provider ownership mismatch")
-	}
-	var set azureScaleSet
-	if err := fsutil.ReadJSON(filepath.Join(dir, "azure-scaleset.json"), &set); err != nil {
+	owner, exists, err := client.Group(ctx, set)
+	if err != nil {
 		return err
 	}
-	if set.Name != o.Name || set.Group != o.Name+"-rg" || set.Ownership != o.Name || set.Subscription == "" || set.Capacity < 1 {
-		return fmt.Errorf("Azure scale-set ownership mismatch")
-	}
-	exists := runner.Run(ctx, "az", "group", "exists", "--subscription", set.Subscription, "--name", set.Group, "-o", "tsv")
-	if err := exists.Err("check Azure resource group"); err != nil {
-		return err
-	}
-	switch strings.TrimSpace(exists.Stdout) {
-	case "false":
+	if !exists {
 		fmt.Fprintln(out, set.Group, "already removed; local state retained")
 		return nil
-	case "true":
-	default:
-		return fmt.Errorf("unexpected Azure resource-group existence response")
 	}
-	owner := runner.Run(ctx, "az", "group", "show", "--subscription", set.Subscription, "--name", set.Group, "--query", "tags.\"infestation-mixed-id\"", "-o", "tsv")
-	if err := owner.Err("verify Azure resource-group ownership"); err != nil {
-		return err
-	}
-	if strings.TrimSpace(owner.Stdout) != set.Ownership {
+	if owner != set.Ownership {
 		return fmt.Errorf("Azure resource-group ownership mismatch")
 	}
-	result := runner.Run(ctx, "az", "group", "delete", "--subscription", set.Subscription, "--name", set.Group, "--yes")
-	if err := result.Err("remove Azure resource group"); err != nil {
+	if !removal.AbandonCluster {
+		instances, err := client.Instances(ctx, set)
+		if err != nil {
+			return err
+		}
+		names := make([]string, 0, len(instances))
+		for _, instance := range instances {
+			names = append(names, set.Name+"-"+instance.InstanceID)
+		}
+		expected := make([]string, 0, len(config.Nodes))
+		for _, node := range config.Nodes {
+			expected = append(expected, node.Name)
+		}
+		sort.Strings(names)
+		sort.Strings(expected)
+		if len(names) != set.Capacity || !equalStrings(names, expected) {
+			return fmt.Errorf("Azure instance inventory differs from owned database targets; resources retained")
+		}
+	}
+	if err := prepareRemoval(ctx, dir, config, removal, out, executil.OSRunner{}); err != nil {
+		return err
+	}
+	if err := client.DeleteGroup(ctx, set); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, set.Group, "removed, including compute, disks and networking; local state retained")
@@ -245,4 +254,16 @@ func removeMachine(ctx context.Context, o Options, deleteDisks bool) error {
 		}
 	}
 	return nil
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

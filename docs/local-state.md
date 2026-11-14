@@ -17,7 +17,7 @@ Every public command has `--help`, for example `infestation vm start --help` or
   they need its saved state, local disks and QMP control sockets. Copying metadata
   alone does not let another machine operate those local VMs.
 - Azure `start`, `stop`, `remove` and `status` need saved provider state plus an
-  authenticated Azure CLI. They can run from another machine if that state is
+  Azure SDK credentials (`DefaultAzureCredential`). They can run from another machine if that state is
   available there; the current CLI does not discover resources from the name or
   ownership tags alone. Tailnet membership does not grant Azure compute control.
 - `wait` and `kubeconfig` need the saved node inventory and tailnet connectivity
@@ -39,8 +39,9 @@ wait flag; use `azure wait` separately to check cluster readiness.
 | `<node>/machine.json`, `<node>/config.ign` | Saved QEMU launch settings and the VM's original first-boot profile. |
 | `<node>/qmp.sock`, PID/lock files | Local process control used by start, stop and status. These are not backups. |
 | `<node>/*.log`, diagnostic JSON and access reports | Boot/network troubleshooting and private VM-to-host reports. Access reports may contain Kubernetes admin credentials. |
-| `azure-scaleset.json` | Subscription, resource group, VMSS name, region, initial capacity and ownership identity. Start/stop/status target the entire owned set. Earlier single-VM state remains readable without resource migration. |
-| `azure-template.json`, `azure-parameters.json` | Saved Azure deployment request, retained for inspection and diagnosis. Parameters contain private Ignition. |
+| `azure-scaleset.json` | Subscription, resource group, VMSS name, region, initial capacity and ownership identity. Start/stop/status target the entire owned set. |
+| `azure-request.json` | Private typed Azure SDK objects saved before provisioning, including Ignition customData. |
+| `azure-progress.json` | Current/last provisioning stage, retained when an operation fails or is canceled. |
 | `azure-resources.json` | Recorded resource inventory for diagnosis. |
 | `pki/` (initializer only) | Workstation CA signing key, SQL admin credentials, node/client leaves and K3s token. Only permitted leaves and a separate one-hour SQL bootstrap credential enter the selected VM. Signing/admin keys remain here. |
 | `kubeconfig` | Admin kubeconfig retrieved by `wait` or `kubeconfig`, mode 0600. It can be retrieved again from an enrolled node. |
@@ -71,15 +72,21 @@ never print profiles, kubeconfigs or keys into logs or support messages.
 ## Remove owned compute
 
 ```sh
-infestation vm remove --name lab --state-dir state/vms
-infestation vm remove --name lab --state-dir state/vms --delete-disks
-infestation azure remove --name cloud --state-dir state/vms
+infestation vm remove --name lab --state-dir state/vms \
+  --database-host survivor.example.ts.net:26257 --database-certs-dir /private/operator-certs
+infestation azure remove --name cloud --state-dir state/vms \
+  --database-host survivor.example.ts.net:26257 --database-certs-dir /private/operator-certs
 ```
 
-QEMU removal terminates each owned emulator through its private QMP monitor,
+Normal removal first verifies the whole batch's database identities, strict
+CockroachDB decommissioning and healthy survivors. Intentional abandoned-cluster
+teardown requires `--abandon-cluster`; see [removal](removal.md) for prerequisites,
+checkpoint behavior and limitations. Public `stop` refuses until its separate
+whole-batch quorum and temporary-drain guard exists.
+
+After that gate, QEMU removal terminates each owned emulator through its private QMP monitor,
 waits for the verified process to exit, and removes its socket and PID file.
-This is a forced guest power-off; use `stop` first when a graceful shutdown is
-needed. Disks are preserved by default and `start` can reuse them. The explicit
+The QMP action terminates the guest after database evacuation. Disks are preserved by default and `start` can reuse them. The explicit
 `--delete-disks` option permanently removes only each owned `disk.qcow2` overlay,
 including its database data and enrolled identity. Shared base images, profiles,
 reports, credentials and inventory remain. An unavailable monitor with a live
@@ -90,27 +97,26 @@ as terminating the emulator.
 Azure removal verifies the saved provider/VMSS identity and the resource group's
 `infestation-mixed-id` tag, then deletes the **entire dedicated resource group**.
 This includes the VMSS, its disks, network resources and anything subsequently
-added to that group. It waits for the Azure CLI deletion operation; the
-[Azure CLI group reference](https://learn.microsoft.com/en-us/cli/azure/group#az-group-delete)
-describes this operation. This is permanent data deletion; use `stop` when disks
-must survive. Missing groups are already removed. Ownership failures and deletion
+added to that group. It waits for the Azure SDK deletion poller;
+[SDK long-running operations](https://learn.microsoft.com/en-us/azure/developer/go/control-plane#long-running-operations)
+describe this pattern. This is permanent data deletion. Missing groups are already removed. Ownership failures and deletion
 errors retain all local evidence. Destructive removal requires current
 `provider.json` and `azure-scaleset.json`; older mixed/single-VM records are not
 accepted as authority to delete a resource group.
 
 Both commands retain the private provider directory, including initializer
-CA/token material. Removal can be retried after partial failure. A fresh create
+CA/token material. Normal retry still requires reachable verified database
+targets; offline-target partial-removal reconciliation remains outstanding. A fresh create
 still refuses that existing directory: preserve it for recovery and use a new
-name, or deliberately archive it before reusing the name. Neither removal drains
-CockroachDB/Kubernetes members nor deregisters tailnet devices, routes or Services.
-These commands are compute teardown, not a cluster member replacement protocol.
+name, or deliberately archive it before reusing the name. Kubernetes workload draining and tailnet device/route/Service cleanup remain
+outstanding. Database decommissioning does not establish application availability.
 
 ### Local validation
 
 Removal is covered by `go test ./...` and `go vet ./...`. QEMU tests simulate a
 QMP monitor and a disposable local process; they cover exit before disk deletion,
 stale control files, repeated removal, interrupted creation, identity/provider
-mismatches, reused PIDs and start locks. Azure tests use a mocked CLI runner to
+mismatches, reused PIDs and start locks. Azure tests use a fake typed SDK client and mocked HTTP transport to
 check subscription/group scope, ownership rejection, absent groups and deletion
 failure with retained state. These checks do not provision or delete real QEMU
 VMs or Azure resources; live teardown remains unverified.

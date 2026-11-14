@@ -25,14 +25,14 @@ import (
 
 type ClusterOptions struct {
 	Options
-	Domain                              string
-	HelperSourceRef, HelperBuilderImage string
-	AzureLocation, AzureVMSize          string
-	Provider                            string
-	Host, Site                          string
-	Size                                int
-	Agent                               bool
-	Init                                bool
+	Domain                                        string
+	HelperSourceRef, HelperBuilderImage           string
+	AzureLocation, AzureVMSize, AzureSubscription string
+	Provider                                      string
+	Host, Site                                    string
+	Size                                          int
+	Agent                                         bool
+	Init                                          bool
 }
 
 func clusterConfig(o ClusterOptions) cluster.Config {
@@ -66,8 +66,9 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	if o.Provider == "" {
 		o.Provider = "qemu"
 	}
-	if o.Provider != "qemu" && o.Provider != "azure" {
-		return fmt.Errorf("unknown compute provider")
+	provider, err := ProviderFor(o.Provider)
+	if err != nil {
+		return err
 	}
 	for _, value := range []string{o.Host, o.Site} {
 		if value != "" && !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(value) {
@@ -86,6 +87,10 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 			return err
 		}
 		o.AzureLocation, o.AzureVMSize = in.Region, in.SKU
+		o.AzureSubscription, err = azureSubscription(o.AzureSubscription)
+		if err != nil {
+			return err
+		}
 	} else if o.Host == "" {
 		// Host identity must be shared by separate creates on the same machine.
 		// Never publish the workstation's raw machine-id in node profiles.
@@ -135,24 +140,8 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	if err := prepareCluster(ctx, o, dir, c, out); err != nil {
 		return err
 	}
-	if o.Provider == "azure" {
-		if err := createAzureNodes(ctx, o, dir, c.Nodes, out, executil.OSRunner{}); err != nil {
-			return err
-		}
-	} else {
-		for _, n := range c.Nodes {
-			raw, err := os.ReadFile(filepath.Join(dir, "output", n.Name+".ign"))
-			if err != nil {
-				return err
-			}
-			raw, err = addClusterChannels(raw)
-			if err != nil {
-				return err
-			}
-			if err := Create(ctx, Options{Name: n.Name, StateDir: dir, BaseImage: base, Accel: o.Accel, Network: "slirp", MemoryMiB: o.MemoryMiB, profile: raw}, out); err != nil {
-				return err
-			}
-		}
+	if err := provider.Create(ctx, preparedComputeGroup(o, dir, base, c.Nodes), out); err != nil {
+		return err
 	}
 	fmt.Fprintln(out, "Provider state:", dir)
 	if o.Init && o.Size < 3 {
@@ -174,10 +163,6 @@ func groupProvider(dir string) (string, error) {
 		return provider, nil
 	} else if !os.IsNotExist(err) {
 		return "", err
-	}
-	// Old mixed state remains inspectable, but cannot trigger cross-provider actions.
-	if _, mixed := loadAzureNode(dir); mixed {
-		return "", fmt.Errorf("mixed provider state is read-only; use individual VM controls")
 	}
 	return "qemu", nil
 }

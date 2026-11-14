@@ -22,7 +22,10 @@ public node address or an external ingress load balancer. A cloud can require
 its own VNet/subnet for a NIC without making that network the cluster transport.
 Egress infrastructure is provider-specific and remains an explicit design choice.
 
-Provider implementations should share a small Go contract around these operations.
+Provider implementations share the `internal/vm.ComputeProvider` Go contract
+around these operations. Shared preparation passes a private `PreparedGroup` to
+the selected adapter; lifecycle dispatch uses the same provider contract. See
+[provider contract](provider-contract.md) for disk, Ignition and egress semantics.
 Cluster topology, credentials and bootstrap should not depend on a provider's
 managed identity, object storage, private DNS or remote command service.
 Changes must preserve resource identities, disks and ownership of saved state.
@@ -148,12 +151,21 @@ with sudo.
 
 ## Implementation boundary
 
-The tested VM CLI directly starts QEMU processes and provisions the Azure test
-through ARM and the Azure CLI, and currently uses a handwritten QMP transport.
-The unused Pulumi provider packages, entry points and legacy deployment/check
-paths have been removed, along with their Azure Blob/private-DNS bootstrap path.
-Migration to Azure Go SDK, go-qemu and a shared Go provider contract remains
-outstanding; current CLI behavior and saved provider state are retained.
+The VM CLI directly starts QEMU processes using a handwritten QMP transport.
+Azure uses typed Go SDK objects and clients for resource groups, NSGs, VNets and
+Uniform VMSS. Creation waits for each dependency before creating the next;
+start/stop/remove wait on SDK long-running operations. Status reads every page
+of instance views and prints only identity and health fields. No ARM deployment
+template or Azure CLI control-plane subprocess is used.
+
+Azure authentication uses DefaultAzureCredential. Create selects a subscription
+from `--subscription` or `AZURE_SUBSCRIPTION_ID`; lifecycle operations use the
+saved subscription. See [Azure authentication](azure-vmss.md#authentication).
+The shared Go provider contract is implemented; migration to go-qemu remains
+outstanding. Public stop refuses until its whole-batch quorum and temporary drain
+guards are implemented. Normal remove gates SDK deletion on verified database
+decommissioning; explicit abandoned-cluster teardown retains ownership checks.
+The Azure SDK path has local mocked transport coverage and needs live validation.
 
 Backward compatibility is not required before the v1 tag. Retired interfaces and
 profile formats can be removed without guards or migration support. Private

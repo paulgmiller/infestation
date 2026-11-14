@@ -29,6 +29,7 @@ func newRootCommand() *cobra.Command {
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
 	root.AddCommand(provider{name: "vm"}.command(), provider{name: "azure"}.command())
+	root.AddCommand(proxmoxCommand())
 	return root
 }
 

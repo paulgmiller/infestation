@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/fsutil"
 	"github.com/paulgmiller/infestation/internal/ignition"
 	"github.com/paulgmiller/infestation/internal/nodebootstrap"
@@ -16,25 +15,23 @@ import (
 	"testing"
 )
 
-func TestMixedAzureUsesOnlyComputeDiskAndPrivateNetwork(t *testing.T) {
-	set := azureScaleSet{Name: "pool", Location: "westus2", Capacity: 2}
-	template := azureScaleSetTemplate(set, "Standard_B2s", "ssh-rsa disposable")
-	raw, _ := json.Marshal(template)
+func TestAzureUsesOnlyComputeDiskAndPrivateNetwork(t *testing.T) {
+	set := azureScaleSet{Name: "pool", Subscription: "sub", Group: "pool-rg", Location: "westus2", Capacity: 2}
+	request := azureResources(set, "Standard_B2s", "ssh-rsa disposable", "secret-profile")
+	raw, _ := json.Marshal(request)
 	text := string(raw)
 	for _, forbidden := range []string{"Microsoft.Storage", "publicIPAddresses", "loadBalancers", "virtualMachines/extensions", "identity", "sshKeys", "adminPassword"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatal("unexpected Azure dependency", forbidden)
 		}
 	}
-	if !strings.Contains(text, `"defaultOutboundAccess":true`) || !strings.Contains(text, `"direction":"Inbound"`) || !strings.Contains(text, `"access":"Deny"`) {
-		t.Fatal("missing outbound-only network")
+	subnet := request.Network.Properties.Subnets[0].Properties
+	if !*subnet.DefaultOutboundAccess || *subnet.NetworkSecurityGroup.ID != azureNetworkID(set, "networkSecurityGroups", "pool-nsg") {
+		t.Fatal("missing owned egress subnet/NSG")
 	}
-	if !strings.Contains(text, `"type":"secureString"`) {
-		t.Fatal("customData not a secure template parameter")
-	}
-	c := clusterConfig(ClusterOptions{Size: 3, Init: true, Options: Options{Name: "mixed"}, Domain: "example.ts.net", AzureLocation: "westus2"})
-	if len(c.Nodes) != 3 || !c.Tailscale.SSH || c.APITailnetHostname != "k8s-api.example.ts.net" {
-		t.Fatal("wrong mixed topology")
+	rule := request.SecurityGroup.Properties.SecurityRules[0].Properties
+	if string(*rule.Direction) != "Inbound" || string(*rule.Access) != "Deny" {
+		t.Fatal("missing inbound deny")
 	}
 }
 
@@ -53,37 +50,23 @@ func TestCreateDefaultsTailscaleVersionAndExplainsHostDomain(t *testing.T) {
 }
 
 func TestAzureScaleSetCapacityAndPrivateProfile(t *testing.T) {
-	template := azureScaleSetTemplate(azureScaleSet{Name: "pool", Location: "westus2", Capacity: 2}, "Standard_B2s", "ssh-rsa disposable")
-	resources := template["resources"].([]any)
-	if len(resources) != 3 {
-		t.Fatal("expected NSG, VNet and one scale set")
+	request := azureResources(azureScaleSet{Name: "pool", Subscription: "sub", Group: "pool-rg", Location: "westus2", Capacity: 2}, "Standard_B2s", "ssh-rsa disposable", "shared-profile")
+	set := request.ScaleSet
+	if *set.SKU.Capacity != 2 || string(*set.Placement.ZonePlacementPolicy) != "Auto" || *set.Properties.SinglePlacementGroup {
+		t.Fatal("capacity or zone placement changed")
 	}
-	set := resources[2].(map[string]any)
-	if set["type"] != "Microsoft.Compute/virtualMachineScaleSets" || set["sku"].(map[string]any)["capacity"] != 2 {
-		t.Fatal("size is not VMSS capacity")
+	if len(set.Zones) != 0 || set.Properties.ZoneBalance != nil {
+		t.Fatal("explicit zones/balancing")
 	}
-	properties := set["properties"].(map[string]any)
-	if set["apiVersion"] != "2026-03-01" || set["placement"].(map[string]any)["zonePlacementPolicy"] != "Auto" || properties["singlePlacementGroup"] != false {
-		t.Fatal("missing automatic Azure zone placement")
+	properties := set.Properties
+	if string(*properties.OrchestrationMode) != "Uniform" || *properties.Overprovision || string(*properties.UpgradePolicy.Mode) != "Manual" {
+		t.Fatal("unexpected lifecycle")
 	}
-	if _, ok := set["zones"]; ok {
-		t.Fatal("zone numbers must be selected by Azure")
+	profile := properties.VirtualMachineProfile
+	if *profile.OSProfile.CustomData != "shared-profile" || profile.StorageProfile.OSDisk.DeleteOption != nil {
+		t.Fatal("shared profile or disk lifecycle changed")
 	}
-	if _, ok := properties["zoneBalance"]; ok {
-		t.Fatal("must not impose explicit zone balancing")
-	}
-	if properties["orchestrationMode"] != "Uniform" || properties["overprovision"] != false || properties["upgradePolicy"].(map[string]any)["mode"] != "Manual" {
-		t.Fatal("unexpected scale-set lifecycle")
-	}
-	profile := properties["virtualMachineProfile"].(map[string]any)
-	if profile["osProfile"].(map[string]any)["customData"] != "[parameters('customData')]" {
-		t.Fatal("profile is not shared")
-	}
-	if _, ok := profile["storageProfile"].(map[string]any)["osDisk"].(map[string]any)["deleteOption"]; ok {
-		t.Fatal("Uniform VMSS must not use Flexible-only disk deleteOption")
-	}
-
-	raw, _ := json.Marshal(template)
+	raw, _ := json.Marshal(set)
 	for _, forbidden := range []string{"loadBalancers", "publicIPAddressConfiguration", "Microsoft.Storage", "privateDnsZones", "automaticRepairsPolicy", "autoscaleSettings"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatal("unexpected dependency/automation", forbidden)
@@ -91,31 +74,54 @@ func TestAzureScaleSetCapacityAndPrivateProfile(t *testing.T) {
 	}
 }
 
-type azureRunner struct {
-	calls      []string
-	owner      string
-	exists     bool
-	failDeploy bool
+type azureFake struct {
+	calls                          []string
+	owner                          string
+	exists, failDeploy, failDelete bool
+	groupError                     error
 }
 
-func (r *azureRunner) Run(_ context.Context, name string, args ...string) executil.Result {
-	call := name + " " + strings.Join(args, " ")
-	r.calls = append(r.calls, call)
-	switch {
-	case strings.HasPrefix(call, "az account show"):
-		return executil.Result{Stdout: "subscription\n"}
-	case strings.HasPrefix(call, "az group exists"):
-		return executil.Result{Stdout: fmt.Sprintf("%t\n", r.exists)}
-	case strings.HasPrefix(call, "az group show"):
-		return executil.Result{Stdout: r.owner}
-	case strings.HasPrefix(call, "az deployment group create") && r.failDeploy:
-		return executil.Result{Code: 1}
-	case strings.HasPrefix(call, "az resource list"):
-		return executil.Result{Stdout: "[]"}
-	default:
-		return executil.Result{}
-	}
+func (r *azureFake) call(op string, set azureScaleSet) {
+	r.calls = append(r.calls, op+" "+set.Subscription+" "+set.Group+" "+set.Name)
 }
+func (r *azureFake) Group(_ context.Context, set azureScaleSet) (string, bool, error) {
+	r.call("get", set)
+	return r.owner, r.exists, r.groupError
+}
+func (r *azureFake) CreateGroup(_ context.Context, set azureScaleSet) error {
+	r.call("create", set)
+	return nil
+}
+func (r *azureFake) Provision(_ context.Context, set azureScaleSet, _ azureRequest, stage func(string) error) error {
+	r.call("provision", set)
+	if err := stage("Creating scale set"); err != nil {
+		return err
+	}
+	if r.failDeploy {
+		return fmt.Errorf("provision failed")
+	}
+	return nil
+}
+func (r *azureFake) Resources(_ context.Context, set azureScaleSet) ([]azureResource, error) {
+	r.call("resources", set)
+	return []azureResource{}, nil
+}
+func (r *azureFake) Power(_ context.Context, set azureScaleSet, action string) error {
+	r.call(action, set)
+	return nil
+}
+func (r *azureFake) Instances(_ context.Context, set azureScaleSet) ([]azureInstance, error) {
+	r.call("instances", set)
+	return []azureInstance{}, nil
+}
+func (r *azureFake) DeleteGroup(_ context.Context, set azureScaleSet) error {
+	r.call("delete", set)
+	if r.failDelete {
+		return fmt.Errorf("delete failed")
+	}
+	return nil
+}
+
 func TestAzureCreateDeploysOneScaleSetAndPreservesFailureState(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		root := t.TempDir()
@@ -123,22 +129,26 @@ func TestAzureCreateDeploysOneScaleSetAndPreservesFailureState(t *testing.T) {
 		if err := fsutil.WriteFile(filepath.Join(root, "output", "pool-0.ign"), []byte("shared-private-profile"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		r := &azureRunner{failDeploy: fail}
-		err := createAzureNodes(context.Background(), ClusterOptions{Options: Options{Name: "pool"}, AzureLocation: "westus2", AzureVMSize: "Standard_B2s"}, root, c.Nodes, io.Discard, r)
+		r := &azureFake{failDeploy: fail}
+		err := createAzureNodes(context.Background(), ClusterOptions{Options: Options{Name: "pool"}, AzureLocation: "westus2", AzureVMSize: "Standard_B2s", AzureSubscription: "subscription"}, root, c.Nodes, io.Discard, r)
 		if (err != nil) != fail {
 			t.Fatal("wrong deployment outcome", err)
 		}
 		calls := strings.Join(r.calls, "\n")
-		if strings.Count(calls, "az group create") != 1 || strings.Count(calls, "az deployment group create") != 1 || strings.Contains(calls, "az vm create") {
+		if strings.Count(calls, "create subscription pool-rg pool") != 1 || strings.Count(calls, "provision subscription pool-rg pool") != 1 {
 			t.Fatal("pool not deployed once", calls)
 		}
 		var set azureScaleSet
 		if err := fsutil.ReadJSON(filepath.Join(root, "azure-scaleset.json"), &set); err != nil || set.Capacity != 2 {
 			t.Fatal("capacity/ownership state missing", err)
 		}
-		var parameters map[string]any
-		if err := fsutil.ReadJSON(filepath.Join(root, "azure-parameters.json"), &parameters); err != nil || len(parameters) != 1 {
-			t.Fatal("expected one shared private profile", err)
+		var request azureRequest
+		if err := fsutil.ReadJSON(filepath.Join(root, "azure-request.json"), &request); err != nil || request.ScaleSet.Properties.VirtualMachineProfile.OSProfile.CustomData == nil {
+			t.Fatal("private request missing", err)
+		}
+		info, err := os.Stat(filepath.Join(root, "azure-request.json"))
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatal("request not private", err)
 		}
 		if fail && strings.Contains(calls, "delete") {
 			t.Fatal("failed provisioning destroyed evidence")
@@ -146,6 +156,7 @@ func TestAzureCreateDeploysOneScaleSetAndPreservesFailureState(t *testing.T) {
 	}
 }
 func TestAzureScaleSetLifecycleChecksOwnershipAndTargetsWholeSet(t *testing.T) {
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "different-subscription")
 	root, err := os.MkdirTemp("", "vmss-")
 	if err != nil {
 		t.Fatal(err)
@@ -159,17 +170,20 @@ func TestAzureScaleSetLifecycleChecksOwnershipAndTargetsWholeSet(t *testing.T) {
 	if err := fsutil.WriteJSON(filepath.Join(dir, "azure-scaleset.json"), azureScaleSet{Subscription: "subscription", Group: "pool-rg", Name: "pool", Ownership: "pool", Capacity: 2}); err != nil {
 		t.Fatal(err)
 	}
+	if err := fsutil.WriteJSON(filepath.Join(dir, "provider.json"), "azure"); err != nil {
+		t.Fatal(err)
+	}
 	for _, action := range []string{"start", "stop", "status"} {
-		r := &azureRunner{owner: "pool"}
+		r := &azureFake{owner: "pool", exists: true}
 		if err := azureActions(context.Background(), Options{Name: "pool", StateDir: root}, action, io.Discard, r); err != nil {
 			t.Fatal(err)
 		}
 		calls := strings.Join(r.calls, "\n")
-		if len(r.calls) != 2 || !strings.Contains(calls, "az vmss ") || strings.Contains(calls, "--instance-ids") {
+		if len(r.calls) != 2 || !strings.Contains(calls, "subscription pool-rg pool") {
 			t.Fatal("lifecycle did not target the whole owned pool", calls)
 		}
 	}
-	r := &azureRunner{owner: "somebody-else"}
+	r := &azureFake{owner: "somebody-else", exists: true}
 	if err := azureActions(context.Background(), Options{Name: "pool", StateDir: root}, "stop", io.Discard, r); err == nil || len(r.calls) != 1 {
 		t.Fatal("foreign resource group was operated")
 	}
@@ -229,5 +243,38 @@ func TestSharedScaleSetProfileBuildsIdentityBeforeEnrollment(t *testing.T) {
 	}
 	if !identity || !dependency || !dynamicAddress {
 		t.Fatal("VMSS identity must gate tailnet enrollment and database addressing")
+	}
+}
+
+func TestAzureMissingSubscriptionFailsBeforeStateOrExternalCommands(t *testing.T) {
+	t.Setenv("AZURE_SUBSCRIPTION_ID", "")
+	t.Setenv("PATH", t.TempDir())
+	root := t.TempDir()
+	err := CreateCluster(context.Background(), ClusterOptions{Options: Options{Name: "pool", StateDir: root}, Provider: "azure", Size: 1}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--subscription") {
+		t.Fatalf("missing subscription not explained: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("invalid subscription created state", err)
+	}
+}
+
+func TestAzureCreateRefusesExistingOrUnreadableGroupsBeforeMutation(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		root := t.TempDir()
+		fake := &azureFake{exists: true, owner: "somebody-else"}
+		if unreadable {
+			fake.groupError = fmt.Errorf("access denied")
+		}
+		nodes := clusterConfig(ClusterOptions{Options: Options{Name: "pool"}, Size: 1, Domain: "example.ts.net"}).Nodes
+		err := createAzureNodes(context.Background(), ClusterOptions{Options: Options{Name: "pool"}, AzureSubscription: "subscription"}, root, nodes, io.Discard, fake)
+		if err == nil || len(fake.calls) != 1 {
+			t.Fatal("existing/unreadable group was mutated", err, fake.calls)
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != 0 {
+			t.Fatal("refused create wrote provider inputs", err)
+		}
 	}
 }

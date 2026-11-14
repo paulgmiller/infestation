@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,6 +136,23 @@ func TestRemoveHelpExplainsDataLifecycle(t *testing.T) {
 		out.Reset()
 		if err := Run(context.Background(), []string{provider, "remove"}, &out); err == nil || !strings.Contains(err.Error(), "name") {
 			t.Fatal("remove permits missing name", err)
+		}
+	}
+}
+
+func TestRemoveUsesGuestCredentialsWithoutWorkstationDatabaseFlags(t *testing.T) {
+	for _, provider := range []string{"vm", "azure"} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), []string{provider, "remove", "--help"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		for _, flag := range []string{"database-host", "database-certs-dir", "cockroach-binary"} {
+			if strings.Contains(out.String(), "--"+flag) {
+				t.Fatal("obsolete workstation credential flag advertised", flag)
+			}
+			if err := Run(context.Background(), []string{provider, "remove", "--name", "pool", "--" + flag, "obsolete"}, io.Discard); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+				t.Fatal("obsolete credential path accepted", flag, err)
+			}
 		}
 	}
 }

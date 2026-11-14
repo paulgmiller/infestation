@@ -52,7 +52,7 @@ func (p provider) requirements(action string) string {
 		if p.name == "vm" {
 			return "Run on the QEMU host that will hold the VM disks. Saves private provider state."
 		}
-		return "Requires Azure CLI login; saves resource identifiers and deployment inputs locally."
+		return "Uses Azure SDK credentials (DefaultAzureCredential); requires --subscription or AZURE_SUBSCRIPTION_ID. Saves resource identifiers and private SDK inputs locally."
 	}
 	if action == "wait" || action == "kubeconfig" {
 		return "Requires saved provider inventory and workstation tailnet access. Can run elsewhere with that inventory; Azure login is not required."
@@ -60,7 +60,7 @@ func (p provider) requirements(action string) string {
 	if p.name == "vm" {
 		return "Run on the original QEMU host with its saved provider state, VM disks and local control sockets."
 	}
-	text := "Requires saved provider state and Azure CLI login. Another machine can manage the VM only if that state is available there; resources are not discovered by name."
+	text := "Requires saved provider state and Azure SDK credentials (DefaultAzureCredential). Another machine can manage the VM only if that state is available there; resources are not discovered by name."
 	if action == "start" {
 		text += "\nAzure start currently ignores --wait; use azure wait separately for cluster readiness."
 	}
@@ -68,10 +68,20 @@ func (p provider) requirements(action string) string {
 }
 
 func (p provider) runAction(ctx context.Context, o vm.ClusterOptions, action string, out io.Writer) error {
-	if p.name == "azure" {
-		return vm.AzureAction(ctx, o.Options, action, out)
+	compute, err := vm.ProviderFor(o.Provider)
+	if err != nil {
+		return err
 	}
-	return vm.ClusterAction(ctx, o.Options, action, out)
+	switch action {
+	case "start":
+		return compute.Start(ctx, o.Options, out)
+	case "stop":
+		return compute.Stop(ctx, o.Options, out)
+	case "status":
+		return compute.Status(ctx, o.Options, out)
+	default:
+		return fmt.Errorf("unknown compute action %q", action)
+	}
 }
 
 func (p provider) start() *cobra.Command {
@@ -91,18 +101,24 @@ func (p provider) stop() *cobra.Command {
 	return cmd
 }
 func (p provider) remove() *cobra.Command {
-	var deleteDisks bool
+	var removal vm.RemovalOptions
 	description := "Terminate owned QEMU VMs and clean control files; preserve disks and private state"
 	if p.name == "azure" {
 		description = "Delete the owned Azure resource group, including VMSS, disks and networking; preserve local state"
 	}
 	cmd, _ := p.nodeCommand("remove", description, func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
-		return vm.RemoveGroup(ctx, o.Options, o.Provider, deleteDisks, out)
+		compute, err := vm.ProviderFor(o.Provider)
+		if err != nil {
+			return err
+		}
+		return compute.Remove(ctx, o.Options, removal, out)
 	})
 	if p.name == "vm" {
-		cmd.Flags().BoolVar(&deleteDisks, "delete-disks", false, "also permanently delete owned QEMU disk overlays (base images and private state are retained)")
+		cmd.Flags().BoolVar(&removal.DeleteDisks, "delete-disks", false, "also permanently delete owned QEMU disk overlays (base images and private state are retained)")
 	}
-	cmd.Long += "\nRemoval does not drain cluster members or remove tailnet registrations."
+	cmd.Flags().BoolVar(&removal.AbandonCluster, "abandon-cluster", false, "explicitly skip database safety checks for teardown of an abandoned cluster (may lose data)")
+	cmd.Flags().DurationVar(&removal.Timeout, "decommission-timeout", 30*time.Minute, "deadline for verified database evacuation before deleting compute")
+	cmd.Long += "\nNormal removal asks one verified guest to retire the entire database batch using its existing node credentials over Tailscale SSH. It requires a current retirement helper on every target, strict decommissioning and healthy replacement capacity. Use --abandon-cluster only for intentional destructive teardown. Kubernetes workload draining and cleanup of tailnet registrations remain unimplemented."
 	return cmd
 }
 func (p provider) status() *cobra.Command {

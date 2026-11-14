@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
@@ -59,7 +58,7 @@ func TestQEMURemovalRetainsPrivateStateAndOptionalDisks(t *testing.T) {
 		socket.(*net.UnixListener).SetUnlinkOnClose(false)
 		socket.Close()
 		for range 2 {
-			if err := RemoveGroup(context.Background(), o, "qemu", deleteDisks, io.Discard); err != nil {
+			if err := RemoveGroup(context.Background(), o, "qemu", RemovalOptions{DeleteDisks: deleteDisks, AbandonCluster: true}, io.Discard); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -103,7 +102,7 @@ func TestQEMURemovalRejectsForeignStateBeforeMutation(t *testing.T) {
 			case "pid":
 				os.WriteFile(filepath.Join(node, "qemu.pid"), []byte(strconv.Itoa(os.Getpid())), 0600)
 			}
-			if err := RemoveGroup(context.Background(), o, "qemu", true, io.Discard); err == nil {
+			if err := RemoveGroup(context.Background(), o, "qemu", RemovalOptions{DeleteDisks: true, AbandonCluster: true}, io.Discard); err == nil {
 				t.Fatal("unsafe removal accepted")
 			}
 			if _, err := os.Stat(filepath.Join(node, "disk.qcow2")); err != nil {
@@ -113,23 +112,11 @@ func TestQEMURemovalRejectsForeignStateBeforeMutation(t *testing.T) {
 	}
 }
 
-type removalRunner struct {
-	azureRunner
-	failDelete bool
-}
-
-func (r *removalRunner) Run(ctx context.Context, name string, args ...string) executil.Result {
-	result := r.azureRunner.Run(ctx, name, args...)
-	if len(args) > 1 && args[0] == "group" && args[1] == "delete" && r.failDelete {
-		return executil.Result{Code: 1}
-	}
-	return result
-}
 func TestAzureRemovalOwnershipRetryAndFailure(t *testing.T) {
 	for _, scenario := range []string{"success", "absent", "foreign", "failure", "provider", "invalid-record"} {
 		t.Run(scenario, func(t *testing.T) {
 			o, dir := removalState(t, "azure")
-			r := &removalRunner{azureRunner: azureRunner{exists: true, owner: "pool"}}
+			r := &azureFake{exists: true, owner: "pool"}
 			switch scenario {
 			case "absent":
 				r.exists = false
@@ -142,13 +129,13 @@ func TestAzureRemovalOwnershipRetryAndFailure(t *testing.T) {
 			case "invalid-record":
 				fsutil.WriteJSON(filepath.Join(dir, "azure-scaleset.json"), azureScaleSet{Name: "other"})
 			}
-			err := removeAzureGroup(context.Background(), o, io.Discard, r)
+			err := removeAzureGroup(context.Background(), o, RemovalOptions{AbandonCluster: true}, io.Discard, r)
 			wantError := scenario != "success" && scenario != "absent"
 			if (err != nil) != wantError {
 				t.Fatal("wrong result", err)
 			}
 			calls := strings.Join(r.calls, "\n")
-			deleted := strings.Contains(calls, "az group delete --subscription sub --name pool-rg --yes")
+			deleted := strings.Contains(calls, "delete sub pool-rg pool")
 			if deleted != (scenario == "success" || scenario == "failure") {
 				t.Fatal("wrong deletion scope", calls)
 			}
@@ -224,7 +211,7 @@ func TestQEMURemovalQuitsVerifiedProcess(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := RemoveGroup(ctx, o, "qemu", true, io.Discard); err != nil {
+	if err := RemoveGroup(ctx, o, "qemu", RemovalOptions{DeleteDisks: true, AbandonCluster: true}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if <-commands != "query-name" || <-commands != "quit" {
@@ -247,7 +234,7 @@ func TestQEMURemovalAfterPartialCreate(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(dir, "pool-1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveGroup(context.Background(), o, "qemu", true, io.Discard); err != nil {
+	if err := RemoveGroup(context.Background(), o, "qemu", RemovalOptions{DeleteDisks: true, AbandonCluster: true}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(node, "disk.qcow2")); !os.IsNotExist(err) {
