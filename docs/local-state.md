@@ -16,6 +16,11 @@ Every public command has `--help`, for example `infestation vm start --help` or
 - Local `start`, `stop`, `remove` and `status` run on the original QEMU host:
   they need its saved state, local disks and QMP control sockets. Copying metadata
   alone does not let another machine operate those local VMs.
+- SSH-backed QEMU groups keep ownership and CA/admin credentials on the
+  workstation. Their saved `ssh.json` routes compute actions to the original
+  SSH host, which holds the disks and permitted node profiles. Use
+  `vm create --ssh user@host` with a matching remote Infestation binary; see
+  [SSH setup and lifecycle testing](vm-lifecycle-test.md).
 - Azure `start`, `stop`, `remove` and `status` need saved provider state plus an
   Azure SDK credentials (`DefaultAzureCredential`). They can run from another machine if that state is
   available there; the current CLI does not discover resources from the name or
@@ -33,6 +38,8 @@ wait flag; use `azure wait` separately to check cluster readiness.
 | File or directory | Contents and later use |
 | --- | --- |
 | `nodes.json` | Owned node names, roles, tailnet, pinned versions and shared settings. Lifecycle commands identify and validate their targets from this file. |
+| `ssh.json` (SSH groups, workstation) | SSH destination, resolved absolute remote state root and private ownership token. Retained after failed creates. |
+| `ssh-owner.json` (SSH host) | Matching ownership token checked before remote lifecycle operations. |
 | `provider.json` | Provider ownership, so a local command cannot operate Azure resources. |
 | `output/*.ign` | Original first-boot configuration, retained for inspection and diagnosis. Profiles contain the enrollment key and, for the initializer, leaf/join material and the short-lived SQL root credential. Keep them private even after guest copies are removed. |
 | `<node>/disk.qcow2` | Local VM's persistent disk, including its database data, Tailscale identity and node-local bootstrap state. Start reuses it; stop preserves it. |
@@ -81,8 +88,9 @@ infestation azure remove --name cloud --state-dir state/vms \
 Normal removal first verifies the whole batch's database identities, strict
 CockroachDB decommissioning and healthy survivors. Intentional abandoned-cluster
 teardown requires `--abandon-cluster`; see [removal](removal.md) for prerequisites,
-checkpoint behavior and limitations. Public `stop` refuses until its separate
-whole-batch quorum and temporary-drain guard exists.
+checkpoint behavior and limitations. Ordinary `stop` refuses until its separate
+whole-batch quorum and temporary-drain guard exists. `--allow-outage` explicitly
+bypasses those checks for controlled shutdown while retaining disks and state.
 
 After that gate, QEMU removal terminates each owned emulator through its private QMP monitor,
 waits for the verified process to exit, and removes its socket and PID file.

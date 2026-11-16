@@ -29,6 +29,7 @@ type ClusterOptions struct {
 	HelperSourceRef, HelperBuilderImage           string
 	AzureLocation, AzureVMSize, AzureSubscription string
 	Provider                                      string
+	SSHTarget, SSHStateDir                        string
 	Host, Site                                    string
 	Size                                          int
 	Agent                                         bool
@@ -75,6 +76,12 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 			return fmt.Errorf("host/site labels must contain only letters, digits, dots, underscores or dashes")
 		}
 	}
+	if o.Provider == "azure" && (o.SSHTarget != "" || o.SSHStateDir != "") {
+		return fmt.Errorf("SSH compute is supported only for QEMU")
+	}
+	if o.SSHStateDir != "" && o.SSHTarget == "" {
+		return fmt.Errorf("--ssh-state-dir requires --ssh")
+	}
 	if o.Provider == "azure" && (o.Host != "" || o.Site != "") {
 		return fmt.Errorf("host/site labels apply only to QEMU; Azure locality comes from IMDS")
 	}
@@ -91,6 +98,15 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+	} else if o.SSHTarget != "" {
+		host, err := remotePreflight(ctx, o)
+		if err != nil {
+			return err
+		}
+		if o.Host == "" {
+			o.Host = host.Host
+		}
+		o.SSHStateDir = host.StateDir
 	} else if o.Host == "" {
 		// Host identity must be shared by separate creates on the same machine.
 		// Never publish the workstation's raw machine-id in node profiles.
@@ -120,7 +136,7 @@ func CreateCluster(ctx context.Context, o ClusterOptions, out io.Writer) error {
 	}
 	fmt.Fprintln(out, "Tailnet domain:", o.Domain)
 	base := o.BaseImage
-	if o.Provider == "qemu" {
+	if o.Provider == "qemu" && o.SSHTarget == "" {
 		if err := validateHost(o.Accel); err != nil {
 			return err
 		}

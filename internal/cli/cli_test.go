@@ -156,3 +156,20 @@ func TestRemoveUsesGuestCredentialsWithoutWorkstationDatabaseFlags(t *testing.T)
 		}
 	}
 }
+
+func TestStopAllLocalFlags(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"vm", "stop", "--all", "--state-dir", root},
+		{"vm", "stop", "--all", "--name", "pool", "--allow-outage", "--state-dir", root},
+		{"azure", "stop", "--all", "--allow-outage"},
+		{"vm", "stop"},
+	} {
+		if err := Run(context.Background(), args, io.Discard); err == nil {
+			t.Fatal("invalid host-wide stop accepted", args)
+		}
+	}
+	if err := Run(context.Background(), []string{"vm", "stop", "--all", "--allow-outage", "--state-dir", root}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+}

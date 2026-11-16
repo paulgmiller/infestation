@@ -57,6 +57,7 @@ type PreparedGroup struct {
 	MemoryMiB                             int
 	Accelerator, MachineType, Region      string
 	Subscription                          string
+	SSHTarget, SSHStateDir                string
 	Egress                                string
 }
 
@@ -93,7 +94,7 @@ func (azureCompute) Capabilities() ComputeCapabilities {
 
 func preparedComputeGroup(o ClusterOptions, dir, base string, nodes []cluster.Node) PreparedGroup {
 	p, _ := ProviderFor(o.Provider) // CreateCluster has already resolved it.
-	r := PreparedGroup{Name: o.Name, StateDir: dir, ImageVersion: FlatcarVersion, Architecture: "x86-64", ImagePath: base, MemoryMiB: o.MemoryMiB, Accelerator: o.Accel, MachineType: o.AzureVMSize, Region: o.AzureLocation, Subscription: o.AzureSubscription, Egress: p.Capabilities().Egress}
+	r := PreparedGroup{Name: o.Name, StateDir: dir, ImageVersion: FlatcarVersion, Architecture: "x86-64", ImagePath: base, MemoryMiB: o.MemoryMiB, Accelerator: o.Accel, MachineType: o.AzureVMSize, Region: o.AzureLocation, Subscription: o.AzureSubscription, Egress: p.Capabilities().Egress, SSHTarget: o.SSHTarget, SSHStateDir: o.SSHStateDir}
 	for _, n := range nodes {
 		r.Nodes = append(r.Nodes, PreparedNode{Name: n.Name, IgnitionPath: filepath.Join(dir, "output", n.Name+".ign")})
 	}
@@ -170,6 +171,9 @@ func (p qemuCompute) Create(ctx context.Context, r PreparedGroup, out io.Writer)
 	if r.Region != "" || r.MachineType != "" {
 		return fmt.Errorf("QEMU does not accept a cloud region or machine type")
 	}
+	if r.SSHTarget != "" {
+		return createRemote(ctx, r, out)
+	}
 	if r.ImagePath == "" || r.MemoryMiB < 2048 || r.MemoryMiB > 32768 {
 		return fmt.Errorf("QEMU requires a prepared local image and 2048–32768 MiB of memory")
 	}
@@ -211,19 +215,30 @@ func (p qemuCompute) Start(ctx context.Context, o Options, out io.Writer) error 
 	return p.action(ctx, o, "start", out)
 }
 func (p qemuCompute) Stop(ctx context.Context, o Options, out io.Writer) error {
-	return refuseUnsafeStop(o, p.Name())
+	if !o.AllowOutage {
+		return refuseUnsafeStop(o, p.Name())
+	}
+	fmt.Fprintln(out, "Explicit outage requested: quorum and drain checks skipped; availability may be lost.")
+	return p.action(ctx, o, "stop", out)
 }
 func (p qemuCompute) Status(ctx context.Context, o Options, out io.Writer) error {
 	return p.action(ctx, o, "status", out)
 }
 func (p qemuCompute) action(ctx context.Context, o Options, action string, out io.Writer) error {
+	if handled, err := remoteAction(ctx, o, action, RemovalOptions{}, out); handled {
+		return err
+	}
 	return ClusterAction(ctx, o, action, out)
 }
 func (p azureCompute) Start(ctx context.Context, o Options, out io.Writer) error {
 	return p.action(ctx, o, "start", out)
 }
 func (p azureCompute) Stop(ctx context.Context, o Options, out io.Writer) error {
-	return refuseUnsafeStop(o, p.Name())
+	if !o.AllowOutage {
+		return refuseUnsafeStop(o, p.Name())
+	}
+	fmt.Fprintln(out, "Explicit outage requested: quorum and drain checks skipped; availability may be lost.")
+	return p.action(ctx, o, "stop", out)
 }
 func (p azureCompute) Status(ctx context.Context, o Options, out io.Writer) error {
 	return p.action(ctx, o, "status", out)
@@ -243,6 +258,9 @@ func (p azureCompute) action(ctx context.Context, o Options, action string, out 
 	return AzureAction(ctx, o, action, out)
 }
 func (p qemuCompute) Remove(ctx context.Context, o Options, removal RemovalOptions, out io.Writer) error {
+	if handled, err := remoteAction(ctx, o, "remove", removal, out); handled {
+		return err
+	}
 	return RemoveGroup(ctx, o, p.Name(), removal, out)
 }
 func (p azureCompute) Remove(ctx context.Context, o Options, removal RemovalOptions, out io.Writer) error {

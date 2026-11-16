@@ -30,6 +30,7 @@ const TailscaleVersion = "v1.104.2"
 type Options struct {
 	Name, StateDir, AuthKey, AuthKeyFile, BaseImage, Accel, Network string
 	Wait                                                            time.Duration
+	AllowOutage                                                     bool
 	profile                                                         []byte // private rendered cluster profile; never persisted in metadata
 	MemoryMiB                                                       int
 }
@@ -453,9 +454,54 @@ func Stop(ctx context.Context, o Options, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if _, err = qmp(ctx, dir, "system_powerdown"); err != nil {
+	lock, err := os.OpenFile(filepath.Join(dir, "start.lock"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("another lifecycle operation may be in progress: %w", err)
+	}
+	lock.Close()
+	defer os.Remove(filepath.Join(dir, "start.lock"))
+	present, err := processPresent(dir)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "Graceful shutdown requested; disk and any enrolled Tailscale identity are preserved.")
-	return nil
+	if !present {
+		// A live monitor without a verified process must never be treated as stopped.
+		if _, err := os.Lstat(filepath.Join(dir, "qmp.sock")); !os.IsNotExist(err) {
+			return fmt.Errorf("unverified QEMU monitor; resources retained")
+		}
+		fmt.Fprintln(out, o.Name, "already stopped; disk retained")
+		return nil
+	}
+	raw, err := qmp(ctx, dir, "query-name")
+	if err != nil {
+		return err
+	}
+	var identity struct{ Name string }
+	if json.Unmarshal(raw, &identity) != nil || identity.Name != o.Name {
+		return fmt.Errorf("QEMU monitor identity mismatch")
+	}
+	if _, err := qmp(ctx, dir, "system_powerdown"); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Graceful shutdown requested; waiting for QEMU exit.")
+	deadline, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		present, err := processPresent(dir)
+		if err != nil {
+			return err
+		}
+		_, socketErr := os.Lstat(filepath.Join(dir, "qmp.sock"))
+		if !present && os.IsNotExist(socketErr) {
+			fmt.Fprintln(out, o.Name, "stopped; disk and enrolled identity retained")
+			return nil
+		}
+		select {
+		case <-deadline.Done():
+			return fmt.Errorf("waiting for graceful shutdown; VM not forced off, disk retained: %w", deadline.Err())
+		case <-tick.C:
+		}
+	}
 }

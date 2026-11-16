@@ -24,9 +24,11 @@ func (p provider) create() *cobra.Command {
 		f.StringVar(&o.AzureLocation, "region", azureconfig.DefaultRegion, "Azure region")
 		f.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
 	} else {
+		f.StringVar(&o.SSHTarget, "ssh", "", "SSH destination for the QEMU host (requires matching infestation on its PATH or in ~/go/bin)")
+		f.StringVar(&o.SSHStateDir, "ssh-state-dir", "", "absolute private state directory on the SSH host (default: remote user data directory)")
 		f.StringVar(&o.Host, "host", "", "stable physical QEMU host label (default: hashed machine-id)")
 		f.StringVar(&o.Site, "site", "", "shared home/site failure-domain label; use the same label on hosts at one site")
-		f.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image; otherwise use the pinned image")
+		f.StringVar(&o.BaseImage, "base-image", "", "existing trusted Flatcar image on the QEMU host; otherwise download the pinned image")
 		f.StringVar(&o.Accel, "accel", "kvm", "QEMU accelerator: kvm or tcg")
 		f.IntVar(&o.MemoryMiB, "memory-mib", 3072, "memory MiB per VM")
 	}

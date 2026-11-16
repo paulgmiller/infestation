@@ -117,6 +117,10 @@ The public CLI has the same lifecycle verbs for both providers: `create`,
 `start`, `stop`, `remove`, `status`, `wait` and `kubeconfig`. `vm status --netcheck`
 includes guest network diagnostics. The separate `infestation-smoke` CLI runs
 workload connectivity checks using Kubernetes credentials alone.
+Use `vm create --ssh user@host` to run QEMU on another Linux machine while
+keeping CA/admin credentials on the workstation. Later lifecycle commands use
+the saved SSH host automatically. See the [lifecycle test and SSH setup](docs/vm-lifecycle-test.md).
+
 Every command has `--help`. Local VM control runs on its QEMU host; Azure control
 requires saved provider state and Azure SDK credentials. See [where commands run](docs/local-state.md#where-lifecycle-commands-run).
 
@@ -125,8 +129,9 @@ peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;
 override `--region` and `--sku` directly. Azure creates one Uniform VM Scale Set
 per call; `--size` sets its instance count (1–32), with manual upgrades. See
 [Azure VMSS behavior](docs/azure-vmss.md). Creation returns after provisioning by default; `--wait` also needs
-tailnet access from the workstation. This independent flow has unit/protocol
-coverage and still needs a fresh VM test. See [bootstrap](docs/bootstrap.md).
+tailnet access from the workstation. The [three-VM lifecycle run](docs/vm-lifecycle-test.md) verified fresh independent
+enrollment and one-node restart, with quota-related failures during final local
+shutdown. See [bootstrap](docs/bootstrap.md).
 
 The renderer resolves a tag before provisioning. Credentials stay outside the
 source/build container. Native arm64 execution remains unverified.

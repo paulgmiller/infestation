@@ -79,6 +79,9 @@ func Kubeconfig(ctx context.Context, o Options, destination string, force bool, 
 }
 
 func GroupNetcheck(ctx context.Context, o Options, out io.Writer) error {
+	if handled, err := remoteAction(ctx, o, "netcheck", RemovalOptions{}, out); handled {
+		return err
+	}
 	dir, c, err := loadCluster(o)
 	if err != nil {
 		return err

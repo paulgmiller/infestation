@@ -20,7 +20,8 @@ provider boundary and current implementation.
   when an earlier attempt has already stopped/deleted some verified targets;
   current normal retries require every target identity reachable. Add whole-batch
   quorum checks and temporary database draining for `stop` without permanent
-  decommissioning; public stop currently refuses until those guards exist.
+  decommissioning; ordinary stop currently refuses until those guards exist; explicit
+  `--allow-outage` permits controlled shutdown without those checks.
   Coordinate Kubernetes workload drain/API withdrawal and credential custody with
   their separate TODOs. Never lower replication to bypass insufficient capacity.
 - [ ] Live-verify typed Azure Go SDK provisioning and lifecycle: credentials and
@@ -73,8 +74,20 @@ provider boundary and current implementation.
 
 ## Consolidate deployment
 
-- [ ] Ensure a working `stop` command is available for both QEMU and Azure,
-  preserving disks and private state.
+- [ ] Add a shared `scale` command for owned provider groups, including local and
+  SSH-backed QEMU groups and Azure VMSS. Scale up through shared node preparation
+  and enrollment; scale down only after explicit target selection, whole-batch
+  CockroachDB quorum/replica evacuation checks and Kubernetes draining. Preserve
+  surviving identities, private state and disks according to explicit retention
+  policy; reconcile partial failures without replacing existing resources. Test
+  growth, shrink, insufficient capacity and interrupted/retried operations.
+
+- [ ] Live-verify automatic final shutdown in the [three-VM lifecycle test](docs/vm-lifecycle-test.md)
+  after both passing and failing assertions. Prevent/diagnose scratch-quota
+  exhaustion before it produces guest disk-write errors, and verify graceful
+  cleanup without forced power-off. The first lifecycle probe passed but final
+  local shutdown hit quota-related guest I/O failures; evidence is in the runbook.
+  Guarded stop remains outstanding above.
 - [ ] Ensure helper builds use `github.com/paulgmiller/infestation`'s published
   `master` branch by default, rather than local workstation source.
 - [ ] Show more progress output while `create` runs, including the current stage
@@ -97,6 +110,13 @@ provider boundary and current implementation.
   partial-failure evidence consistent.
 
 ## Reliable bootstrap and networking
+
+- [ ] Add an opt-in E2E test with two independently created `--init` servers,
+  including concurrent startup and different peer-discovery timing. Verify that
+  conflicting founding authorities cannot silently form divergent clusters,
+  overwrite CA/token state, or reinitialize an existing store. Require explicit
+  refusal/fencing and preserve both groups' disks and credentials for diagnosis;
+  verify safe behavior when one initializer is delayed or temporarily unreachable.
 
 - [ ] Live-verify rejection of incompatible pinned helpers and missing database
   environment values. Verify reboot recreates runtime files without manual repairs.

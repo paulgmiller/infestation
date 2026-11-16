@@ -50,7 +50,7 @@ func (p provider) nodeCommand(action, description string, run nodeAction) (*cobr
 func (p provider) requirements(action string) string {
 	if action == "create" {
 		if p.name == "vm" {
-			return "Run on the QEMU host that will hold the VM disks. Saves private provider state."
+			return "Runs QEMU locally or on --ssh. Credentials and ownership state stay on this workstation; remote disks and node profiles stay on the SSH host."
 		}
 		return "Uses Azure SDK credentials (DefaultAzureCredential); requires --subscription or AZURE_SUBSCRIPTION_ID. Saves resource identifiers and private SDK inputs locally."
 	}
@@ -58,7 +58,7 @@ func (p provider) requirements(action string) string {
 		return "Requires saved provider inventory and workstation tailnet access. Can run elsewhere with that inventory; Azure login is not required."
 	}
 	if p.name == "vm" {
-		return "Run on the original QEMU host with its saved provider state, VM disks and local control sockets."
+		return "Uses saved provider state; SSH groups automatically use their original SSH host. Local groups require the original QEMU host."
 	}
 	text := "Requires saved provider state and Azure SDK credentials (DefaultAzureCredential). Another machine can manage the VM only if that state is available there; resources are not discovered by name."
 	if action == "start" {
@@ -95,9 +95,22 @@ func (p provider) start() *cobra.Command {
 	return cmd
 }
 func (p provider) stop() *cobra.Command {
-	cmd, _ := p.nodeCommand("stop", "Stop owned VMs while preserving disks and identity", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
+	var all bool
+	cmd, o := p.nodeCommand("stop", "Stop owned VMs while preserving disks and identity", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
+		if all {
+			return vm.StopAllLocal(ctx, o.Options, out)
+		}
 		return p.runAction(ctx, o, "stop", out)
 	})
+	cmd.Flags().BoolVar(&o.AllowOutage, "allow-outage", false, "explicitly permit shutdown without quorum/drain checks, including a full cluster outage")
+	if p.name == "vm" {
+		// --all replaces --name for host-local shutdown only.
+		delete(cmd.Flags().Lookup("name").Annotations, cobra.BashCompOneRequiredFlag)
+		cmd.Flags().BoolVar(&all, "all", false, "stop every owned local VM under --state-dir; skip SSH and Azure groups")
+		cmd.MarkFlagsOneRequired("name", "all")
+		cmd.MarkFlagsMutuallyExclusive("name", "all")
+		cmd.Long += "\nUse --all --allow-outage to gracefully shut down all local VMs discovered under --state-dir, across named groups. SSH-backed groups and Azure resources are excluded. Disks and private state are retained."
+	}
 	return cmd
 }
 func (p provider) remove() *cobra.Command {
