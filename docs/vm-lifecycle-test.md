@@ -1,6 +1,6 @@
 # VM lifecycle end-to-end test
 
-`TestLiveVMLifecycle` exercises the public CLI with exactly three independently
+`infestation-e2e run` exercises the public CLI with exactly three independently
 created QEMU servers. Only the first receives `--init`; all three host CockroachDB.
 It waits for three voting replicas and no learners on every range, including
 system and Kine ranges. It stops only the third VM, checks that the two survivors continue serving SQL
@@ -24,38 +24,62 @@ are never selected by name for testing. Complete the
 API Service approvals and Tailscale SSH access as `core`.
 
 The test workstation needs Linux x86-64, QEMU/KVM access, sufficient memory for
-three 3072 MiB VMs, outbound connectivity, Tailscale, kubectl, and the CockroachDB
-v26.2.7 CLI. The optional remote host takes the third VM's memory requirement.
-Supply a reusable preauthorized `tag:roach` enrollment key through the environment;
-do not put credentials in test command arguments or commit them.
+three 3072 MiB VMs, outbound connectivity, Tailscale and kubectl. SQL probes use
+the E2E binary's Go PostgreSQL client with the workstation's existing admin leaf
+certificates; no CockroachDB CLI or `e2e-tools` directory is required. The optional
+remote host takes the third VM's memory requirement.
+Supply a reusable preauthorized `tag:roach` enrollment key through a private file
+or `TAILSCALE_AUTH_KEY`; do not put key contents in command arguments or commit them.
 
-Run only when explicitly intending to provision and initialize a fresh cluster:
+The E2E is a separate CLI, so ordinary `go test ./...` never runs this lifecycle
+scenario. Running `run` explicitly provisions and initializes a fresh cluster;
+invoking the CLI without a subcommand prints help.
+
+From the repository root:
 
 ```sh
-export INFESTATION_LIFECYCLE_TEST=1
-export INFESTATION_TEST_DOMAIN=YOUR-TEST-TAILNET.ts.net
-# Set TAILSCALE_AUTH_KEY privately before running.
-go test ./internal/cli -run '^TestLiveVMLifecycle$' -count=1 -timeout=80m -v
+go run ./cmd/infestation-e2e run \
+  --tailnet-domain quoll-duck.ts.net \
+  --tailscale-auth-key-file secrets/auth \
+  --ssh millerbase
 ```
 
-Optional inputs:
+Or build it first:
 
-- `INFESTATION_VM_ACCEL`: `kvm` (default) or `tcg` (slow).
-- `INFESTATION_VM_BASE_IMAGE`: trusted local standalone Flatcar qcow2 base.
-- `INFESTATION_HELPER_SOURCE_REF`: published helper source branch/tag/commit;
-  default is `master`. Local source changes must be available at the selected
-  published ref before testing guest behavior.
-- `INFESTATION_TEST_SSH`: SSH alias or `user@host` for the third VM.
-- `INFESTATION_TEST_SSH_STATE_DIR`: absolute private remote state root.
-- `INFESTATION_TEST_SSH_BASE_IMAGE`: trusted base image path on that remote host;
-  otherwise the remote host downloads the pinned image.
+```sh
+go build -o bin/infestation-e2e ./cmd/infestation-e2e
+bin/infestation-e2e run --help
+```
+
+Omit `--ssh` to run all three VMs locally. The CLI prints progress and returns
+zero only when the lifecycle assertions and final shutdown succeed. Interruption
+or a failure still attempts shutdown using an independent cleanup deadline.
+
+Options:
+
+- `--tailnet-domain`: dedicated test tailnet; required.
+- `--tailscale-auth-key-file`: private enrollment key file; otherwise use
+  `TAILSCALE_AUTH_KEY`. Key contents are never command-line arguments.
+- `--name`: unique group prefix; generated when omitted.
+- `--state-dir`: new private test directory that must not exist; otherwise a
+  fresh directory is created in `/tmp`.
+- `--timeout`: lifecycle deadline, default 75 minutes; final shutdown has an
+  additional eight-minute deadline.
+- `--accel`: `kvm` (default) or `tcg` (slow).
+- `--base-image`: trusted local standalone Flatcar qcow2 base; otherwise download
+  the pinned image.
+- `--helper-source-ref`: published branch/tag/commit, default `master`.
+- `--ssh`: SSH alias or `user@host` for the third VM.
+- `--ssh-state-dir`: absolute private remote state root.
+- `--ssh-base-image`: trusted base-image path on that remote host; otherwise the
+  remote host downloads the pinned image.
 
 The test logs its private workstation state directory and shuts down every
 attempted test group on success or failure, with a bounded cleanup deadline. It
 retains all disks, credentials and state; it never deletes test resources. Cleanup
 failures fail the test and leave state for diagnosis. Inspect any shutdown failure
-before assuming all test VMs are stopped. No tests provision unless their opt-in
-variable is 1.
+before assuming all test VMs are stopped. This lifecycle only provisions through
+the explicit CLI `run` subcommand.
 
 ## Remote QEMU creation
 
@@ -102,7 +126,7 @@ with this flag can take the entire database offline.
 The SQL identity probe opts its session into CockroachDB's internal tables;
 these are version-specific diagnostic interfaces. See
 [CockroachDB v26.2 internal tables](https://www.cockroachlabs.com/docs/v26.2/crdb-internal), [v26.2.7 internal-table test schemas](https://github.com/cockroachdb/cockroach/blob/v26.2.7/pkg/sql/logictest/testdata/logic_test/crdb_internal),
-and [SQL client flags](https://www.cockroachlabs.com/docs/v26.2/cockroach-sql).
+and the [Go SQL client API](https://pkg.go.dev/github.com/jackc/pgx/v5/pgconn).
 
 ## Shut down all local groups
 
@@ -155,3 +179,9 @@ the operator's preference; clear sufficient scratch space before provisioning.
 The updated test attempts bounded graceful shutdown on both pass and failure,
 reports cleanup errors and retains disks/state. It does not force power off or
 delete test disks automatically.
+
+The recorded live run used the environment-gated Go test and external SQL CLI.
+The subsequent standalone CLI extraction and Go-client
+replacement has localhost PostgreSQL/TLS mock coverage, including client
+certificate authentication, verified server TLS, multi-statement results and
+sanitation of SQL failures; the extracted CLI has not yet been rerun against VMs.

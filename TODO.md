@@ -111,6 +111,15 @@ provider boundary and current implementation.
 
 ## Reliable bootstrap and networking
 
+- [ ] Add temporary isolated tailnets for E2E runs using the alpha
+  [Tailscale Tailnets API](https://tailscale.com/docs/features/tailnets-api).
+  Accept an explicitly configured OAuth/federated credential with the `tailnets`
+  scope; create the test tailnet, tagged enrollment keys, route/API Service/SSH
+  policies and an isolated test-runner client for SQL/Kubernetes access. Preserve
+  host management connectivity and avoid switching the hosts' normal tailnets.
+  Shut down test compute before revoking keys/deleting the temporary tailnet,
+  handle failed/interrupted cleanup, and test isolation and credential redaction.
+
 - [ ] Add an opt-in E2E test with two independently created `--init` servers,
   including concurrent startup and different peer-discovery timing. Verify that
   conflicting founding authorities cannot silently form divergent clusters,

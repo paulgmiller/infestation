@@ -44,6 +44,7 @@ To build and check a local checkout:
 ```sh
 go build -o bin/infestation ./cmd/infestation
 go build -o bin/infestation-smoke ./cmd/infestation-smoke
+go build -o bin/infestation-e2e ./cmd/infestation-e2e
 go test ./...
 go vet ./...
 ./task.sh verify-go
@@ -60,7 +61,9 @@ every PR, pushes to `master`/`main`, and merge queues. To enforce these checks
 before merging, select all four job names as required status checks in the
 repository's GitHub branch protection or ruleset after the workflow is pushed.
 
-Builds and unit tests do not provision resources. Running VM commands needs the
+Builds and unit tests do not provision resources. The separate
+`infestation-e2e run` CLI explicitly provisions a three-VM lifecycle scenario; see
+[the E2E instructions](docs/vm-lifecycle-test.md). Running VM commands needs the
 appropriate [QEMU/KVM packages and host access](docs/local-vm-prerequisites.md)
 or Azure SDK credentials. Azure create requires `--subscription ID` or
 `AZURE_SUBSCRIPTION_ID`; see [Azure authentication](docs/azure-vmss.md#authentication). Connectivity checks need
