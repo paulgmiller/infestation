@@ -74,6 +74,10 @@ provider boundary and current implementation.
 
 ## Consolidate deployment
 
+- [ ] Add Azure per-instance start/stop with typed SDK instance operations and
+  saved ownership checks. Complete quorum/drain safeguards for selected-node
+  stops across providers, and verify retries and partial failures.
+
 - [ ] Add a shared `scale` command for owned provider groups, including local and
   SSH-backed QEMU groups and Azure VMSS. Scale up through shared node preparation
   and enrollment; scale down only after explicit target selection, whole-batch
@@ -249,6 +253,16 @@ provider boundary and current implementation.
 - [ ] Test application storage, placement, zone/site failures and resource sizing.
 
 ## Distribution and portability
+
+- [ ] Cache the pinned guest helper builder image and Go module/build inputs
+  across fresh E2E VMs. Key caches by architecture, helper source commit and
+  builder digest; verify artifacts before reuse and keep credentials out of cache
+  inputs/outputs. Measure cold versus warm stage timings and retain a cold-cache
+  bootstrap scenario.
+- [ ] Evaluate a prebuilt guest-helper option for fast E2E runs while keeping
+  standard Flatcar images and the current pinned-source build path available.
+  Preserve architecture/provenance/checksum validation and credential isolation;
+  do not introduce required provider object storage or reuse booted VM identities.
 
 - [ ] Test native arm64 first boot, enrollment and workloads.
 - [ ] Review guest build cost, availability, caching, provenance, update/rollback

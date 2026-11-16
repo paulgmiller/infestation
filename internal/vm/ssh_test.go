@@ -68,13 +68,17 @@ func TestSSHCreateTransfersOnlyProfilesAndPersistsRouting(t *testing.T) {
 	// Routing is automatic on later lifecycle operations.
 	o := Options{Name: r.Name, StateDir: filepath.Dir(r.StateDir), AllowOutage: true}
 	for _, action := range []string{"start", "status", "stop", "netcheck", "remove"} {
+		o.Instance = ""
+		if action == "start" || action == "stop" {
+			o.Instance = "1"
+		}
 		handled, err := remoteAction(context.Background(), o, action, RemovalOptions{}, io.Discard)
 		if !handled || err != nil {
 			t.Fatal(action, handled, err)
 		}
 		raw, _ := os.ReadFile(requestPath)
 		_ = json.Unmarshal(raw, &request)
-		if request.Operation != action || request.Owner != link.Owner || request.Options.StateDir != link.StateDir || !request.Options.AllowOutage {
+		if request.Operation != action || request.Owner != link.Owner || request.Options.StateDir != link.StateDir || !request.Options.AllowOutage || request.Options.Instance != o.Instance {
 			t.Fatal("lifecycle lost routing or ownership")
 		}
 	}

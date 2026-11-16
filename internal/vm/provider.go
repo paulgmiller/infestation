@@ -244,6 +244,9 @@ func (p azureCompute) Status(ctx context.Context, o Options, out io.Writer) erro
 	return p.action(ctx, o, "status", out)
 }
 func (p azureCompute) action(ctx context.Context, o Options, action string, out io.Writer) error {
+	if o.Instance != "" {
+		return fmt.Errorf("Azure per-instance lifecycle is not implemented")
+	}
 	dir, _, err := loadCluster(o)
 	if err != nil {
 		return err

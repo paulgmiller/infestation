@@ -98,6 +98,9 @@ func validateLocalMachine(o Options) error {
 }
 
 func stopAllLocal(ctx context.Context, o Options, out io.Writer, stop func(context.Context, Options, io.Writer) error) error {
+	if o.Instance != "" {
+		return fmt.Errorf("--all cannot be combined with --instance")
+	}
 	if o.Name != "" {
 		return fmt.Errorf("--all cannot be combined with --name")
 	}

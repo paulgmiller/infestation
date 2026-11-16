@@ -173,3 +173,25 @@ func TestStopAllLocalFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInstanceFlagIsLimitedToQEMUStartStop(t *testing.T) {
+	for _, args := range [][]string{
+		{"vm", "stop", "--all", "--instance", "0", "--allow-outage"},
+		{"vm", "stop", "--name", "pool", "--instance", "-1", "--allow-outage"},
+		{"vm", "start", "--name", "pool", "--instance", "bad"},
+		{"vm", "stop", "--name", "pool", "--instance=", "--allow-outage"},
+		{"azure", "start", "--name", "pool", "--instance", "0"},
+		{"azure", "stop", "--name", "pool", "--instance", "0"},
+		{"vm", "remove", "--name", "pool", "--instance", "0"},
+	} {
+		if err := Run(context.Background(), args, io.Discard); err == nil {
+			t.Fatal("invalid instance scope accepted", args)
+		}
+	}
+	for _, action := range []string{"start", "stop"} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), []string{"vm", action, "--help"}, &out); err != nil || !strings.Contains(out.String(), "--instance") {
+			t.Fatal("missing per-instance help", action, err)
+		}
+	}
+}

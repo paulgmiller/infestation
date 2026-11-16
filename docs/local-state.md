@@ -29,6 +29,11 @@ Every public command has `--help`, for example `infestation vm start --help` or
   from the caller. They can run elsewhere with the inventory; Azure login and
   QEMU host control are not needed for these operations. `wait` also uses kubectl.
 
+For QEMU `start` and `stop`, `--instance INDEX` selects one zero-based instance
+from the saved group inventory, including SSH-backed groups. Omitting it selects
+the whole group. Selection never rewrites the inventory; disks and peer VMs are
+retained. Stop still requires `--allow-outage` until quorum/drain guards exist.
+
 Keep private material protected when moving any state. No state needs sharing
 merely to enroll a friend's node. Azure `start --wait` currently ignores the
 wait flag; use `azure wait` separately to check cluster readiness.

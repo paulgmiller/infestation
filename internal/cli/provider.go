@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/paulgmiller/infestation/internal/vm"
@@ -30,7 +31,15 @@ func (p provider) nodeCommand(action, description string, run nodeAction) (*cobr
 		Short: description,
 		Long:  description + ".\n\n" + p.requirements(action) + "\nUse the same --name and --state-dir as create. State contents: docs/local-state.md.",
 		Args:  noArgs,
-		PreRunE: func(_ *cobra.Command, _ []string) error {
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("instance") && o.Instance == "" {
+				return fmt.Errorf("--instance must be a nonnegative index")
+			}
+			if o.Instance != "" {
+				if i, err := strconv.Atoi(o.Instance); err != nil || i < 0 {
+					return fmt.Errorf("--instance must be a nonnegative index")
+				}
+			}
 			if o.Wait < 0 {
 				return fmt.Errorf("--wait must not be negative")
 			}
@@ -91,6 +100,7 @@ func (p provider) start() *cobra.Command {
 	cmd.Flags().DurationVar(&o.Wait, "wait", 0, "readiness deadline; 0 returns after starting")
 	if p.name == "vm" {
 		cmd.Flags().StringVar(&o.Accel, "accel", "", "override the stored QEMU accelerator")
+		cmd.Flags().StringVar(&o.Instance, "instance", "", "start only this zero-based instance in the owned group")
 	}
 	return cmd
 }
@@ -109,6 +119,8 @@ func (p provider) stop() *cobra.Command {
 		cmd.Flags().BoolVar(&all, "all", false, "stop every owned local VM under --state-dir; skip SSH and Azure groups")
 		cmd.MarkFlagsOneRequired("name", "all")
 		cmd.MarkFlagsMutuallyExclusive("name", "all")
+		cmd.Flags().StringVar(&o.Instance, "instance", "", "stop only this zero-based instance in the owned group")
+		cmd.MarkFlagsMutuallyExclusive("all", "instance")
 		cmd.Long += "\nUse --all --allow-outage to gracefully shut down all local VMs discovered under --state-dir, across named groups. SSH-backed groups and Azure resources are excluded. Disks and private state are retained."
 	}
 	return cmd

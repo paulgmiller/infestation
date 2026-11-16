@@ -1,7 +1,10 @@
 # VM lifecycle end-to-end test
 
-`infestation-e2e run` exercises the public CLI with exactly three independently
-created QEMU servers. Only the first receives `--init`; all three host CockroachDB.
+`infestation-e2e run` exercises the public CLI with exactly three QEMU servers,
+using one provider group per compute host. With no `--ssh`, it creates one local
+`--size 3` group and restarts instance 2. With `--ssh`, it concurrently creates a
+local `--size 2` group and a remote `--size 1` group, then restarts remote instance
+0. Only the first local server receives `--init`; all three host CockroachDB.
 It waits for three voting replicas and no learners on every range, including
 system and Kine ranges. It stops only the third VM, checks that the two survivors continue serving SQL
 and Kubernetes/Kine operations for a minute, then starts the same VM and verifies
@@ -30,6 +33,11 @@ certificates; no CockroachDB CLI or `e2e-tools` directory is required. The optio
 remote host takes the third VM's memory requirement.
 Supply a reusable preauthorized `tag:roach` enrollment key through a private file
 or `TAILSCALE_AUTH_KEY`; do not put key contents in command arguments or commit them.
+
+The runner resolves one shared helper commit and prepares the local Flatcar base
+once before launching concurrent creates. Each local VM reuses that prepared
+base; the remote group uses its own host's image cache. Cleanup waits for all
+creates to return, including on failure, before stopping any attempted group.
 
 The E2E is a separate CLI, so ordinary `go test ./...` never runs this lifecycle
 scenario. Running `run` explicitly provisions and initializes a fresh cluster;
@@ -185,3 +193,59 @@ The subsequent standalone CLI extraction and Go-client
 replacement has localhost PostgreSQL/TLS mock coverage, including client
 certificate authentication, verified server TLS, multi-statement results and
 sanitation of SQL failures; the extracted CLI has not yet been rerun against VMs.
+
+## Speed considerations
+
+When there are two compute hosts, concurrent creates overlap group preparation,
+SSH setup and guest boot. A single-host run uses one `--size 3` group. The E2E
+uses per-instance start/stop to restart one VM without shutting down its peers.
+
+Use `--base-image` and `--ssh-base-image` to reuse trusted pinned Flatcar images.
+Without a local override the runner prepares its shared local image once in the
+normal persistent image cache, rather than downloading/extracting independently
+for each group. A helper branch is resolved once to the same immutable commit
+for all three nodes.
+
+Further improvements to evaluate:
+
+- Cache the pinned guest builder image and Go build/module inputs, while retaining
+  a separate fresh-bootstrap scenario. Guest helper compilation currently occurs
+  in every new VM with a fresh container build environment.
+- Replace fixed 5–15 second readiness polls with prompt bounded retries; report
+  enrollment/bootstrap failures early rather than waiting for readiness timeout.
+- Reuse per-node SQL connections and a Kubernetes client instead of repeated TLS
+  connections and kubectl subprocesses, with reconnect after the stopped node
+  returns.
+- Offer an explicitly shorter outage duration for quick iteration, retaining the
+  current one-minute survivor check as the default reliability scenario.
+
+## Stage timing
+
+The runner uses `log/slog` text records on the normal progress output. Each stage
+emits a `status=started` record followed by a completion record with `duration`
+and `status=success`, `failed` or `canceled`. Per-group records include `group`,
+`size` and whether the create is remote; selected-instance operations identify
+the group and instance. Logs omit raw error details and credential contents.
+
+Stages cover helper revision resolution, shared local image preparation, overall
+and per-group create, initial readiness, SQL probe setup, health and replication
+checks, selected-instance stop, the survivor outage, restart, recovery verification
+and overall/per-group final shutdown. The outer `run` duration includes cleanup;
+a shutdown failure makes the final result fail. `wait_initial_cluster` includes
+remaining guest helper builds, enrollment and bootstrap, rather than measuring
+helper compilation alone. Cached/prebuilt guest helpers remain TODO work.
+
+## Per-instance QEMU lifecycle
+
+```sh
+infestation vm stop --name lab --instance 2 --allow-outage
+infestation vm start --name lab --instance 2 --wait 15m
+```
+
+`--instance` is a zero-based index in the group's saved inventory. Omitting it
+operates the whole group. It works for local and SSH-backed QEMU groups; the
+workstation and remote compute host need matching CLI revisions. It cannot be
+combined with host-wide `--all` or removal. Stop retains the explicit outage
+requirement until quorum/drain guards exist, and start's `--wait` still checks
+readiness of the group's saved nodes. Azure per-instance operations remain
+unimplemented.

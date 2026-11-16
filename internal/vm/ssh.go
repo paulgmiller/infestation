@@ -97,6 +97,9 @@ func createRemote(ctx context.Context, r PreparedGroup, out io.Writer) error {
 func mustSSHJSON(value sshCompute) []byte { raw, _ := json.Marshal(value); return raw }
 
 func remoteAction(ctx context.Context, o Options, action string, removal RemovalOptions, out io.Writer) (bool, error) {
+	if o.Instance != "" && action != "start" && action != "stop" {
+		return true, fmt.Errorf("--instance applies only to start and stop")
+	}
 	dir, err := directory(o)
 	if err != nil {
 		return true, err
@@ -109,7 +112,8 @@ func remoteAction(ctx context.Context, o Options, action string, removal Removal
 	if err != nil {
 		return true, err
 	}
-	if _, _, err := loadCluster(o); err != nil {
+	_, inventory, err := loadCluster(o)
+	if err != nil {
 		return true, err
 	}
 	provider, err := groupProvider(dir)
@@ -119,8 +123,11 @@ func remoteAction(ctx context.Context, o Options, action string, removal Removal
 	if provider != "qemu" {
 		return true, fmt.Errorf("SSH provider ownership mismatch")
 	}
+	if _, err := selectedQEMUNodes(inventory, o.Instance); err != nil {
+		return true, err
+	}
 	// Readiness runs on the workstation over the tailnet, not on the SSH host.
-	request := sshRequest{Operation: action, Owner: link.Owner, Options: Options{Name: o.Name, StateDir: link.StateDir, Accel: o.Accel, AllowOutage: o.AllowOutage}, Removal: removal}
+	request := sshRequest{Operation: action, Owner: link.Owner, Options: Options{Name: o.Name, StateDir: link.StateDir, Accel: o.Accel, AllowOutage: o.AllowOutage, Instance: o.Instance}, Removal: removal}
 	err = sshCall(ctx, link.Target, request, out)
 	if err == nil && action == "start" && o.Wait > 0 {
 		err = WaitCluster(ctx, o, out)

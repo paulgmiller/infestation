@@ -22,6 +22,9 @@ import (
 // RemoveGroup gates compute deletion on database evacuation unless the
 // caller explicitly abandons the cluster. Ownership checks apply to both paths.
 func RemoveGroup(ctx context.Context, o Options, provider string, removal RemovalOptions, out io.Writer) error {
+	if o.Instance != "" {
+		return fmt.Errorf("--instance applies only to start and stop")
+	}
 	deleteDisks := removal.DeleteDisks
 	if provider == "azure" {
 		client, err := newAzureClient()

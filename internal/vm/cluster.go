@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -276,6 +277,21 @@ func loadCluster(o Options) (string, cluster.Config, error) {
 }
 
 func ClusterAction(ctx context.Context, o Options, action string, out io.Writer) error {
+	return clusterAction(ctx, o, action, out, Start, Stop)
+}
+
+func selectedQEMUNodes(c cluster.Config, instance string) ([]cluster.Node, error) {
+	if instance == "" {
+		return c.Nodes, nil
+	}
+	i, err := strconv.Atoi(instance)
+	if err != nil || i < 0 || i >= len(c.Nodes) {
+		return nil, fmt.Errorf("--instance must select an index in the saved owned group")
+	}
+	return []cluster.Node{c.Nodes[i]}, nil
+}
+
+func clusterAction(ctx context.Context, o Options, action string, out io.Writer, start, stop func(context.Context, Options, io.Writer) error) error {
 	dir, c, err := loadCluster(o)
 	if err != nil {
 		return err
@@ -287,13 +303,17 @@ func ClusterAction(ctx context.Context, o Options, action string, out io.Writer)
 	if provider != "qemu" {
 		return fmt.Errorf("use azure %s for Azure-owned nodes", action)
 	}
-	for _, n := range c.Nodes {
+	nodes, err := selectedQEMUNodes(c, o.Instance)
+	if err != nil {
+		return err
+	}
+	for _, n := range nodes {
 		node := Options{Name: n.Name, StateDir: dir, Accel: o.Accel}
 		switch action {
 		case "stop":
-			err = Stop(ctx, node, out)
+			err = stop(ctx, node, out)
 		case "start":
-			err = Start(ctx, node, out)
+			err = start(ctx, node, out)
 		case "status":
 			_, err = qmp(ctx, filepath.Join(dir, n.Name), "query-status")
 			if err != nil {

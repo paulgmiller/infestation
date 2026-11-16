@@ -29,6 +29,7 @@ const TailscaleVersion = "v1.104.2"
 
 type Options struct {
 	Name, StateDir, AuthKey, AuthKeyFile, BaseImage, Accel, Network string
+	Instance                                                        string // zero-based owned instance index; empty selects the whole group
 	Wait                                                            time.Duration
 	AllowOutage                                                     bool
 	profile                                                         []byte // private rendered cluster profile; never persisted in metadata

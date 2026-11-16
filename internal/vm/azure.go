@@ -91,6 +91,9 @@ func disposableAzurePublicKey() (string, error) {
 
 // AzureAction operates on the whole owned scale set, without recreating missing VMs.
 func AzureAction(ctx context.Context, o Options, action string, out io.Writer) error {
+	if o.Instance != "" {
+		return fmt.Errorf("Azure per-instance lifecycle is not implemented")
+	}
 	client, err := newAzureClient()
 	if err != nil {
 		return err
