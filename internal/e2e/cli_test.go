@@ -37,11 +37,11 @@ func TestCLIRequiresExplicitRunAndValidInputs(t *testing.T) {
 	}
 	var got Options
 	cmd := newCommand(func(_ context.Context, o Options, _ io.Writer) error { got = o; return nil })
-	cmd.SetArgs([]string{"run", "--tailnet-domain", "example.ts.net", "--ssh", "compute", "--timeout", "10m"})
+	cmd.SetArgs([]string{"run", "--tailnet-domain", "example.ts.net", "--ssh", "compute", "--timeout", "10m", "--preserve"})
 	if err := cmd.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got.SSH != "compute" || got.Timeout != 10*time.Minute || got.Accel != "kvm" {
+	if got.SSH != "compute" || got.Timeout != 10*time.Minute || got.Accel != "kvm" || !got.Preserve {
 		t.Fatal("flags not passed to runner")
 	}
 }
@@ -59,7 +59,7 @@ func TestConcurrentCreatesFinishBeforeFailureCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var mu sync.Mutex
-	creates, stops := 0, 0
+	creates, stops, removes := 0, 0, 0
 	entered := make(chan struct{}, 2)
 	var both sync.WaitGroup
 	both.Add(2)
@@ -117,6 +117,13 @@ func TestConcurrentCreatesFinishBeforeFailureCleanup(t *testing.T) {
 			cancel()
 			return context.Canceled
 		}
+		if args[1] == "remove" {
+			removes++
+			if ctx.Err() != nil || !strings.Contains(strings.Join(args, " "), "--abandon-cluster --delete-disks") {
+				t.Fatal("invalid disk cleanup", args, ctx.Err())
+			}
+			return nil
+		}
 		if args[1] != "stop" {
 			return fmt.Errorf("unexpected lifecycle action")
 		}
@@ -139,7 +146,7 @@ func TestConcurrentCreatesFinishBeforeFailureCleanup(t *testing.T) {
 
 	var out bytes.Buffer
 	err := runLifecycle(ctx, o, &out, invoke)
-	if err == nil || creates != 2 || stops != 2 || !strings.Contains(err.Error(), "shutdown") || !errors.Is(err, context.Canceled) {
+	if err == nil || creates != 2 || stops != 2 || removes != 2 || !strings.Contains(err.Error(), "shutdown") || !errors.Is(err, context.Canceled) {
 		t.Fatal("incomplete creation was not cleaned up", err, creates, stops)
 	}
 	if strings.Contains(out.String(), "PASS:") {
@@ -147,5 +154,80 @@ func TestConcurrentCreatesFinishBeforeFailureCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(o.StateDir, "checks", "nodes.json")); err != nil {
 		t.Fatal("cleanup removed ownership state")
+	}
+}
+
+func TestCleanupDiskPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		preserve, removeFails bool
+	}{
+		{name: "delete by default"},
+		{name: "preserve", preserve: true},
+		{name: "failed removal keeps backing images", removeFails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, tool := range []string{"kubectl", "tailscale"} {
+				if err := os.WriteFile(filepath.Join(root, tool), []byte("unused"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", root)
+			t.Setenv("TAILSCALE_AUTH_KEY", "tskey-auth-TEST")
+			o := Options{Name: "check", StateDir: filepath.Join(root, "run"), Domain: "example.ts.net", Accel: "tcg", Timeout: time.Minute, Preserve: tc.preserve}
+			image := filepath.Join(o.StateDir, "images", "base.qcow2")
+			disk := filepath.Join(o.StateDir, "checks", "disk.qcow2")
+			stopped, removed := false, false
+			invoke := func(_ context.Context, args []string, _ io.Writer) error {
+				switch args[1] {
+				case "create":
+					for _, p := range []string{image, disk, filepath.Join(o.StateDir, "checks", "nodes.json")} {
+						if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(p, []byte("test"), 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					return io.ErrUnexpectedEOF
+				case "stop":
+					stopped = true
+					return nil
+				case "remove":
+					if !stopped {
+						t.Fatal("removal before shutdown")
+					}
+					removed = true
+					if tc.removeFails {
+						return io.ErrClosedPipe
+					}
+					return os.Remove(disk)
+				default:
+					t.Fatal("unexpected action", args)
+					return nil
+				}
+			}
+			err := runLifecycle(context.Background(), o, io.Discard, invoke)
+			if err == nil || !stopped || removed == tc.preserve {
+				t.Fatal("incorrect cleanup", err, stopped, removed)
+			}
+			if tc.removeFails && !strings.Contains(err.Error(), "remove checks failed") {
+				t.Fatal("lost removal error", err)
+			}
+			for _, p := range []string{image, disk} {
+				_, err := os.Stat(p)
+				if tc.preserve || tc.removeFails {
+					if err != nil {
+						t.Fatal("lost retained artifact", p, err)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatal("artifact not deleted", p, err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(o.StateDir, "checks", "nodes.json")); err != nil {
+				t.Fatal("lost ownership state", err)
+			}
+		})
 	}
 }

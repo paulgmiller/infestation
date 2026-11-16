@@ -25,7 +25,8 @@ import (
 type commandRunner func(context.Context, []string, io.Writer) error
 
 // Run provisions exactly three servers and shuts down all attempted groups on
-// success, failure or cancellation. Disks and private state remain retained.
+// success, failure or cancellation. Disks are deleted unless Preserve is set.
+// Private ownership state and logs remain retained.
 func Run(ctx context.Context, o Options, out io.Writer) (result error) {
 	out = &lockedWriter{Writer: out}
 	logger := progressLogger(out)
@@ -101,7 +102,8 @@ func runLifecycle(ctx context.Context, o Options, out io.Writer, invoke commandR
 		defer done()
 		err := timedStage(cleanup, logger, "final_shutdown", func() error {
 			var failures []error
-			fmt.Fprintln(out, "Shutting down all test VMs; disks and private state retained")
+			removed := true
+			fmt.Fprintln(out, "Shutting down all test VMs")
 			for _, group := range attempted {
 				if _, err := os.Stat(filepath.Join(state, group, "nodes.json")); os.IsNotExist(err) {
 					continue
@@ -112,6 +114,25 @@ func runLifecycle(ctx context.Context, o Options, out io.Writer, invoke commandR
 				if err != nil {
 					failures = append(failures, fmt.Errorf("shutdown %s failed; inspect retained state: %w", group, err))
 				}
+				if !o.Preserve {
+					err := timedStage(cleanup, logger, "remove_group", func() error {
+						return invoke(cleanup, []string{"vm", "remove", "--name", group, "--state-dir", state, "--abandon-cluster", "--delete-disks"}, out)
+					}, slog.String("group", group))
+					if err != nil {
+						removed = false
+						failures = append(failures, fmt.Errorf("remove %s failed; disks and state retained for inspection: %w", group, err))
+					}
+				}
+			}
+			// Only run-local downloads are disposable. Shared image caches and
+			// images backing overlays retained after a removal failure stay intact.
+			if !o.Preserve && removed {
+				if err := os.RemoveAll(filepath.Join(state, "images")); err != nil {
+					failures = append(failures, fmt.Errorf("remove test images: %w", err))
+				}
+			}
+			if o.Preserve {
+				fmt.Fprintln(out, "Test disks and images preserved at", state)
 			}
 			return errors.Join(failures...)
 		})

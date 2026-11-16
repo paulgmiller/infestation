@@ -71,8 +71,10 @@ Options:
 - `--name`: unique group prefix; generated when omitted.
 - `--state-dir`: new private test directory that must not exist; otherwise a
   fresh directory is created in `/tmp`.
-- `--timeout`: lifecycle deadline, default 75 minutes; final shutdown has an
+- `--timeout`: lifecycle deadline, default 75 minutes; final cleanup has an
   additional eight-minute deadline.
+- `--preserve`: retain test VMs, disks and downloaded images after shutdown,
+  on success, failure or cancellation. By default test disks are deleted.
 - `--accel`: `kvm` (default) or `tcg` (slow).
 - `--base-image`: trusted local standalone Flatcar qcow2 base; otherwise download
   the pinned image.
@@ -82,11 +84,16 @@ Options:
 - `--ssh-base-image`: trusted base-image path on that remote host; otherwise the
   remote host downloads the pinned image.
 
-The test logs its private workstation state directory and shuts down every
-attempted test group on success or failure, with a bounded cleanup deadline. It
-retains all disks, credentials and state; it never deletes test resources. Cleanup
-failures fail the test and leave state for diagnosis. Inspect any shutdown failure
-before assuming all test VMs are stopped. This lifecycle only provisions through
+The test logs its private workstation state directory and attempts graceful shutdown
+of every test group on success, failure or cancellation, with a bounded cleanup
+deadline. By default it then removes the owned test VMs and permanently deletes
+their disk overlays, including on the SSH host. This explicitly abandons the test
+database; no evacuation is attempted. Run-local downloaded test images are deleted
+only when all VM removals succeed. Shared host image caches and supplied base
+images remain intact. Logs, credentials and ownership records remain.
+Use `--preserve` to retain VMs, disks and downloaded images after shutdown. Cleanup
+failures fail the test and leave state for diagnosis. Inspect any cleanup failure
+before assuming all test VMs are stopped or removed. This lifecycle only provisions through
 the explicit CLI `run` subcommand.
 
 ## Remote QEMU creation
@@ -184,9 +191,11 @@ private test output is `state/e2e-3014792880/run.log`. Millerbase retains its
 joining VM under `~/.local/share/infestation/vms/life-1794813204j/`. CA/admin
 credentials remain on millerbee. The test continues to default to `/tmp`, per
 the operator's preference; clear sufficient scratch space before provisioning.
-The updated test attempts bounded graceful shutdown on both pass and failure,
-reports cleanup errors and retains disks/state. It does not force power off or
-delete test disks automatically.
+That version attempted bounded graceful shutdown on both pass and failure,
+reported cleanup errors and retained disks/state. The current CLI additionally
+removes owned VMs and deletes disks by default; use `--preserve` for the recorded
+retention behavior. Removal verifies ownership and can terminate a guest that
+did not shut down gracefully.
 
 The recorded live run used the environment-gated Go test and external SQL CLI.
 The subsequent standalone CLI extraction and Go-client

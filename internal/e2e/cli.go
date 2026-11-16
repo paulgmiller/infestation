@@ -20,6 +20,7 @@ type Options struct {
 	SSH, SSHStateDir, SSHBaseImage      string
 	Accel, BaseImage, HelperSourceRef   string
 	Timeout                             time.Duration
+	Preserve                            bool
 }
 
 func (o Options) validate() error {
@@ -68,7 +69,7 @@ func newCommand(run func(context.Context, Options, io.Writer) error) *cobra.Comm
 	root := &cobra.Command{Use: "infestation-e2e", Short: "Run live Infestation lifecycle checks", Args: noArgs, SilenceErrors: true, SilenceUsage: true, CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true}}
 	root.RunE = func(cmd *cobra.Command, _ []string) error { return cmd.Help() }
 	var o Options
-	cmd := &cobra.Command{Use: "run", Short: "Create three VMs, test one-node restart, then shut down test VMs", Long: "Create a fresh three-server cluster on a dedicated test tailnet. This provisions VMs and initializes CockroachDB. Two VMs run locally; --ssh places the third on another host. On success, failure or cancellation, attempt graceful shutdown of all test groups and retain disks and private state.", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "run", Short: "Create three VMs, test one-node restart, then delete test disks", Long: "Create a fresh three-server cluster on a dedicated test tailnet. This provisions VMs and initializes CockroachDB. VMs run in one group per host; --ssh places the third on another host. On success, failure or cancellation, attempt graceful shutdown, then remove owned test VMs and their disks. Use --preserve to retain VMs and disks after shutdown. Private ownership state and logs remain available.", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if err := o.validate(); err != nil {
 			return err
 		}
@@ -86,6 +87,7 @@ func newCommand(run func(context.Context, Options, io.Writer) error) *cobra.Comm
 	f.StringVar(&o.Accel, "accel", "kvm", "QEMU accelerator: kvm or tcg")
 	f.StringVar(&o.HelperSourceRef, "helper-source-ref", ignition.DefaultHelperSourceRef, "published guest helper source branch, tag or commit")
 	f.DurationVar(&o.Timeout, "timeout", 75*time.Minute, "lifecycle deadline; cleanup has an additional eight-minute deadline")
+	f.BoolVar(&o.Preserve, "preserve", false, "retain test VMs, disks and run-local images after shutdown, including on failure")
 	_ = cmd.MarkFlagRequired("tailnet-domain")
 	root.AddCommand(cmd)
 	return root
