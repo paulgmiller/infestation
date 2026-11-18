@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,35 @@ import (
 	"github.com/paulgmiller/infestation/internal/fsutil"
 	"github.com/paulgmiller/infestation/internal/tailnet"
 )
+
+func TestClearStaleStartSocket(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "qmp.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	listener.SetUnlinkOnClose(false)
+	if err := clearStaleStartSocket(context.Background(), dir); err == nil {
+		t.Fatal("allowed start with a live monitor")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "qemu.pid"), []byte("2147483647\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearStaleStartSocket(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected stale monitor to be removed, got %v", err)
+	}
+}
 
 func TestProfileKeepsSecretsPrivateAndNetworkingOutboundOnly(t *testing.T) {
 	key := "tskey-auth-PRIVATE-TEST"

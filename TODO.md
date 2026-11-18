@@ -7,6 +7,10 @@ provider boundary and current implementation.
 
 ## Current priorities
 
+- [ ] Add opt-in QEMU VM autostart when the compute host boots after reboot or
+  power loss. Persist which owned VMs should resume, honor intentional stops,
+  and verify recovery of saved disks and tailnet connectivity after a host reboot.
+
 - [ ] Close the remaining historical gaps in the replica-replacement incident:
   recover n1/n3/beeroach identity mappings and removal times, effective dead-store
   and suspect settings, constraints/capacity, and which suspect predicate renewed

@@ -4,6 +4,7 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	config "github.com/coreos/ignition/v2/config/v3_3"
@@ -321,9 +323,8 @@ func Start(ctx context.Context, o Options, out io.Writer) error {
 	if err = validateNetwork(m.Network); err != nil {
 		return err
 	}
-	// QMP socket ownership/liveness is authoritative; never kill a bare PID.
-	if _, err = os.Lstat(filepath.Join(dir, "qmp.sock")); err == nil {
-		return fmt.Errorf("VM QMP socket exists; use vm status/stop before starting again")
+	if err := clearStaleStartSocket(ctx, dir); err != nil {
+		return err
 	}
 	for _, name := range []string{"console.log", "enrollment.json", "netcheck.json", "access.json", "diagnostics.json"} {
 		f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
@@ -389,8 +390,39 @@ func enrollment(dir, name string) (tailnet.Status, error) {
 	return s, nil
 }
 
+// clearStaleStartSocket runs with the VM lifecycle lock held.
+func clearStaleStartSocket(ctx context.Context, dir string) error {
+	present, err := processPresent(dir)
+	if err != nil {
+		return err
+	}
+	if present {
+		return fmt.Errorf("QEMU process is already running")
+	}
+	path := filepath.Join(dir, "qmp.sock")
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("QEMU monitor path is not a socket: %s", path)
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
+	if err == nil {
+		conn.Close()
+		return fmt.Errorf("QEMU monitor is already accepting connections")
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		return fmt.Errorf("cannot verify stale QEMU monitor: %w", err)
+	}
+	return os.Remove(path)
+}
+
 // qmp connects only to a socket inside this VM's private state directory.
-func qmp(ctx context.Context, dir, command string) (json.RawMessage, error) {
+func qmp(ctx context.Context, dir, command string, arguments ...map[string]any) (json.RawMessage, error) {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(dir, "qmp.sock"))
 	if err != nil {
 		return nil, err
@@ -403,23 +435,13 @@ func qmp(ctx context.Context, dir, command string) (json.RawMessage, error) {
 		return nil, err
 	}
 	for _, cmd := range []string{"qmp_capabilities", command} {
-		if err = enc.Encode(map[string]string{"execute": cmd}); err != nil {
-			return nil, err
+		var args map[string]any
+		if cmd == command && len(arguments) > 0 {
+			args = arguments[0]
 		}
-		for {
-			var msg map[string]json.RawMessage
-			if err = dec.Decode(&msg); err != nil {
-				return nil, err
-			}
-			if msg["error"] != nil {
-				return nil, fmt.Errorf("QEMU command %s failed", cmd)
-			}
-			if ret, ok := msg["return"]; ok {
-				if cmd == command {
-					return ret, nil
-				}
-				break
-			}
+		ret, err := qemuRPC(enc, dec, cmd, args)
+		if err != nil || cmd == command {
+			return ret, err
 		}
 	}
 	return nil, nil

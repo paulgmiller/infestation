@@ -17,6 +17,15 @@ type nodeAction func(context.Context, vm.ClusterOptions, io.Writer) error
 func (p provider) command() *cobra.Command {
 	cmd := &cobra.Command{Use: p.name, Short: "Manage " + p.name + " node groups", Args: noArgs, RunE: showHelp}
 	cmd.AddCommand(p.create(), p.start(), p.stop(), p.remove(), p.status(), p.wait(), p.kubeconfig())
+	if p.name == "vm" {
+		reenroll, o := p.nodeCommand("reenroll", "Restore Tailscale access to running QEMU guests", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
+			return vm.Reenroll(ctx, o.Options, out)
+		})
+		reenroll.Long = "Restore Tailscale access to running QEMU guests from their compute host using a temporary Flatcar guest-agent channel."
+		reenroll.Flags().StringVar(&o.Instance, "instance", "", "re-enroll only this zero-based instance in the owned group")
+		reenroll.Flags().StringVar(&o.AuthKeyFile, "tailscale-auth-key-file", "", "path to a tagged auth key (defaults to TAILSCALE_AUTH_KEY)")
+		cmd.AddCommand(reenroll)
+	}
 	return cmd
 }
 

@@ -133,3 +133,21 @@ mismatches, reused PIDs and start locks. Azure tests use a fake typed SDK client
 check subscription/group scope, ownership rejection, absent groups and deletion
 failure with retained state. These checks do not provision or delete real QEMU
 VMs or Azure resources; live teardown remains unverified.
+
+## Restore QEMU tailnet access
+
+On the QEMU host, use the running group's saved state and a fresh tagged
+Tailscale auth key. Use a reusable key for multiple guests, or select one guest
+with `--instance`.
+
+```sh
+infestation vm reenroll --name lab --tailscale-auth-key-file /private/path/key
+```
+
+The command temporarily hot-plugs Flatcar's guest-agent port and supplies the key
+over a private Unix socket. It skips enrollment for guests already connected
+with their expected identity. It preserves disks and does not restart the guests
+or cluster services. If a recreated Tailscale identity receives a new IP, verify
+CockroachDB and K3s connectivity separately.
+
+[Flatcar guest-agent activation](https://www.flatcar.org/docs/latest/os-config/network/acpi/#qemu-guest-agent)
