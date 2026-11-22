@@ -18,6 +18,19 @@ func (p provider) command() *cobra.Command {
 	cmd := &cobra.Command{Use: p.name, Short: "Manage " + p.name + " node groups", Args: noArgs, RunE: showHelp}
 	cmd.AddCommand(p.create(), p.start(), p.stop(), p.remove(), p.status(), p.wait(), p.kubeconfig())
 	if p.name == "vm" {
+		var enabled bool
+		autostart, options := p.nodeCommand("autostart", "Set boot autostart policy on the QEMU compute host", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
+			return vm.ConfigureAutostart(ctx, o.Options, enabled, out)
+		})
+		autostart.Long = "Change saved boot policy without starting VMs. Run on the actual compute host. Stopped VMs stay stopped until an explicit start. Create installs the user boot service by default; see docs/autostart.md."
+		autostart.Flags().BoolVar(&enabled, "enable", true, "enable policy; use --enable=false to disable")
+		autostart.Flags().StringVar(&options.Instance, "instance", "", "configure only this zero-based owned instance")
+		var stateDir string
+		resume := &cobra.Command{Use: "autostart-run", Short: "Resume opted-in local VMs after compute-host boot", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+			return vm.ResumeLocal(cmd.Context(), vm.Options{StateDir: stateDir}, cmd.OutOrStdout())
+		}}
+		resume.Flags().StringVar(&stateDir, "state-dir", vm.DefaultStateDir(), "private host-local provider state")
+		cmd.AddCommand(autostart, resume)
 		reenroll, o := p.nodeCommand("reenroll", "Restore Tailscale access to running QEMU guests", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
 			return vm.Reenroll(ctx, o.Options, out)
 		})

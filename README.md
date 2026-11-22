@@ -123,6 +123,9 @@ workload connectivity checks using Kubernetes credentials alone.
 Use `vm create --ssh user@host` to run QEMU on another Linux machine while
 keeping CA/admin credentials on the workstation. Later lifecycle commands use
 the saved SSH host automatically. See the [lifecycle test and SSH setup](docs/vm-lifecycle-test.md).
+QEMU create enables [boot autostart](docs/autostart.md) under the compute-host
+account by default; use `--autostart=false` to opt out. It warns when lingering
+is disabled. Intentional stops remain stopped.
 
 Every command has `--help`. Local VM control runs on its QEMU host; Azure control
 requires saved provider state and Azure SDK credentials. See [where commands run](docs/local-state.md#where-lifecycle-commands-run).

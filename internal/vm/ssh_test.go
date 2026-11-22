@@ -35,6 +35,7 @@ func TestSSHCreateTransfersOnlyProfilesAndPersistsRouting(t *testing.T) {
 	r := preparedProviderFixture(t, "qemu")
 	r.SSHTarget = "vm-host"
 	r.SSHStateDir = "/remote/vms"
+	r.Autostart = true
 	// Secret workstation artifacts must never be serialized into the RPC.
 	if err := fsutil.WriteFile(filepath.Join(r.StateDir, "pki", "ca.key"), []byte("CA-PRIVATE-MARKER"), 0600); err != nil {
 		t.Fatal(err)
@@ -55,7 +56,7 @@ func TestSSHCreateTransfersOnlyProfilesAndPersistsRouting(t *testing.T) {
 	if err := json.Unmarshal(raw, &request); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "CA-PRIVATE-MARKER") || len(request.Profiles) != 2 || request.Operation != "create" {
+	if strings.Contains(string(raw), "CA-PRIVATE-MARKER") || len(request.Profiles) != 2 || request.Operation != "create" || !request.Group.Autostart {
 		t.Fatal("unexpected private SSH request")
 	}
 	var link sshCompute
@@ -81,6 +82,47 @@ func TestSSHCreateTransfersOnlyProfilesAndPersistsRouting(t *testing.T) {
 		if request.Operation != action || request.Owner != link.Owner || request.Options.StateDir != link.StateDir || !request.Options.AllowOutage || request.Options.Instance != o.Instance {
 			t.Fatal("lifecycle lost routing or ownership")
 		}
+	}
+}
+
+func TestSSHCreateSetsUpAutostartOnReceivingHostBeforeDisks(t *testing.T) {
+	group := preparedProviderFixture(t, "qemu")
+	group.Autostart = true
+	_, config, err := loadCluster(Options{Name: group.Name, StateDir: filepath.Dir(group.StateDir)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp("", "ssh-as-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	request := sshRequest{Operation: "create", Owner: uuid.NewString(), Group: group, Config: config, Options: Options{Name: group.Name, StateDir: root}}
+	for _, node := range group.Nodes {
+		raw, err := os.ReadFile(node.IgnitionPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Profiles = append(request.Profiles, raw)
+	}
+	log := fakeAutostartComputeHost(t, true)
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err = ServeSSH(context.Background(), bytes.NewReader(raw), &out)
+	if err == nil || !strings.Contains(out.String(), "no VMs created") || !strings.Contains(out.String(), "Warning: lingering is disabled") {
+		t.Fatal("remote setup failed without useful, sanitized output", err, out.String())
+	}
+	calls, _ := os.ReadFile(log)
+	if strings.Contains(string(calls), "qemu") {
+		t.Fatal("remote service failure reached VM provisioning", string(calls))
+	}
+	name, _, _, _ := autostartService(root, autostartHost{ConfigDir: os.Getenv("XDG_CONFIG_HOME"), Executable: "/bin/infestation"})
+	unit, err := os.ReadFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "systemd", "user", name))
+	if err != nil || !strings.Contains(string(unit), root) || strings.Contains(string(unit), filepath.Dir(group.StateDir)) {
+		t.Fatal("service used workstation state instead of compute-host state", err)
 	}
 }
 func TestSSHFailuresRetainOwnershipAndDoNotExposeSecrets(t *testing.T) {

@@ -7,9 +7,9 @@ provider boundary and current implementation.
 
 ## Current priorities
 
-- [ ] Add opt-in QEMU VM autostart when the compute host boots after reboot or
-  power loss. Persist which owned VMs should resume, honor intentional stops,
-  and verify recovery of saved disks and tailnet connectivity after a host reboot.
+- [ ] Live-verify default-on [QEMU host autostart](docs/autostart.md) after reboot or
+  power loss: recovery of saved disks and tailnet connectivity, intentional-stop
+  exclusion and boot-service behavior on the compute host.
 
 - [ ] Close the remaining historical gaps in the replica-replacement incident:
   recover n1/n3/beeroach identity mappings and removal times, effective dead-store
@@ -18,7 +18,8 @@ provider boundary and current implementation.
   destination rejection; source explains why a suspect store can still count as
   live, but neither proves its root cause or continuous duration. Use the
   [investigation and collection runbook](docs/quorum-investigation.md).
-- [ ] Live-verify the [normal removal guard](docs/removal.md): strict whole-batch
+- [ ] Implement the missing guest `retire` helper behind the
+  [normal removal guard](docs/removal.md), then live-verify strict whole-batch
   CockroachDB decommissioning, placement/capacity refusal, zero-replica completion
   and healthy survivors before compute deletion. Implement safe retry reconciliation
   when an earlier attempt has already stopped/deleted some verified targets;

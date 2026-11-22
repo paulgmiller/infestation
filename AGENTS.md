@@ -2,6 +2,13 @@
 
 Infestation is one Go module at this repository root. Read README.md first.
 
+- Before implementing TODO work, use Matt Pocock's
+  [grill-me](https://github.com/mattpocock/skills/blob/main/skills/productivity/grill-me/SKILL.md)
+  and its referenced
+  [grilling workflow](https://github.com/mattpocock/skills/blob/main/skills/productivity/grilling/SKILL.md).
+  Inspect the code for facts, ask design questions with recommended answers,
+  and resolve dependent decisions in rounds. Wait for the user's confirmation
+  of shared understanding before implementing the TODO.
 - `cmd/infestation` is the CLI; portable logic lives under `internal/`.
 - Read `docs/goals.md` and `docs/architecture.md` for the intended provider
   boundary. QEMU and Azure are the current providers; any compatible VM compute

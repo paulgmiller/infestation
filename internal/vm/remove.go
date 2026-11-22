@@ -194,13 +194,11 @@ func removeMachine(ctx context.Context, o Options, deleteDisks bool) error {
 	} else if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(dir, "start.lock")
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	lock, err := lockMachine(dir)
 	if err != nil {
 		return fmt.Errorf("another start/removal may be in progress: %w", err)
 	}
-	lock.Close()
-	defer os.Remove(lockPath)
+	defer lock.Close()
 	present, err := processPresent(dir)
 	if err != nil {
 		return err
@@ -214,6 +212,9 @@ func removeMachine(ctx context.Context, o Options, deleteDisks bool) error {
 		if !present {
 			return fmt.Errorf("QEMU is running without a verified PID; preserving resources")
 		}
+		if err := setResume(dir, false); err != nil {
+			return err
+		}
 		if _, err := qmp(ctx, dir, "quit"); err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
@@ -221,6 +222,9 @@ func removeMachine(ctx context.Context, o Options, deleteDisks bool) error {
 		return fmt.Errorf("QEMU process exists but monitor is unavailable: %w", monitorErr)
 	} else if !errors.Is(monitorErr, os.ErrNotExist) && !errors.Is(monitorErr, syscall.ECONNREFUSED) {
 		return fmt.Errorf("cannot verify stopped QEMU: %w", monitorErr)
+	}
+	if err := setResume(dir, false); err != nil {
+		return err
 	}
 	deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

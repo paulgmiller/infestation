@@ -34,6 +34,8 @@ type Options struct {
 	Instance                                                        string // zero-based owned instance index; empty selects the whole group
 	Wait                                                            time.Duration
 	AllowOutage                                                     bool
+	Autostart                                                       bool   // create: enable saved policy before initial start
+	resumeOnly                                                      bool   // host boot: recheck saved intent under the lifecycle lock
 	profile                                                         []byte // private rendered cluster profile; never persisted in metadata
 	MemoryMiB                                                       int
 }
@@ -256,6 +258,11 @@ func Create(ctx context.Context, o Options, out io.Writer) error {
 	if err = fsutil.WriteJSON(filepath.Join(dir, "machine.json"), machine{Name: o.Name, BaseImage: base, Accel: o.Accel, Network: o.Network, MemoryMiB: o.MemoryMiB}); err != nil {
 		return err
 	}
+	if o.Autostart {
+		if err := writeAutostart(dir, autostartState{Enabled: true}); err != nil {
+			return err
+		}
+	}
 	return Start(ctx, o, out)
 }
 
@@ -305,12 +312,38 @@ func Start(ctx context.Context, o Options, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, "start.lock"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	lock, err := lockMachine(dir)
 	if err != nil {
 		return fmt.Errorf("another start may be in progress: %w", err)
 	}
-	lock.Close()
-	defer os.Remove(filepath.Join(dir, "start.lock"))
+	defer lock.Close()
+	if o.resumeOnly {
+		state, err := readAutostart(dir)
+		if err != nil {
+			return err
+		}
+		if !state.Enabled || !state.Resume {
+			return nil
+		}
+		present, err := processPresent(dir)
+		if err != nil {
+			return err
+		}
+		if present {
+			return nil
+		}
+		// A boot hook may only reopen saved disks and profiles, never create
+		// replacements or follow a symlink to another machine's data.
+		for _, name := range []string{"disk.qcow2", "config.ign"} {
+			info, err := os.Lstat(filepath.Join(dir, name))
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("autostart requires saved regular %s", name)
+			}
+		}
+	}
 	if o.Accel != "" {
 		m.Accel = o.Accel
 	}
@@ -332,6 +365,9 @@ func Start(ctx context.Context, o Options, out io.Writer) error {
 			return err
 		}
 		f.Close()
+	}
+	if err := setResume(dir, true); err != nil {
+		return err
 	}
 	result := executil.OSRunner{}.Run(ctx, "qemu-system-x86_64", arguments(dir, m)...)
 	if err = result.Err("start QEMU"); err != nil {
@@ -477,12 +513,11 @@ func Stop(ctx context.Context, o Options, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, "start.lock"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	lock, err := lockMachine(dir)
 	if err != nil {
 		return fmt.Errorf("another lifecycle operation may be in progress: %w", err)
 	}
-	lock.Close()
-	defer os.Remove(filepath.Join(dir, "start.lock"))
+	defer lock.Close()
 	present, err := processPresent(dir)
 	if err != nil {
 		return err
@@ -491,6 +526,9 @@ func Stop(ctx context.Context, o Options, out io.Writer) error {
 		// A live monitor without a verified process must never be treated as stopped.
 		if _, err := os.Lstat(filepath.Join(dir, "qmp.sock")); !os.IsNotExist(err) {
 			return fmt.Errorf("unverified QEMU monitor; resources retained")
+		}
+		if err := setResume(dir, false); err != nil {
+			return err
 		}
 		fmt.Fprintln(out, o.Name, "already stopped; disk retained")
 		return nil
@@ -502,6 +540,11 @@ func Stop(ctx context.Context, o Options, out io.Writer) error {
 	var identity struct{ Name string }
 	if json.Unmarshal(raw, &identity) != nil || identity.Name != o.Name {
 		return fmt.Errorf("QEMU monitor identity mismatch")
+	}
+	// Persist intentional stop before requesting powerdown, even if waiting
+	// later times out or the host loses power during shutdown.
+	if err := setResume(dir, false); err != nil {
+		return err
 	}
 	if _, err := qmp(ctx, dir, "system_powerdown"); err != nil {
 		return err

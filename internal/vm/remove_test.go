@@ -98,7 +98,11 @@ func TestQEMURemovalRejectsForeignStateBeforeMutation(t *testing.T) {
 				os.Rename(target, target+"-saved")
 				os.Symlink(target+"-saved", target)
 			case "lock":
-				os.WriteFile(filepath.Join(node, "start.lock"), nil, 0600)
+				lock, err := lockMachine(node)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { lock.Close() })
 			case "pid":
 				os.WriteFile(filepath.Join(node, "qemu.pid"), []byte(strconv.Itoa(os.Getpid())), 0600)
 			}

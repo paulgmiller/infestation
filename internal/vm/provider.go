@@ -59,6 +59,7 @@ type PreparedGroup struct {
 	Subscription                          string
 	SSHTarget, SSHStateDir                string
 	Egress                                string
+	Autostart                             bool
 }
 
 type PreparedNode struct {
@@ -94,7 +95,7 @@ func (azureCompute) Capabilities() ComputeCapabilities {
 
 func preparedComputeGroup(o ClusterOptions, dir, base string, nodes []cluster.Node) PreparedGroup {
 	p, _ := ProviderFor(o.Provider) // CreateCluster has already resolved it.
-	r := PreparedGroup{Name: o.Name, StateDir: dir, ImageVersion: FlatcarVersion, Architecture: "x86-64", ImagePath: base, MemoryMiB: o.MemoryMiB, Accelerator: o.Accel, MachineType: o.AzureVMSize, Region: o.AzureLocation, Subscription: o.AzureSubscription, Egress: p.Capabilities().Egress, SSHTarget: o.SSHTarget, SSHStateDir: o.SSHStateDir}
+	r := PreparedGroup{Name: o.Name, StateDir: dir, ImageVersion: FlatcarVersion, Architecture: "x86-64", ImagePath: base, MemoryMiB: o.MemoryMiB, Accelerator: o.Accel, MachineType: o.AzureVMSize, Region: o.AzureLocation, Subscription: o.AzureSubscription, Egress: p.Capabilities().Egress, SSHTarget: o.SSHTarget, SSHStateDir: o.SSHStateDir, Autostart: o.Autostart}
 	for _, n := range nodes {
 		r.Nodes = append(r.Nodes, PreparedNode{Name: n.Name, IgnitionPath: filepath.Join(dir, "output", n.Name+".ign")})
 	}
@@ -177,6 +178,12 @@ func (p qemuCompute) Create(ctx context.Context, r PreparedGroup, out io.Writer)
 	if r.ImagePath == "" || r.MemoryMiB < 2048 || r.MemoryMiB > 32768 {
 		return fmt.Errorf("QEMU requires a prepared local image and 2048–32768 MiB of memory")
 	}
+	if r.Autostart {
+		if err := setupUserAutostart(ctx, filepath.Dir(r.StateDir), out); err != nil {
+			fmt.Fprintln(out, "Autostart user-service setup failed; no VMs created. Check the compute-host user manager and unit file, or use --autostart=false.")
+			return err
+		}
+	}
 	for _, n := range r.Nodes {
 		raw, err := os.ReadFile(n.IgnitionPath)
 		if err != nil {
@@ -186,7 +193,7 @@ func (p qemuCompute) Create(ctx context.Context, r PreparedGroup, out io.Writer)
 		if err != nil {
 			return fmt.Errorf("cannot prepare diagnostic channels for %s; inspect the private Ignition profile", n.Name)
 		}
-		if err := Create(ctx, Options{Name: n.Name, StateDir: r.StateDir, BaseImage: r.ImagePath, Accel: r.Accelerator, Network: "slirp", MemoryMiB: r.MemoryMiB, profile: raw}, out); err != nil {
+		if err := Create(ctx, Options{Name: n.Name, StateDir: r.StateDir, BaseImage: r.ImagePath, Accel: r.Accelerator, Network: "slirp", MemoryMiB: r.MemoryMiB, Autostart: r.Autostart, profile: raw}, out); err != nil {
 			return err
 		}
 	}

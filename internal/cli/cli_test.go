@@ -10,6 +10,24 @@ import (
 	"testing"
 )
 
+func TestCreateAutostartDefaultsOnAndIsQEMUOnly(t *testing.T) {
+	cmd := (provider{name: "vm"}).create()
+	flag := cmd.Flags().Lookup("autostart")
+	if flag == nil || flag.DefValue != "true" {
+		t.Fatal("QEMU create must default to autostart")
+	}
+	if err := cmd.ParseFlags([]string{"--autostart=false"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := cmd.Flags().GetBool("autostart")
+	if err != nil || value {
+		t.Fatal("create opt-out not accepted", err)
+	}
+	if (provider{name: "azure"}).create().Flags().Lookup("autostart") != nil {
+		t.Fatal("host user-service option exposed for Azure")
+	}
+}
+
 func TestHelpShowsOnlyProviderLifecycle(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run(context.Background(), nil, &out); err != nil {

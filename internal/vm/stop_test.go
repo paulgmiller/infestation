@@ -75,6 +75,13 @@ func TestStopWaitsForExitAndPreservesDisk(t *testing.T) {
 					_ = conn.Close()
 				}
 			}()
+			if err := configureMachineAutostart(Options{Name: "pool-0", StateDir: dir}, true); err != nil {
+				t.Fatal(err)
+			}
+			state, err := readAutostart(node)
+			if err != nil || !state.Resume {
+				t.Fatal("enabling a verified running machine did not arm boot", state, err)
+			}
 			err = Stop(ctx, Options{Name: "pool-0", StateDir: dir}, io.Discard)
 			switch scenario {
 			case "shutdown":
@@ -98,6 +105,10 @@ func TestStopWaitsForExitAndPreservesDisk(t *testing.T) {
 				if e != nil || !present {
 					t.Fatal("cancellation forced process off", e)
 				}
+			}
+			state, stateErr := readAutostart(node)
+			if stateErr != nil || state.Resume != (scenario == "wrong-identity") {
+				t.Fatal("stop intent changed before identity verification or survived powerdown", state, stateErr)
 			}
 			raw, err := os.ReadFile(filepath.Join(node, "disk.qcow2"))
 			if err != nil || string(raw) != "private-data" {

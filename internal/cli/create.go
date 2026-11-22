@@ -24,6 +24,7 @@ func (p provider) create() *cobra.Command {
 		f.StringVar(&o.AzureLocation, "region", azureconfig.DefaultRegion, "Azure region")
 		f.StringVar(&o.AzureVMSize, "sku", azureconfig.DefaultSKU, "Azure VM SKU")
 	} else {
+		f.BoolVar(&o.Autostart, "autostart", true, "enable boot autostart with a user service; warns when lingering is disabled")
 		f.StringVar(&o.SSHTarget, "ssh", "", "SSH destination for the QEMU host (requires matching infestation on its PATH or in ~/go/bin)")
 		f.StringVar(&o.SSHStateDir, "ssh-state-dir", "", "absolute private state directory on the SSH host (default: remote user data directory)")
 		f.StringVar(&o.Host, "host", "", "stable physical QEMU host label (default: hashed machine-id)")
