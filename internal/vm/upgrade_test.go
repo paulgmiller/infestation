@@ -256,3 +256,113 @@ esac
 		})
 	}
 }
+
+func TestUpgradeGroupPinsWaitForEveryInstance(t *testing.T) {
+	o, dir, current := upgradeFixture(t)
+	_, config, err := loadCluster(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.K3sExtensionVersion = "v1.35.8+k3s1"
+	if err := fsutil.WriteJSON(inventoryPath(dir), config); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateUpgradeInventory(dir); err != nil {
+		t.Fatal(err)
+	}
+	_, config, err = loadCluster(o)
+	if err != nil || config.K3sExtensionVersion != "v1.35.8+k3s1" {
+		t.Fatal("partial rollout changed group pins", err)
+	}
+	cfg, err := profileNode(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Node = "pool-1"
+	cfg.Cluster.Nodes[0].Name = "pool-1"
+	// Generate an actual second-node profile with the target release.
+	doc, err := ignition.Render(cfg.Cluster, cfg.Cluster.Nodes[0], "", "", ignition.Bootstrap{HelperSourceCommit: strings.Repeat("a", 40), TailscaleAuthKey: "tskey-auth-TEST"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsutil.WriteFile(upgradeProfilePath(dir, "pool-1"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateUpgradeInventory(dir); err != nil {
+		t.Fatal(err)
+	}
+	_, config, err = loadCluster(o)
+	if err != nil || config.K3sExtensionVersion != K3sVersion {
+		t.Fatal("complete rollout did not advance group pins", err)
+	}
+	for _, name := range []string{"pool-0", "pool-1"} {
+		data, err := os.ReadFile(filepath.Join(dir, name, "disk.qcow2"))
+		if err != nil || string(data) != "private-data" {
+			t.Fatal("bookkeeping changed an instance disk")
+		}
+	}
+}
+
+// Simulate update-engine state across attempts. No Flatcar update or node SSH
+// runs here. In particular, a retry must reuse a matching pending payload.
+func TestStageFlatcarHandlesAlreadyStagedAndBusyUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name, current, op, pending string
+		wantUpdate, wantError      bool
+	}{
+		{"matching-pending", "4757.2.2", "UPDATE_STATUS_UPDATED_NEED_REBOOT", FlatcarVersion, false, false},
+		{"different-pending", "4757.2.2", "UPDATE_STATUS_UPDATED_NEED_REBOOT", "4757.2.3", false, true},
+		{"already-current", FlatcarVersion, "UPDATE_STATUS_IDLE", "", false, false},
+		{"current-but-other-pending", FlatcarVersion, "UPDATE_STATUS_UPDATED_NEED_REBOOT", "9999.0.0", false, true},
+		{"busy", "4757.2.2", "UPDATE_STATUS_DOWNLOADING", FlatcarVersion, false, true},
+		{"stage-new", "4757.2.2", "UPDATE_STATUS_IDLE", "", true, false},
+		{"downgrade", "9999.0.0", "UPDATE_STATUS_IDLE", "", false, true},
+		{"missing-status", "4757.2.2", "", "", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			log := filepath.Join(bin, "calls")
+			staged := filepath.Join(bin, "staged")
+			script := `#!/bin/sh
+printf '%s\n' "$*" >> "$UPGRADE_TEST_CALLS"
+case "$*" in
+ *update_engine_client*)
+  if test -e "$UPGRADE_TEST_STAGED"; then
+   printf 'CURRENT_OP=UPDATE_STATUS_UPDATED_NEED_REBOOT\nNEW_VERSION=%s\n' "$UPGRADE_TEST_TARGET"
+  else
+   printf 'CURRENT_OP=%s\nNEW_VERSION=%s\n' "$UPGRADE_TEST_OP" "$UPGRADE_TEST_PENDING"
+  fi;;
+ *flatcar-update*) touch "$UPGRADE_TEST_STAGED";;
+ *VERSION_ID*) printf '%s' "$UPGRADE_TEST_CURRENT";;
+ *) exit 90;;
+esac
+`
+			if err := os.WriteFile(filepath.Join(bin, "tailscale"), []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+			for k, v := range map[string]string{"UPGRADE_TEST_CALLS": log, "UPGRADE_TEST_STAGED": staged, "UPGRADE_TEST_TARGET": FlatcarVersion, "UPGRADE_TEST_CURRENT": tc.current, "UPGRADE_TEST_OP": tc.op, "UPGRADE_TEST_PENDING": tc.pending} {
+				t.Setenv(k, v)
+			}
+			err := stageFlatcar(context.Background(), "mock.example.ts.net")
+			if (err != nil) != tc.wantError {
+				t.Fatalf("stage result: %v", err)
+			}
+			calls, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			called := bytes.Contains(calls, []byte("/usr/bin/flatcar-update --to-version"))
+			if called != tc.wantUpdate {
+				t.Fatal("unexpected update attempt", string(calls))
+			}
+			if bytes.Contains(calls, []byte("reset_status")) {
+				t.Fatal("discarded staged update")
+			}
+		})
+	}
+}

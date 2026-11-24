@@ -37,8 +37,16 @@ The retained directories are listed in the
 Docker/containerd caches, logs and the verified helper build cache are retained
 as well. Database, Tailscale, K3s, machine-ID and SSH identities are preserved.
 
+During a partial group rollout, each saved per-node profile records its own pins.
+The group inventory pins advance after every instance profile has converged.
+
 Progress and recovery files live privately inside the selected VM directory at
 `upgrade-v1.36.5-k3s1/`. Rerun the same command after correcting a failure. The VM
+may already have the target Flatcar update staged by update-engine; the command
+reuses a matching pending payload instead of calling `flatcar-update` again.
+A different pending version blocks the upgrade without discarding that payload.
+An update in progress must finish before retrying.
+The VM
 lifecycle lock prevents concurrent start/stop/autostart while the command runs.
 A failure can leave the node cordoned, CockroachDB drained, reset pending or the
 VM stopped. The command resumes from its saved stage rather than operating on
@@ -58,4 +66,32 @@ implementation.
 Local mock tests cover instance selection, lifecycle exclusion, live-disk copy
 refusal, resuming after start succeeded but checkpoint persistence was interrupted,
 state/SSH-key retention, staged extension delivery and supported K3s transitions.
-They do not boot Flatcar. Live canary evidence will be recorded after verification.
+They do not boot Flatcar. Live evidence is recorded below.
+
+### Live canary, 2026-11-24
+
+`bin/infestation vm upgrade --name beeback --instance 0` completed a retained-state
+reset on beeback-0. K3s changed from `v1.35.8+k3s1` to `v1.36.5+k3s1`; Flatcar
+remained `4757.2.4`, Tailscale remained `v1.104.2`, and CockroachDB remained
+`v26.2.7`. The helper build was pinned to source commit
+`d8e8343c25400b42f360bdd787c5a9526892869e`. The command confirmed the retained
+machine, SSH host-key, database CA, Kubernetes node-password, Tailscale device and
+database cluster/node identities. It verified the target versions and Ready
+condition before uncordoning the node. Its standalone offline qcow2 copy passed
+`qemu-img check`.
+
+A repeated completed operation verified successfully without changing QEMU's
+PID or rebooting the VM. The final CLI also reconciled the completed group's
+saved software pins. Kubernetes reported beeback-0 Ready on 1.36.5 and both live
+basementquiet nodes Ready on 1.35.8. Old stopped nodes remained NotReady entries;
+no node removal was performed. The CLI was installed on millerbase and its
+upgrade help was checked; its VMs were not upgraded in this canary.
+
+The initial read-only attempt stopped before drain/reset because the identity
+query lacked `allow_unsafe_internals`; the command now sets that SQL session
+option using the existing limited Kine identity. No administrator credentials
+were deployed. `go test ./...` and `go vet ./...` passed with the final code.
+
+The command deliberately uses host shutdown/start rather than just an in-guest
+reboot to provide an offline disk-copy interval. Both trigger the staged Flatcar
+reset at the next boot.

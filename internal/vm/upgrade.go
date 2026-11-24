@@ -477,17 +477,67 @@ func stageUpgrade(ctx context.Context, host string, r upgradeRecord) error {
 	if err != nil || strings.TrimSpace(string(contract)) != nodebootstrap.HelperContractVersion {
 		return fmt.Errorf("staged helper has an incompatible contract")
 	}
+	return stageFlatcar(ctx, host)
+}
+
+func readFlatcarUpdateStatus(ctx context.Context, host string) (string, string, error) {
+	raw, err := upgradeSSH(ctx, host, "/usr/bin/update_engine_client -status", nil)
+	if err != nil {
+		return "", "", fmt.Errorf("read Flatcar updater status: %w", err)
+	}
+	values := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || (key != "CURRENT_OP" && key != "NEW_VERSION") {
+			continue
+		}
+		if _, exists := values[key]; exists {
+			return "", "", fmt.Errorf("ambiguous Flatcar updater status")
+		}
+		values[key] = value
+	}
+	if values["CURRENT_OP"] == "" {
+		return "", "", fmt.Errorf("Flatcar updater did not report its state")
+	}
+	return values["CURRENT_OP"], values["NEW_VERSION"], nil
+}
+
+func stageFlatcar(ctx context.Context, host string) error {
 	version, err := upgradeSSH(ctx, host, ". /etc/os-release; printf '%s' \"$VERSION_ID\"", nil)
 	if err != nil {
 		return err
 	}
-	if string(version) != FlatcarVersion {
-		if compareFlatcar(string(version), FlatcarVersion) >= 0 {
-			return fmt.Errorf("refusing Flatcar downgrade or unknown version")
+	current := strings.TrimSpace(string(version))
+	op, pending, err := readFlatcarUpdateStatus(ctx, host)
+	if err != nil {
+		return err
+	}
+	// flatcar-update refuses another update until an already-staged update boots.
+	// Reuse that payload only when it matches this binary's exact OS target.
+	if op == "UPDATE_STATUS_UPDATED_NEED_REBOOT" {
+		if pending != FlatcarVersion {
+			return fmt.Errorf("Flatcar %s is already staged for reboot; this binary targets %s; pending update retained", pending, FlatcarVersion)
 		}
-		if _, err := upgradeSSH(ctx, host, "/usr/bin/flatcar-update --to-version "+FlatcarVersion, nil); err != nil {
-			return fmt.Errorf("stage Flatcar update: %w", err)
-		}
+		return nil
+	}
+	if op != "UPDATE_STATUS_IDLE" {
+		return fmt.Errorf("Flatcar updater is busy (%s); wait and rerun this command", op)
+	}
+	if current == FlatcarVersion {
+		return nil
+	}
+	if compareFlatcar(current, FlatcarVersion) >= 0 {
+		return fmt.Errorf("refusing Flatcar downgrade or unknown version")
+	}
+	if _, err := upgradeSSH(ctx, host, "/usr/bin/flatcar-update --to-version "+FlatcarVersion, nil); err != nil {
+		return fmt.Errorf("stage Flatcar update: %w", err)
+	}
+	op, pending, err = readFlatcarUpdateStatus(ctx, host)
+	if err != nil {
+		return err
+	}
+	if op != "UPDATE_STATUS_UPDATED_NEED_REBOOT" || pending != FlatcarVersion {
+		return fmt.Errorf("Flatcar target update is not staged for reboot; node retained")
 	}
 	return nil
 }
