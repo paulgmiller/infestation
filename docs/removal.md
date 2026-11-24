@@ -1,9 +1,9 @@
 # Removing compute safely
 
-The workstation orchestration is implemented, but the guest `retire` command
-described below is still missing. Normal removal therefore fails closed and
-retains compute. The protocol below records the intended guest behavior, not
-live-verified functionality.
+The workstation orchestration and read-only guest `retire --identify` command
+are implemented. Guest execution of batch retirement is pending, so normal
+removal fails closed and retains compute. Guest identity probing still needs
+live verification.
 
 Normal `vm remove` and `azure remove` ask the guests to decommission their
 host CockroachDB members before deleting compute. The workstation needs saved
@@ -92,12 +92,54 @@ cleanup path for failed initial provisioning that never formed a database.
 
 Kubernetes workload draining, API Service withdrawal, Kubernetes Node deletion
 and stale tailnet-registration cleanup remain outstanding. Database evacuation
-does not establish application availability. Temporary stop must not permanently
-decommission members; the public provider contract refuses stop until its
-whole-batch quorum check and temporary drain are implemented.
-
-Local orchestration tests use a fake Tailscale runner to cover exact commands,
+does not establish application availability. Local orchestration tests use a fake Tailscale runner to cover exact commands,
 whole-batch delegation, changed cluster/CA/node/store identity, old helper failure,
 response bounds, malformed JSON, stale/mismatched receipts, checkpoint privacy
-and retention of compute on failed verification. Guest-side retirement and its
-tests remain unimplemented. Mocks do not constitute a live decommission test.
+and retention of compute on failed verification. Local guest tests cover identity response validation. Batch execution and
+its tests remain outstanding. Mocks do not constitute a live decommission test.
+
+## Temporary stops
+
+Use `infestation vm stop --name GROUP` or `infestation azure stop --name GROUP`
+when the same database members are expected to return on their saved disks.
+Local and SSH-backed QEMU groups also accept `--instance INDEX`. SSH-backed
+groups run the stop workflow on the compute host, which needs Tailscale SSH
+access to its guests. Azure runs it from the workstation.
+
+1. Resolve targets from saved ownership state and check their provider state.
+   Skip VMs already stopped. QEMU holds its per-VM lifecycle lock through both
+   phases and records intentional stop for host autostart. Azure compares the
+   live VMSS instance IDs with the full saved inventory.
+2. Drain CockroachDB on running database hosts, up to four guests in parallel.
+   Use Tailscale SSH as `core` with noninteractive sudo to invoke the local
+   container's `cockroach node drain --self` with its existing node certificate
+   and a 90-second drain wait. The SSH call has a two-minute deadline.
+   The database process stays up during drain. SQL traffic, range leases, and
+   leadership move away while replicas remain able to vote.
+3. After the drain attempts finish, power off eligible VMs, up to four in
+   parallel. QEMU requests guest shutdown and waits for verified process exit.
+   Azure waits for deallocation of each selected instance. Each VM gets its
+   own outcome. A failed drain leaves that VM powered on, potentially partly
+   drained. A failed power operation can leave a drained VM running. Retry
+   the stop or, to restore SQL service on a still-running VM, restart its
+   CockroachDB service. Already-stopped VMs are skipped on retry.
+
+`--allow-outage` still attempts the drain and permits power-off after a failed
+or unconfirmed drain. Ownership and provider checks still apply. The host-wide
+QEMU `--all` operation requires this flag.
+
+Drain completion confirms the handoff. Taking a batch offline can still lose
+quorum, including when independent owners stop different voters concurrently.
+The dead-store timer follows cluster configuration. The same node can rejoin
+with its disk, and CockroachDB manages replica placement as capacity permits.
+See [CockroachDB node shutdown](https://docs.cockroachlabs.com/docs/v26.2/node-shutdown)
+and [Azure per-instance deallocation](https://learn.microsoft.com/en-us/rest/api/compute/virtual-machine-scale-set-vms/deallocate).
+
+Rolling upgrades will use a separate workflow with a configurable percentage
+ceiling per batch. Batch selection must preserve quorum for each range,
+Kubernetes disruption budgets, and API availability, and wait for recovery
+before advancing. The default percentage is open.
+
+Local tests use fake SSH and provider operations to check parallel phases,
+per-target failures, the outage override, and Azure ownership and retry
+behavior. Live guest drain and power-off verification remains outstanding.

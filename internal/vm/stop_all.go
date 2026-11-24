@@ -2,20 +2,32 @@ package vm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/paulgmiller/infestation/internal/executil"
 )
 
 // StopAllLocal discovers owned machines from one state root, not host process
 // names. It never follows SSH routing or operates cloud resources.
 func StopAllLocal(ctx context.Context, o Options, out io.Writer) error {
-	return stopAllLocal(ctx, o, out, Stop)
+	return stopAllLocal(ctx, o, out, func(ctx context.Context, machines []localStopMachine, out io.Writer) error {
+		targets := make([]stopTarget, 0, len(machines))
+		for _, machine := range machines {
+			targets = append(targets, qemuStopTarget(machine.Options, machine.databaseHost))
+		}
+		return runStopBatch(ctx, targets, true, out, executil.OSRunner{})
+	})
 }
 
-func localMachines(root string) ([]Options, error) {
+type localStopMachine struct {
+	Options
+	databaseHost string
+}
+
+func localMachines(root string) ([]localStopMachine, error) {
 	if root == "" {
 		root = DefaultStateDir()
 	}
@@ -26,7 +38,7 @@ func localMachines(root string) ([]Options, error) {
 	if err != nil {
 		return nil, err
 	}
-	var machines []Options
+	var machines []localStopMachine
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -64,7 +76,11 @@ func localMachines(root string) ([]Options, error) {
 				if err := validateLocalMachine(o); err != nil {
 					return nil, err
 				}
-				machines = append(machines, o)
+				var host string
+				if node.Database() {
+					host = c.NodeAddress(node)
+				}
+				machines = append(machines, localStopMachine{Options: o, databaseHost: host})
 			}
 		} else if !os.IsNotExist(err) {
 			return nil, err
@@ -75,7 +91,7 @@ func localMachines(root string) ([]Options, error) {
 			if err := validateLocalMachine(o); err != nil {
 				return nil, err
 			}
-			machines = append(machines, o)
+			machines = append(machines, localStopMachine{Options: o})
 		}
 	}
 	return machines, nil
@@ -97,7 +113,7 @@ func validateLocalMachine(o Options) error {
 	return err
 }
 
-func stopAllLocal(ctx context.Context, o Options, out io.Writer, stop func(context.Context, Options, io.Writer) error) error {
+func stopAllLocal(ctx context.Context, o Options, out io.Writer, stop func(context.Context, []localStopMachine, io.Writer) error) error {
 	if o.Instance != "" {
 		return fmt.Errorf("--all cannot be combined with --instance")
 	}
@@ -117,15 +133,5 @@ func stopAllLocal(ctx context.Context, o Options, out io.Writer, stop func(conte
 		return nil
 	}
 	fmt.Fprintf(out, "Stopping %d local VMs; disks and private state will be retained.\n", len(machines))
-	var failures []error
-	for _, machine := range machines {
-		if err := ctx.Err(); err != nil {
-			failures = append(failures, err)
-			break
-		}
-		if err := stop(ctx, machine, out); err != nil {
-			failures = append(failures, fmt.Errorf("%s: %w", machine.Name, err))
-		}
-	}
-	return errors.Join(failures...)
+	return stop(ctx, machines, out)
 }

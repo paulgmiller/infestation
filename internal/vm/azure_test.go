@@ -106,8 +106,12 @@ func (r *azureFake) Resources(_ context.Context, set azureScaleSet) ([]azureReso
 	r.call("resources", set)
 	return []azureResource{}, nil
 }
-func (r *azureFake) Power(_ context.Context, set azureScaleSet, action string) error {
-	r.call(action, set)
+func (r *azureFake) Start(_ context.Context, set azureScaleSet) error {
+	r.call("start", set)
+	return nil
+}
+func (r *azureFake) DeallocateInstance(_ context.Context, set azureScaleSet, instance string) error {
+	r.call("deallocate "+instance, set)
 	return nil
 }
 func (r *azureFake) Instances(_ context.Context, set azureScaleSet) ([]azureInstance, error) {
@@ -173,7 +177,7 @@ func TestAzureScaleSetLifecycleChecksOwnershipAndTargetsWholeSet(t *testing.T) {
 	if err := fsutil.WriteJSON(filepath.Join(dir, "provider.json"), "azure"); err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"start", "stop", "status"} {
+	for _, action := range []string{"start", "status"} {
 		r := &azureFake{owner: "pool", exists: true}
 		if err := azureActions(context.Background(), Options{Name: "pool", StateDir: root}, action, io.Discard, r); err != nil {
 			t.Fatal(err)

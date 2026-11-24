@@ -222,10 +222,6 @@ func (p qemuCompute) Start(ctx context.Context, o Options, out io.Writer) error 
 	return p.action(ctx, o, "start", out)
 }
 func (p qemuCompute) Stop(ctx context.Context, o Options, out io.Writer) error {
-	if !o.AllowOutage {
-		return refuseUnsafeStop(o, p.Name())
-	}
-	fmt.Fprintln(out, "Explicit outage requested: quorum and drain checks skipped; availability may be lost.")
 	return p.action(ctx, o, "stop", out)
 }
 func (p qemuCompute) Status(ctx context.Context, o Options, out io.Writer) error {
@@ -241,11 +237,7 @@ func (p azureCompute) Start(ctx context.Context, o Options, out io.Writer) error
 	return p.action(ctx, o, "start", out)
 }
 func (p azureCompute) Stop(ctx context.Context, o Options, out io.Writer) error {
-	if !o.AllowOutage {
-		return refuseUnsafeStop(o, p.Name())
-	}
-	fmt.Fprintln(out, "Explicit outage requested: quorum and drain checks skipped; availability may be lost.")
-	return p.action(ctx, o, "stop", out)
+	return AzureAction(ctx, o, "stop", out)
 }
 func (p azureCompute) Status(ctx context.Context, o Options, out io.Writer) error {
 	return p.action(ctx, o, "status", out)
@@ -275,19 +267,4 @@ func (p qemuCompute) Remove(ctx context.Context, o Options, removal RemovalOptio
 }
 func (p azureCompute) Remove(ctx context.Context, o Options, removal RemovalOptions, out io.Writer) error {
 	return RemoveGroup(ctx, o, p.Name(), removal, out)
-}
-
-func refuseUnsafeStop(o Options, provider string) error {
-	dir, _, err := loadCluster(o)
-	if err != nil {
-		return err
-	}
-	actual, err := groupProvider(dir)
-	if err != nil {
-		return err
-	}
-	if actual != provider {
-		return fmt.Errorf("provider ownership mismatch; use %s stop", actual)
-	}
-	return fmt.Errorf("stop requires a whole-group CockroachDB quorum check and temporary drain, which are not implemented; compute and disks retained")
 }

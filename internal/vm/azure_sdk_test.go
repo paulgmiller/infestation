@@ -116,7 +116,7 @@ func TestSDKPowerAndRemovalPollToCompletionAndHonorCancellation(t *testing.T) {
 				}
 				wantMethod, wantPath := "POST", "/subscriptions/sub/resourceGroups/pool-rg/providers/Microsoft.Compute/virtualMachineScaleSets/pool/start"
 				if action == "stop" {
-					wantPath = strings.TrimSuffix(wantPath, "start") + "deallocate"
+					wantPath = strings.TrimSuffix(wantPath, "start") + "virtualMachines/1/deallocate"
 				}
 				if action == "remove" {
 					wantMethod = "DELETE"
@@ -133,14 +133,13 @@ func TestSDKPowerAndRemovalPollToCompletionAndHonorCancellation(t *testing.T) {
 				return res, nil
 			})
 			var err error
-			if action == "remove" {
+			switch action {
+			case "remove":
 				err = client.DeleteGroup(ctx, sdkSet())
-			} else {
-				power := action
-				if power == "cancel" {
-					power = "start"
-				}
-				err = client.Power(ctx, sdkSet(), power)
+			case "stop":
+				err = client.DeallocateInstance(ctx, sdkSet(), "1")
+			default:
+				err = client.Start(ctx, sdkSet())
 			}
 			if action == "cancel" {
 				if !errors.Is(err, context.Canceled) {

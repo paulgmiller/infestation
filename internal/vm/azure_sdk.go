@@ -38,7 +38,8 @@ type azureAPI interface {
 	CreateGroup(context.Context, azureScaleSet) error
 	Provision(context.Context, azureScaleSet, azureRequest, func(string) error) error
 	Resources(context.Context, azureScaleSet) ([]azureResource, error)
-	Power(context.Context, azureScaleSet, string) error
+	Start(context.Context, azureScaleSet) error
+	DeallocateInstance(context.Context, azureScaleSet, string) error
 	Instances(context.Context, azureScaleSet) ([]azureInstance, error)
 	DeleteGroup(context.Context, azureScaleSet) error
 }
@@ -220,22 +221,24 @@ func (c *azureSDK) Resources(ctx context.Context, set azureScaleSet) ([]azureRes
 	}
 	return results, nil
 }
-func (c *azureSDK) Power(ctx context.Context, set azureScaleSet, action string) error {
+func (c *azureSDK) Start(ctx context.Context, set azureScaleSet) error {
 	client, err := armcompute.NewVirtualMachineScaleSetsClient(set.Subscription, c.credential, c.options)
 	if err != nil {
 		return azureError("create VMSS client", err)
 	}
-	switch action {
-	case "start":
-		poller, err := client.BeginStart(ctx, set.Group, set.Name, nil)
-		return completeAzure(ctx, "start Azure VMSS", poller, err, c.pollFrequency)
-	case "stop":
-		poller, err := client.BeginDeallocate(ctx, set.Group, set.Name, nil)
-		return completeAzure(ctx, "deallocate Azure VMSS", poller, err, c.pollFrequency)
-	default:
-		return fmt.Errorf("unknown Azure power action")
-	}
+	poller, err := client.BeginStart(ctx, set.Group, set.Name, nil)
+	return completeAzure(ctx, "start Azure VMSS", poller, err, c.pollFrequency)
 }
+
+func (c *azureSDK) DeallocateInstance(ctx context.Context, set azureScaleSet, instance string) error {
+	client, err := armcompute.NewVirtualMachineScaleSetVMsClient(set.Subscription, c.credential, c.options)
+	if err != nil {
+		return azureError("create VMSS instances client", err)
+	}
+	poller, err := client.BeginDeallocate(ctx, set.Group, set.Name, instance, nil)
+	return completeAzure(ctx, "deallocate Azure VMSS instance", poller, err, c.pollFrequency)
+}
+
 func (c *azureSDK) Instances(ctx context.Context, set azureScaleSet) ([]azureInstance, error) {
 	client, err := armcompute.NewVirtualMachineScaleSetVMsClient(set.Subscription, c.credential, c.options)
 	if err != nil {

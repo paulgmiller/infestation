@@ -298,7 +298,7 @@ func runLifecycle(ctx context.Context, o Options, out io.Writer, invoke commandR
 	}
 	fmt.Fprintln(out, "Stopping only the selected instance; retaining the other two servers")
 	if err := timedStage(ctx, logger, "stop_restart_target", func() error {
-		return command("vm", "stop", "--name", restartGroup, "--state-dir", state, "--instance", restartInstance, "--allow-outage")
+		return command("vm", "stop", "--name", restartGroup, "--state-dir", state, "--instance", restartInstance)
 	}, slog.String("group", restartGroup), slog.String("instance", restartInstance)); err != nil {
 		return err
 	}

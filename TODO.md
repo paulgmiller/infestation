@@ -23,10 +23,7 @@ provider boundary and current implementation.
   CockroachDB decommissioning, placement/capacity refusal, zero-replica completion
   and healthy survivors before compute deletion. Implement safe retry reconciliation
   when an earlier attempt has already stopped/deleted some verified targets;
-  current normal retries require every target identity reachable. Add whole-batch
-  quorum checks and temporary database draining for `stop` without permanent
-  decommissioning; ordinary stop currently refuses until those guards exist; explicit
-  `--allow-outage` permits controlled shutdown without those checks.
+  current normal retries require every target identity reachable.
   Coordinate Kubernetes workload drain/API withdrawal and credential custody with
   their separate TODOs. Never lower replication to bypass insufficient capacity.
 - [ ] Live-verify typed Azure Go SDK provisioning and lifecycle: credentials and
@@ -79,9 +76,10 @@ provider boundary and current implementation.
 
 ## Consolidate deployment
 
-- [ ] Add Azure per-instance start/stop with typed SDK instance operations and
-  saved ownership checks. Complete quorum/drain safeguards for selected-node
-  stops across providers, and verify retries and partial failures.
+- [ ] Expose Azure per-instance start/stop selection with saved ownership checks.
+- [ ] Live-verify [temporary stop](docs/removal.md#temporary-stops) across local and
+  SSH-backed QEMU and Azure, including partial drain/power failures, retries, and
+  restarting with the same disks and membership.
 
 - [ ] Add a shared `scale` command for owned provider groups, including local and
   SSH-backed QEMU groups and Azure VMSS. Scale up through shared node preparation
@@ -96,7 +94,6 @@ provider boundary and current implementation.
   exhaustion before it produces guest disk-write errors, and verify graceful
   cleanup without forced power-off. The first lifecycle probe passed but final
   local shutdown hit quota-related guest I/O failures; evidence is in the runbook.
-  Guarded stop remains outstanding above.
 - [ ] Ensure helper builds use `github.com/paulgmiller/infestation`'s published
   `master` branch by default, rather than local workstation source.
 - [ ] Show more progress output while `create` runs, including the current stage
@@ -252,6 +249,9 @@ provider boundary and current implementation.
   health and K3s/Kine behavior before resuming workloads. Document the tested
   version-specific procedure and evidence in a recovery runbook.
 - [ ] Coordinate Flatcar, K3s and Cockroach updates, drains, rollback and rejoin.
+  Cap rolling batches by a configurable percentage, choose specific nodes that
+  preserve per-range voting quorum, Kubernetes disruption budgets and API
+  availability, and verify recovery before each next batch.
 - [ ] Investigate Kine/Cockroach maintenance-status incompatibilities, including
   the rejected `pg_total_relation_size()` query, and watch timeout logs under
   sustained WAN latency. Verify metrics API discovery after startup converges.

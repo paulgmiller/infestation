@@ -59,8 +59,9 @@ func TestInstanceLifecycleDispatchPreservesInventoryAndDisks(t *testing.T) {
 		}
 	}
 	o.Instance = "0"
-	if err := (qemuCompute{}).Stop(context.Background(), o, io.Discard); err == nil {
-		t.Fatal("per-instance stop bypassed outage guard")
+	var output bytes.Buffer
+	if err := (qemuCompute{}).Stop(context.Background(), o, &output); err != nil || output.String() != "pool-0 already stopped; disk retained\n" {
+		t.Fatalf("stop did not reconcile the selected stopped VM: %v, %s", err, &output)
 	}
 	if err := RemoveGroup(context.Background(), o, "qemu", RemovalOptions{AbandonCluster: true}, io.Discard); err == nil {
 		t.Fatal("instance selector silently removed whole group")

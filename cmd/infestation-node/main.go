@@ -31,6 +31,12 @@ func main() {
 	if err == nil {
 		if len(os.Args) > 1 && os.Args[1] == "diagnose" {
 			err = nodebootstrap.Diagnose(ctx, config)
+		} else if len(os.Args) > 1 && os.Args[1] == "retire" {
+			if len(os.Args) == 3 && os.Args[2] == "--identify" {
+				err = nodebootstrap.IdentifyRetirement(ctx, config, os.Stdout)
+			} else {
+				err = fmt.Errorf("guest database retirement execution is unavailable")
+			}
 		} else if len(os.Args) > 1 && os.Args[1] == "identity" {
 			err = nodebootstrap.PrepareScaleSet(ctx, config, "/", executil.OSRunner{})
 		} else if len(os.Args) > 1 && os.Args[1] == "enroll" {

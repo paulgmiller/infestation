@@ -33,9 +33,15 @@ func TestStopAllDiscoversOnlyLocalOwnedMachines(t *testing.T) {
 		t.Fatal(err)
 	}
 	var names []string
+	collect := func(_ context.Context, machines []localStopMachine, _ io.Writer) error {
+		for _, machine := range machines {
+			names = append(names, machine.Name)
+		}
+		return nil
+	}
 	o.Name = ""
 	o.AllowOutage = true
-	err := stopAllLocal(context.Background(), o, io.Discard, func(_ context.Context, n Options, _ io.Writer) error { names = append(names, n.Name); return nil })
+	err := stopAllLocal(context.Background(), o, io.Discard, collect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +53,7 @@ func TestStopAllDiscoversOnlyLocalOwnedMachines(t *testing.T) {
 		t.Fatal(err)
 	}
 	names = nil
-	if err := stopAllLocal(context.Background(), o, io.Discard, func(_ context.Context, n Options, _ io.Writer) error { names = append(names, n.Name); return nil }); err == nil || len(names) != 0 {
+	if err := stopAllLocal(context.Background(), o, io.Discard, collect); err == nil || len(names) != 0 {
 		t.Fatal("invalid inventory caused partial shutdown", err, names)
 	}
 }
@@ -56,7 +62,10 @@ func TestStopAllRequiresExplicitOutageAndAttemptsEveryMachine(t *testing.T) {
 	o, _ := removalState(t, "qemu")
 	o.Name = ""
 	calls := 0
-	stop := func(context.Context, Options, io.Writer) error { calls++; return errors.New("shutdown failed") }
+	stop := func(_ context.Context, machines []localStopMachine, _ io.Writer) error {
+		calls += len(machines)
+		return errors.New("shutdown failed")
+	}
 	if err := stopAllLocal(context.Background(), o, io.Discard, stop); err == nil || calls != 0 {
 		t.Fatal("outage guard bypassed")
 	}

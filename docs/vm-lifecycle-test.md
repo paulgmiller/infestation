@@ -130,13 +130,10 @@ as a replacement create over the same directory. Wait and kubeconfig retrieval
 use workstation tailnet access. Removal retains its existing database safety
 checks and disk-retention defaults.
 
-`vm stop --allow-outage` explicitly skips the unfinished quorum/drain guard. It
-requests graceful guest shutdown, verifies the QEMU process/monitor identity,
-and waits up to two minutes for exit without forcing power off. This is intended
-for controlled lifecycle/outage testing; it does not implement database draining,
-Kubernetes workload draining or API Service withdrawal. Ordinary stop continues
-to refuse until those safeguards are implemented. Stopping a multi-node group
-with this flag can take the entire database offline.
+Ordinary `vm stop` drains CockroachDB before requesting graceful guest shutdown.
+`--allow-outage` allows power-off after an unconfirmed drain, for example during
+cleanup of an incomplete test cluster. QEMU verifies the monitor identity and
+waits up to two minutes for exit. See [temporary stops](removal.md#temporary-stops).
 
 The SQL identity probe opts its session into CockroachDB's internal tables;
 these are version-specific diagnostic interfaces. See
@@ -247,14 +244,12 @@ helper compilation alone. Cached/prebuilt guest helpers remain TODO work.
 ## Per-instance QEMU lifecycle
 
 ```sh
-infestation vm stop --name lab --instance 2 --allow-outage
+infestation vm stop --name lab --instance 2
 infestation vm start --name lab --instance 2 --wait 15m
 ```
 
 `--instance` is a zero-based index in the group's saved inventory. Omitting it
 operates the whole group. It works for local and SSH-backed QEMU groups; the
 workstation and remote compute host need matching CLI revisions. It cannot be
-combined with host-wide `--all` or removal. Stop retains the explicit outage
-requirement until quorum/drain guards exist, and start's `--wait` still checks
-readiness of the group's saved nodes. Azure per-instance operations remain
-unimplemented.
+combined with host-wide `--all` or removal. Start's `--wait` still checks
+readiness of the group's saved nodes. Azure exposes whole-group selection.

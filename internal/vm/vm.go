@@ -518,28 +518,43 @@ func Stop(ctx context.Context, o Options, out io.Writer) error {
 		return fmt.Errorf("another lifecycle operation may be in progress: %w", err)
 	}
 	defer lock.Close()
+	return stopQEMULocked(ctx, dir, o.Name, out)
+}
+
+func inspectQEMUStop(ctx context.Context, dir, name string) (bool, error) {
 	present, err := processPresent(dir)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !present {
 		// A live monitor without a verified process must never be treated as stopped.
 		if _, err := os.Lstat(filepath.Join(dir, "qmp.sock")); !os.IsNotExist(err) {
-			return fmt.Errorf("unverified QEMU monitor; resources retained")
+			return false, fmt.Errorf("unverified QEMU monitor; resources retained")
 		}
-		if err := setResume(dir, false); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, o.Name, "already stopped; disk retained")
-		return nil
+		return false, nil
 	}
 	raw, err := qmp(ctx, dir, "query-name")
 	if err != nil {
-		return err
+		return false, err
 	}
 	var identity struct{ Name string }
-	if json.Unmarshal(raw, &identity) != nil || identity.Name != o.Name {
-		return fmt.Errorf("QEMU monitor identity mismatch")
+	if json.Unmarshal(raw, &identity) != nil || identity.Name != name {
+		return false, fmt.Errorf("QEMU monitor identity mismatch")
+	}
+	return true, nil
+}
+
+func stopQEMULocked(ctx context.Context, dir, name string, out io.Writer) error {
+	present, err := inspectQEMUStop(ctx, dir, name)
+	if err != nil {
+		return err
+	}
+	if !present {
+		if err := setResume(dir, false); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, name, "already stopped; disk retained")
+		return nil
 	}
 	// Persist intentional stop before requesting powerdown, even if waiting
 	// later times out or the host loses power during shutdown.
@@ -561,7 +576,7 @@ func Stop(ctx context.Context, o Options, out io.Writer) error {
 		}
 		_, socketErr := os.Lstat(filepath.Join(dir, "qmp.sock"))
 		if !present && os.IsNotExist(socketErr) {
-			fmt.Fprintln(out, o.Name, "stopped; disk and enrolled identity retained")
+			fmt.Fprintln(out, name, "stopped; disk and enrolled identity retained")
 			return nil
 		}
 		select {

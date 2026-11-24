@@ -26,7 +26,7 @@ The current capabilities are explicit:
 | Ignition delivery | Private file per VM via QEMU fw_cfg | Private SDK customData using the first node's shared profile; IMDS derives instance identity |
 | Image | Prepared local Flatcar qcow2 | Pinned Flatcar marketplace image |
 | Persistent root disk | 20 GiB overlay | 32 GiB managed OS disk |
-| Temporary stop | Contract refuses pending quorum/drain implementation; underlying power operation retains disks | Contract refuses pending quorum/drain implementation; underlying deallocation retains disks |
+| Temporary stop | CockroachDB drain, then graceful QEMU power-off; disks retained | CockroachDB drain, then selected instance deallocation; disks retained |
 | Compute removal | Retains overlay unless deletion explicitly requested | Deletes owned resource group, including OS disks |
 | Egress | QEMU user networking (SLIRP NAT) | Azure default outbound access, an unresolved prototype limitation |
 
@@ -43,9 +43,9 @@ identity and ownership-tag checks. Database decommissioning gates belong to the
 lifecycle workflow, and the removal adapter delegates to that guarded workflow;
 the contract is not an alternative deletion bypass. Any explicit abandoned-cluster
 teardown still has to verify resource ownership and obey the selected disk policy.
-Temporary stop currently refuses to power down compute because whole-group
-quorum preflight and temporary database draining are not yet implemented. A
-permanent decommission is not a substitute for a reversible stop.
+Temporary stop gates each VM power-off on its database drain unless
+`--allow-outage` is specified. A drain does not establish batch quorum. See
+[temporary stops](removal.md#temporary-stops).
 
 The contract currently lives alongside the existing implementations in
 `internal/vm`; Azure now uses typed Go SDK clients while QEMU still uses the handwritten QMP
