@@ -32,6 +32,9 @@ voting quorum; the operator must select a node whose temporary absence the clust
 can tolerate. It never decommissions the database node or lowers replication.
 Kubernetes drain respects disruption budgets and refuses unmanaged pods and
 emptyDir data loss. Unknown persistent hostPath/local-volume paths block reset.
+Kubernetes drain output is reported on success; failures include kubectl's exit
+status and error output, including pod eviction blockers and timeouts. SSH
+authentication diagnostics remain private.
 The retained directories are listed in the
 [memory-reset runbook](cockroach-memory-rollout.md); staged extension images,
 Docker/containerd caches, logs and the verified helper build cache are retained

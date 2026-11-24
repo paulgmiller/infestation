@@ -366,3 +366,57 @@ esac
 		})
 	}
 }
+
+func TestKubernetesDrainReportsGuestErrorWithoutSSHDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+		fail             bool
+	}{
+		{"eviction-blocker", "printf '%s\\n' 'error: cannot delete Pods with local storage: kube-system/example' '__INFESTATION_DRAIN_STATUS__=1'", "cannot delete Pods with local storage", true},
+		{"timeout", "printf '%s\\n' 'error: timed out waiting for the condition' '__INFESTATION_DRAIN_STATUS__=1'", "timed out waiting", true},
+		{"success", "printf '%s\\n' 'node/mock drained' '__INFESTATION_DRAIN_STATUS__=0'", "node/mock drained", false},
+		{"transport", "exit 71", "could not complete", true},
+		{"missing-status", "printf '%s\\n' 'incomplete drain output'", "no command status", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			script := "#!/bin/sh\nprintf '%s\\n' 'https://login.tailscale.test/private-auth' >&2\n" + tc.body + "\n"
+			if err := os.WriteFile(filepath.Join(bin, "tailscale"), []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+			var output bytes.Buffer
+			err := drainKubernetes(context.Background(), "mock.example.ts.net", "mock", &output)
+			if (err != nil) != tc.fail {
+				t.Fatalf("drain result: %v", err)
+			}
+			actual := output.String()
+			if err != nil {
+				actual += err.Error()
+			}
+			if !strings.Contains(actual, tc.want) {
+				t.Fatal("missing actionable drain result", actual)
+			}
+			if strings.Contains(actual, "private-auth") {
+				t.Fatal("SSH authentication diagnostic leaked")
+			}
+		})
+	}
+}
+
+func TestKubernetesDrainShellPreservesCommandFailure(t *testing.T) {
+	stub := filepath.Join(t.TempDir(), "mock-k3s")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf 'pod/example eviction failed\\n'\nprintf 'error: disruption budget blocked eviction\\n' >&2\nexit 7\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.ReplaceAll(kubernetesDrainScript("mock"), "/usr/local/bin/k3s", shellQuote(stub))
+	raw, err := exec.Command("/bin/sh", "-ec", script).Output()
+	if err != nil {
+		t.Fatal("guest wrapper must report kubectl status separately from SSH", err)
+	}
+	for _, want := range []string{"pod/example eviction failed", "disruption budget blocked eviction", kubernetesDrainMarker + "7"} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Fatal("guest wrapper lost drain detail/status", string(raw))
+		}
+	}
+}

@@ -230,8 +230,8 @@ func Upgrade(ctx context.Context, o Options, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintln(out, n.Name+": artifacts staged; draining Kubernetes and CockroachDB")
-		if _, err := upgradeSSH(ctx, host, "/usr/local/bin/k3s kubectl drain "+shellQuote(n.Name)+" --ignore-daemonsets --timeout=2m", nil); err != nil {
-			return fmt.Errorf("Kubernetes drain failed; node may remain cordoned: %w", err)
+		if err := drainKubernetes(ctx, host, n.Name, out); err != nil {
+			return err
 		}
 		if err := drainDatabase(ctx, executil.OSRunner{}, host); err != nil {
 			return err
@@ -741,4 +741,39 @@ func updateUpgradeInventory(dir string) error {
 	config.Tailscale.Version = TailscaleVersion
 	config.CockroachImage = CockroachImage
 	return fsutil.WriteJSON(inventoryPath(dir), config)
+}
+
+// Capture kubectl output inside the guest, independently of SSH diagnostics.
+// Tailscale SSH stderr can contain enrollment URLs and must remain private.
+const kubernetesDrainMarker = "__INFESTATION_DRAIN_STATUS__="
+
+func kubernetesDrainScript(name string) string {
+	return "if /usr/local/bin/k3s kubectl drain " + shellQuote(name) + " --ignore-daemonsets --timeout=2m 2>&1; then status=0; else status=$?; fi\nprintf '\\n" + kubernetesDrainMarker + "%s\\n' \"$status\""
+}
+
+func drainKubernetes(ctx context.Context, host, name string, out io.Writer) error {
+	raw, err := upgradeSSH(ctx, host, kubernetesDrainScript(name), nil)
+	if err != nil {
+		return fmt.Errorf("Kubernetes drain command could not complete; node may remain cordoned: %w", err)
+	}
+	result := strings.TrimSpace(string(raw))
+	split := strings.LastIndex(result, kubernetesDrainMarker)
+	if split < 0 || (split > 0 && result[split-1] != '\n') {
+		return fmt.Errorf("Kubernetes drain returned no command status; node may remain cordoned")
+	}
+	status, err := strconv.Atoi(result[split+len(kubernetesDrainMarker):])
+	if err != nil || status < 0 || status > 255 {
+		return fmt.Errorf("Kubernetes drain returned invalid command status; node may remain cordoned")
+	}
+	detail := strings.TrimSpace(result[:split])
+	if len(detail) > 8192 {
+		detail = "[last 8192 bytes]\n" + detail[len(detail)-8192:]
+	}
+	if status != 0 {
+		return fmt.Errorf("Kubernetes drain failed (exit %d); node may remain cordoned:\n%s", status, detail)
+	}
+	if detail != "" {
+		_, err = fmt.Fprintln(out, detail)
+	}
+	return err
 }
