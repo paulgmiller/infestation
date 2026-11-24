@@ -28,6 +28,31 @@ func TestCreateAutostartDefaultsOnAndIsQEMUOnly(t *testing.T) {
 	}
 }
 
+func TestListUsesSelectedOrDefaultStateRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", root)
+	state := filepath.Join(root, "infestation", "vms")
+	if err := os.MkdirAll(filepath.Join(state, "one"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "one", "machine.json"), []byte(`{"Name":"one"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"list"}, {"list", "--state-dir", state}} {
+		var out bytes.Buffer
+		if err := Run(context.Background(), args, &out); err != nil {
+			t.Fatal(err)
+		}
+		if fields := strings.Join(strings.Fields(out.String()), " "); fields != "NAME STATE one stopped" {
+			t.Fatal(fields)
+		}
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"list", "--name", "one"}, &out); err == nil {
+		t.Fatal("list unexpectedly requires/selects a group name")
+	}
+}
+
 func TestHelpShowsOnlyProviderLifecycle(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run(context.Background(), nil, &out); err != nil {

@@ -120,6 +120,10 @@ The public CLI has the same lifecycle verbs for both providers: `create`,
 `start`, `stop`, `remove`, `status`, `wait` and `kubeconfig`. `vm status --netcheck`
 includes guest network diagnostics. The separate `infestation-smoke` CLI runs
 workload connectivity checks using Kubernetes credentials alone.
+Use `infestation list` to show `NAME` and `STATE` for all nodes tracked by this
+client, across local QEMU, SSH QEMU and Azure groups. Add `--state-dir DIR` for
+a custom state root. States are `running`, `stopped` or `unknown`; failed lookups
+return a nonzero exit after listing the remaining nodes.
 Use `vm create --ssh user@host` to run QEMU on another Linux machine while
 keeping CA/admin credentials on the workstation. Later lifecycle commands use
 the saved SSH host automatically. See the [lifecycle test and SSH setup](docs/vm-lifecycle-test.md).

@@ -7,6 +7,14 @@ provider boundary and current implementation.
 
 ## Current priorities
 
+- [ ] Tune VM RAM and CockroachDB `--max-sql-memory` / `--max-go-memory`
+  together under representative Kine and Kubernetes workload. Measure GC CPU,
+  collection rate, query memory failures and latency, total database RSS and
+  Kubernetes workload headroom. Choose explicit budgets for the host database,
+  K3s/system services and pods; account for host services in Kubernetes allocatable
+  memory. Validate defaults across supported VM sizes and providers without
+  treating the Go soft limit as a total-process memory cap.
+
 - [ ] Live-verify default-on [QEMU host autostart](docs/autostart.md) after reboot or
   power loss: recovery of saved disks and tailnet connectivity, intentional-stop
   exclusion and boot-service behavior on the compute host.

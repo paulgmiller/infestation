@@ -23,6 +23,7 @@ type ComputeProvider interface {
 	Start(context.Context, Options, io.Writer) error
 	Stop(context.Context, Options, io.Writer) error
 	Status(context.Context, Options, io.Writer) error
+	NodeStates(context.Context, Options) ([]NodeState, error)
 	Remove(context.Context, Options, RemovalOptions, io.Writer) error
 }
 

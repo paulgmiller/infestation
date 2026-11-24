@@ -36,13 +36,17 @@ cloud object storage, a private DNS service, or a guest command extension. Azure
 future explicit egress implementation must update the declared mode and surface
 any NAT/load-balancer dependency rather than silently adding it.
 
-`Start`, `Stop`, `Status` and `Remove` operate on saved owned state. `Start` never
+`Start`, `Stop`, `Status`, `NodeStates` and `Remove` operate on saved owned state. `Start` never
 creates replacement resources or credentials. The QEMU adapter retains its
 process/QMP identity checks; the Azure adapter retains saved subscription/group
 identity and ownership-tag checks. Database decommissioning gates belong to the
 lifecycle workflow, and the removal adapter delegates to that guarded workflow;
 the contract is not an alternative deletion bypass. Any explicit abandoned-cluster
 teardown still has to verify resource ownership and obey the selected disk policy.
+`NodeStates` returns typed name/power-state observations for `infestation list`,
+retaining known results alongside an error if some nodes cannot be queried.
+It performs no lifecycle mutations; SSH-backed QEMU reads power state through
+the ownership-checked helper protocol.
 Temporary stop currently refuses to power down compute because whole-group
 quorum preflight and temporary database draining are not yet implemented. A
 permanent decommission is not a substitute for a reversible stop.

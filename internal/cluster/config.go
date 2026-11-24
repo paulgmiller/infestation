@@ -49,6 +49,7 @@ type Config struct {
 	CockroachMinDiskGiB int        `json:"cockroach_min_disk_gib,omitempty"`
 	CockroachCache      string     `json:"cockroach_cache,omitempty"`
 	CockroachSQLMemory  string     `json:"cockroach_sql_memory,omitempty"`
+	CockroachGoMemory   string     `json:"cockroach_go_memory,omitempty"`
 	Nodes               []Node     `json:"nodes"`
 }
 
@@ -153,9 +154,16 @@ func (c Config) Cache() string {
 }
 func (c Config) SQLMemory() string {
 	if c.CockroachSQLMemory == "" {
-		return "512MiB"
+		return "256MiB"
 	}
 	return c.CockroachSQLMemory
+}
+
+func (c Config) GoMemory() string {
+	if c.CockroachGoMemory == "" {
+		return "768MiB"
+	}
+	return c.CockroachGoMemory
 }
 
 var label = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -224,7 +232,7 @@ func (c Config) validate(surge bool) error {
 	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$`).MatchString(c.K3sExtensionVersion) {
 		return fmt.Errorf("pin k3s_extension_version to an exact K3s release")
 	}
-	for _, m := range []string{c.Cache(), c.SQLMemory()} {
+	for _, m := range []string{c.Cache(), c.SQLMemory(), c.GoMemory()} {
 		if !regexp.MustCompile(`^[1-9][0-9]*(KiB|MiB|GiB|TiB)$`).MatchString(m) {
 			return fmt.Errorf("Cockroach memory limits must be positive byte quantities")
 		}

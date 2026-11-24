@@ -191,6 +191,12 @@ func ServeSSH(ctx context.Context, input io.Reader, out io.Writer) error {
 		return fmt.Errorf("SSH compute ownership mismatch")
 	}
 	switch r.Operation {
+	case "list":
+		if _, err := unknownNodes(r.Options); err != nil {
+			return err
+		}
+		nodes, err := (qemuCompute{}).NodeStates(ctx, r.Options)
+		return json.NewEncoder(out).Encode(sshNodeStates{Nodes: nodes, Failed: err != nil})
 	case "start", "status":
 		return ClusterAction(ctx, r.Options, r.Operation, out)
 	case "netcheck":

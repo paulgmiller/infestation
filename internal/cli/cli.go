@@ -31,6 +31,7 @@ func newRootCommand() *cobra.Command {
 	}
 	root.AddCommand(provider{name: "vm"}.command(), provider{name: "azure"}.command())
 	root.AddCommand(proxmoxCommand())
+	root.AddCommand(listCommand())
 	root.AddCommand(&cobra.Command{Use: "__vm-ssh", Hidden: true, Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return vm.ServeSSH(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 	}})

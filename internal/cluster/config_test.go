@@ -51,6 +51,8 @@ func TestConfiguration(t *testing.T) {
 		{"locality injection", func(c *cluster.Config) { c.Nodes[0].Locality = "zone=1 --insecure" }},
 		{"image injection", func(c *cluster.Config) { c.CockroachImage = "image --insecure" }},
 		{"memory injection", func(c *cluster.Config) { c.CockroachCache = "512MiB\nExecStart=/bad" }},
+		{"Go memory injection", func(c *cluster.Config) { c.CockroachGoMemory = "768MiB --insecure" }},
+		{"Go memory disabled", func(c *cluster.Config) { c.CockroachGoMemory = "0" }},
 		{"unjoined worker", func(c *cluster.Config) { c.Nodes = []cluster.Node{{Name: "worker", IP: "192.0.2.1", Role: "worker"}} }},
 	}
 	for _, tc := range cases {

@@ -15,6 +15,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestCockroachMemoryOverrides(t *testing.T) {
+	c := testutil.Config()
+	c.CockroachGoMemory = "1GiB"
+	c.CockroachSQLMemory = "128MiB"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	unit := CockroachUnit(c, c.Nodes[0])
+	if !strings.Contains(unit, "--max-sql-memory=128MiB --max-go-memory=1GiB") {
+		t.Fatal("explicit memory budgets were not preserved")
+	}
+}
+
 func TestTemporarySQLCredentialOnlyOnExplicitInitializer(t *testing.T) {
 	c := testutil.Config()
 	c.Nodes[0].Name = "miller"
@@ -152,6 +165,9 @@ func TestProfilesAndCredentials(t *testing.T) {
 		for _, unit := range doc.Systemd.Units {
 			if unit.Name == "cockroachdb.service" {
 				db = true
+				if !strings.Contains(*unit.Contents, "--max-sql-memory=256MiB --max-go-memory=768MiB") {
+					t.Fatal("missing explicit SQL and Go memory budgets")
+				}
 				if !strings.Contains(*unit.Contents, "src=/mnt/resource/cockroach,") || !strings.Contains(*unit.Contents, "ExecStartPre=/opt/infestation/check-cockroach-storage") {
 					t.Fatal("must not fall back to OS disk")
 				}

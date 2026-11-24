@@ -8,6 +8,23 @@ The default location is `$XDG_DATA_HOME/infestation/vms/NAME`, or
 `~/.local/share/infestation/vms/NAME`. With `--state-dir DIR`, it is `DIR/NAME`.
 Use the same name/state directory for subsequent lifecycle commands.
 
+`infestation list` enumerates all saved groups under that state root and prints
+one `NAME STATE` row per owned node. Use `infestation list --state-dir DIR` for a
+custom root. This includes local QEMU, SSH-backed QEMU and Azure; it does not
+discover untracked cloud resources or other tailnet participants. Azure requires
+SDK credentials, and SSH hosts need a matching Infestation binary.
+
+The state is compute power, not Kubernetes or database readiness. A responsive
+QEMU emulator with the expected identity counts as `running`, including paused
+guests. QEMU is `stopped` only when its monitor is absent/refused and no saved
+process remains. Azure running instances map to `running`; stopped and
+deallocated instances map to `stopped`, following
+[Azure power states](https://learn.microsoft.com/en-us/azure/virtual-machines/states-billing).
+Missing, transitional, unreachable or unverifiable states appear as `unknown`.
+The command continues across failures and exits nonzero if any lookup fails.
+Malformed group inventories may produce a group-name `unknown` row when node
+names cannot be validated. Empty or nonexistent state roots print only the header.
+
 ## Where lifecycle commands run
 
 Every public command has `--help`, for example `infestation vm start --help` or
@@ -125,6 +142,12 @@ name, or deliberately archive it before reusing the name. Kubernetes workload dr
 outstanding. Database decommissioning does not establish application availability.
 
 ### Local validation
+
+Listing has local tests for QMP identity, stale monitors/PIDs, partial failures,
+saved-state discovery, SSH ownership and response validation, and Azure power
+states and inventory mismatches. QMP uses simulated monitors, SSH uses a fake
+executable/helper protocol, and Azure uses a fake SDK client. These are not live
+provider verification and do not provision or change real VMs.
 
 Removal is covered by `go test ./...` and `go vet ./...`. QEMU tests simulate a
 QMP monitor and a disposable local process; they cover exit before disk deletion,
