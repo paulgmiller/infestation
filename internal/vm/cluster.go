@@ -38,7 +38,7 @@ type ClusterOptions struct {
 }
 
 func clusterConfig(o ClusterOptions) cluster.Config {
-	c := cluster.Config{DiscoverPeers: true, CockroachImage: "cockroachdb/cockroach:v26.2.7", K3sExtensionVersion: "v1.35.8+k3s1", Architecture: "x86-64", CockroachStorage: "persistent", CockroachCache: "256MiB", CockroachSQLMemory: "256MiB", CockroachGoMemory: "768MiB", Tailscale: &cluster.Tailscale{Version: TailscaleVersion, Domain: o.Domain}}
+	c := cluster.Config{DiscoverPeers: true, CockroachImage: CockroachImage, K3sExtensionVersion: K3sVersion, Architecture: "x86-64", CockroachStorage: "persistent", CockroachCache: "256MiB", CockroachSQLMemory: "256MiB", CockroachGoMemory: "768MiB", Tailscale: &cluster.Tailscale{Version: TailscaleVersion, Domain: o.Domain}}
 	topology := cluster.Topology{Cloud: "qemu", Site: o.Site, Host: o.Host}
 	if o.Provider == "azure" {
 		// IMDS adds the actual zone and subscription before enrollment.

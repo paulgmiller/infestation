@@ -29,6 +29,22 @@ before state creation, downloads or provisioning. Agents still host a database,
 participate in the three-database bootstrap threshold and share enrollment
 material. They never initialize SQL or advertise the API Service.
 
+SQL bootstrap explicitly targets three replicas, all voting, for application
+data and every named system range, including the system database. This overrides
+[CockroachDB's five-replica system defaults](https://docs.cockroachlabs.com/docs/v26.2/configure-replication-zones#num_replicas).
+Adaptive increases remain outstanding in [TODO.md](../TODO.md). Bootstrap runs
+once; changing its SQL does not update already initialized clusters.
+
+New profiles currently pin K3s to `v1.36.5+k3s1`, the intermediate target for
+our 1.35 → 1.36 → 1.37 rollout, using the
+[published Flatcar extension](https://github.com/flatcar/sysext-bakery/releases/tag/k3s-v1.36.5%2Bk3s1).
+Changing this default does not upgrade existing machines. Complete the 1.36
+upgrade across existing servers before moving to 1.37, following the
+[K3s upgrade requirements](https://docs.k3s.io/upgrades/manual).
+The [one-instance QEMU upgrade command](upgrading.md) applies this target through
+a retained-state reset. Cluster-wide coordination and other providers remain
+outstanding.
+
 Azure uses one shared VMSS profile per create call. Before Tailscale enrollment,
 the helper checks IMDS against the configured group/set/region, derives
 `NAME-<instance-id>`, and updates the hostname, K3s and tailnet identities.

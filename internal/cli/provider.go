@@ -18,6 +18,13 @@ func (p provider) command() *cobra.Command {
 	cmd := &cobra.Command{Use: p.name, Short: "Manage " + p.name + " node groups", Args: noArgs, RunE: showHelp}
 	cmd.AddCommand(p.create(), p.start(), p.stop(), p.remove(), p.status(), p.wait(), p.kubeconfig())
 	if p.name == "vm" {
+		upgrade, upgradeOptions := p.nodeCommand("upgrade", "Reset one owned QEMU server to this binary's pinned versions, retaining its state", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
+			return vm.Upgrade(ctx, o.Options, out)
+		})
+		upgrade.Flags().StringVar(&upgradeOptions.Instance, "instance", "", "required zero-based owned instance; only this node is upgraded")
+		_ = upgrade.MarkFlagRequired("instance")
+		upgrade.Long += "\nRequires Kubernetes and CockroachDB drains. Uses retained-state Flatcar reset and an offline recovery copy. Does not decommission, certify surviving quorum, or restore snapshots automatically. Supports joining database servers; database version changes are not yet supported."
+		cmd.AddCommand(upgrade)
 		var enabled bool
 		autostart, options := p.nodeCommand("autostart", "Set boot autostart policy on the QEMU compute host", func(ctx context.Context, o vm.ClusterOptions, out io.Writer) error {
 			return vm.ConfigureAutostart(ctx, o.Options, enabled, out)

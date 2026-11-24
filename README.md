@@ -136,6 +136,9 @@ requires saved provider state and Azure SDK credentials. See [where commands run
 For a joining QEMU server, `infestation reprovision-profile` prepares private
 Ignition for a memory-only configuration reset; it does not apply or reboot it.
 See the [immutable reset procedure and canary evidence](docs/cockroach-memory-rollout.md).
+Use `infestation vm upgrade --name GROUP --instance INDEX` to apply the compiled
+release to one joining QEMU server through a retained-state reset. See the
+[one-instance upgrade procedure](docs/upgrading.md) for pins, recovery and limits.
 
 Only one founding node gets initialization authority. It waits for two database
 peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;

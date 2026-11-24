@@ -238,3 +238,24 @@ func TestInstanceFlagIsLimitedToQEMUStartStop(t *testing.T) {
 		}
 	}
 }
+
+func TestUpgradeRequiresOneNamedInstance(t *testing.T) {
+	for _, args := range [][]string{
+		{"vm", "upgrade"},
+		{"vm", "upgrade", "--name", "pool"},
+		{"vm", "upgrade", "--name", "pool", "--instance", ""},
+		{"vm", "upgrade", "--name", "pool", "--instance", "-1"},
+		{"vm", "upgrade", "--name", "pool", "--instance", "all"},
+	} {
+		if err := Run(context.Background(), args, io.Discard); err == nil {
+			t.Fatal("unsafe upgrade selection accepted", args)
+		}
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"vm", "upgrade", "--help"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "--instance") || !strings.Contains(out.String(), "retaining") {
+		t.Fatal("upgrade help lacks selection/retention contract")
+	}
+}

@@ -97,8 +97,8 @@ func createRemote(ctx context.Context, r PreparedGroup, out io.Writer) error {
 func mustSSHJSON(value sshCompute) []byte { raw, _ := json.Marshal(value); return raw }
 
 func remoteAction(ctx context.Context, o Options, action string, removal RemovalOptions, out io.Writer) (bool, error) {
-	if o.Instance != "" && action != "start" && action != "stop" {
-		return true, fmt.Errorf("--instance applies only to start and stop")
+	if o.Instance != "" && action != "start" && action != "stop" && action != "upgrade" {
+		return true, fmt.Errorf("--instance applies only to start, stop and upgrade")
 	}
 	dir, err := directory(o)
 	if err != nil {
@@ -191,6 +191,29 @@ func ServeSSH(ctx context.Context, input io.Reader, out io.Writer) error {
 		return fmt.Errorf("SSH compute ownership mismatch")
 	}
 	switch r.Operation {
+	case "upgrade":
+		if err := Upgrade(ctx, r.Options, out); err != nil {
+			fmt.Fprintln(out, err)
+			return err
+		}
+		return nil
+	case "upgrade-result":
+		if r.Options.Instance == "" {
+			return fmt.Errorf("upgrade result requires one instance")
+		}
+		_, config, err := loadCluster(r.Options)
+		if err != nil {
+			return err
+		}
+		nodes, err := selectedQEMUNodes(config, r.Options.Instance)
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(upgradeProfilePath(dir, nodes[0].Name))
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(upgradeExport{Profile: raw})
 	case "list":
 		if _, err := unknownNodes(r.Options); err != nil {
 			return err

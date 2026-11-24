@@ -7,6 +7,22 @@ provider boundary and current implementation.
 
 ## Current priorities
 
+- [ ] Fix Kine/CockroachDB compaction reliability: handle serialization failures
+  by retrying the complete transaction without exiting K3s. Verify the pinned
+  Kine implementation's explicit serializable compaction and fatal commit path;
+  test concurrent API writes and multiple servers compacting, retry limits,
+  cancellation and unchanged revision/compaction correctness. Investigate slow
+  Kine list/count scans and compaction backlog with representative data sizes.
+
+- [ ] Extend the single-instance QEMU `upgrade` command into a provider `reprovision`
+  command for an explicitly selected
+  owned node. Own profile generation, per-range quorum/capacity and local-volume
+  checks, Kubernetes drain/API withdrawal, recovery artifacts, retained-state
+  reset, compute restart, identity/SQL/API verification and uncordoning. Persist
+  progress for safe retries and actionable failures; no operator shell checklist
+  or workstation-only file hunt. Preserve disks, SSH/Tailscale/K3s identity and
+  cluster credentials, and coordinate the separate persistent-disk layout.
+
 - [ ] Add whole-batch, per-range voting-quorum preflight to temporary stop before
   any power-off. Successful database drains do not establish quorum after the
   selected batch stops. Check actual voters against live surviving stores,
@@ -290,12 +306,25 @@ provider boundary and current implementation.
   recovery separately, including a range with no surviving replica; verify database
   health and K3s/Kine behavior before resuming workloads. Document the tested
   version-specific procedure and evidence in a recovery runbook.
+- [ ] Investigate and build a CockroachDB system extension, with possible
+  contribution to Flatcar's sysext-bakery. Package only pinned binaries and
+  service definitions; keep database stores, certificates, configuration and
+  bootstrap state outside the read-only extension. Check licensing/distribution,
+  supported architectures, library dependencies and release maintenance. Test
+  clean startup, retained-store upgrades and service lifecycle against the current
+  Docker packaging before adopting it; an extension does not coordinate database
+  quorum, data-format migrations or rollback safety.
 - [ ] Implement and test immutable Flatcar, K3s and Cockroach upgrades with
   regenerated Ignition, coordinated drains, rollback and rejoin. Choose and
   validate reprovisioning with explicit retained paths or separate persistent
   data disks; preserve database stores, tailnet/K3s identity, credentials and
   bootstrap markers. Test configuration-only and supported version transitions
   on a three-node cluster, one member at a time, with recovery/health gates.
+  Support the K3s 1.35 → 1.36 → 1.37 path without skipping minors; replace the
+  enrollment helper's exact software-pin equality requirement with validated
+  rolling-version compatibility and coherent desired-version propagation for new
+  joiners during rollout. Existing-member upgrades update both local pins and the
+  retained join bundle; the current command does not coordinate new enrollment.
   See the [upgrade design notes](docs/cockroach-memory-rollout.md).
   Cap rolling batches by a configurable percentage, choose specific nodes that
   preserve per-range voting quorum, Kubernetes disruption budgets and API

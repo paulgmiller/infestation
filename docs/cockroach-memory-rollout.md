@@ -6,8 +6,9 @@ these values. Go memory is a soft runtime limit, not a total-process cap.
 
 Existing nodes require an immutable upgrade workflow; manually editing installed
 systemd units is not the deployment model. A memory-only reset for joining QEMU
-servers has been tested below; automated rolling and component-version upgrades
-remain outstanding. Updating source or replacing an attached Ignition file does not
+servers has been tested below. The [one-instance upgrade command](upgrading.md)
+now automates the supported QEMU reset; cluster-wide rolling coordination remains
+outstanding. Updating source or replacing an attached Ignition file does not
 by itself update a previously booted node.
 
 ## Storage and provisioning boundary
@@ -353,3 +354,72 @@ format anything, and do not blindly restore an old CockroachDB disk snapshot
 into the running cluster; database recovery needs its own reviewed procedure.
 This procedure changes memory configuration only; CockroachDB/K3s version
 changes still require supported mixed-version enrollment handling.
+
+## Replacement-cluster follow-up, 2026-11-24
+
+The manual basement worksheet above describes the earlier topology and is not
+applicable after the operator replaced those nodes. A single reprovision command
+is required; the worksheet is investigation history, not the intended operator
+interface. The following checks were read-only; no membership, isolation,
+replication policy or service-approval changes were made.
+
+The replacement members were beeback-0 (node/store 6), basementquiet-1 (7), and
+basementquiet-0 (8). Each had 97 ranges; leases were split 30/36/31 in one
+snapshot. Forty-three ranges had voters 6/7/8. Fifty-four retained five voters,
+including the stopped stores 4 and 5 plus all three live stores. All live nodes
+reported zero unavailable ranges. The per-leaseholder under-replication counts
+were 16/22/16. Those five-voter ranges currently require all three live members;
+even placement does not establish single-node failure tolerance. Dead members
+1–5 still had active membership records. System/meta/liveness policies remained
+at five replicas; the ordinary database default was three.
+
+Ten persistent-connection samples per gateway showed SELECT 1 medians about
+0.6 ms and Kine max/compact revision read medians 0.8–2.0 ms, with no errors.
+These cheap probes did not represent list-query cost. K3s journals showed Kine
+list/count SELECTs taking 1–2.4 seconds. A captured normalized count-query
+statistics row averaged about 0.96 seconds and 114,000 rows read. Automatic
+statistics estimated about 1.25 million Kine rows in the latest full sample;
+this was an estimate, not a fresh full-table count.
+
+All three K3s journals contained fatal SQLSTATE 40001 commit failures and
+restarts. The pinned K3s v1.35.8+k3s1 go.mod selects Kine v0.16.4. That version's
+SQLLog.compact explicitly begins a serializable transaction and calls
+MustCommit; the generic MustCommit calls logrus.Fatalf on any commit error.
+This establishes a compaction serialization-error path that exits the API
+server. Changing the role's default isolation alone would not change that
+explicit transaction isolation. Full-transaction retry handling needs correctness
+and concurrency tests before deployment.
+
+The shared k8s-api endpoint returned EOF on ten sampled ready/node-list requests.
+Direct requests to beeback-0 and basementquiet-0 succeeded in roughly 44–60 ms
+median including kubectl startup; basementquiet-1 refused connections during
+that probe. It subsequently returned Ready after another restart. API-forwarder
+registration journals on all replacements reported host approval was required;
+control-plane approval state was not independently queried. Check replacement
+service-host approval as well as the K3s restart problem. No raw kubeconfig,
+credentials, stored Kubernetes values or daemon preferences were printed.
+
+Sources: [pinned K3s dependency](https://github.com/k3s-io/k3s/blob/v1.35.8%2Bk3s1/go.mod),
+[Kine serializable compaction](https://github.com/k3s-io/kine/blob/v0.16.4/pkg/logstructured/sqllog/sql.go),
+and [fatal commit handling](https://github.com/k3s-io/kine/blob/v0.16.4/pkg/drivers/generic/tx.go).
+
+## Three-voter policy applied, 2026-11-24
+
+At the operator's request, bootstrap now sets both `num_replicas = 3` and
+`num_voters = 3` on the default range, system database, and meta, system,
+liveness and timeseries ranges. The same six zone changes were applied over
+verified TLS with workstation-held administrator credentials after confirming
+the three live members still constituted a voting majority. Existing child
+zone overrides changed only GC settings and inherited the replication policy.
+Subsequent range inspection found all 97 ranges had exactly voters 6/7/8 and
+no non-voters. Stopped members remained registered; no membership changes were
+performed. The earlier five-voter observation above describes the prior state.
+
+`go test ./...` and `go vet ./...` passed. The opt-in pinned Docker bootstrap
+test also passed, exercising fresh SQL setup, cleanup of temporary credentials,
+normal Kine access, idempotent SQL replay, and all six zone settings against
+CockroachDB. Adaptive voter counts remain outstanding. This change does not
+resolve the separate Kine compaction/restart or shared API endpoint findings.
+
+A read-only console-access check found `root` and `kine` had no password hashes;
+`admin` was a role. No console user or password was created.

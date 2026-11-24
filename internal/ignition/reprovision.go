@@ -37,11 +37,26 @@ func reprovisionRetains(path string) bool {
 // verify workload storage and drain/snapshot the VM before applying the profile.
 // Founding-node and version upgrades require their own recovery workflow.
 func ReprovisionMemory(previous []byte, goMemory, sqlMemory string) ([]byte, error) {
+	return reprovision(previous, goMemory, sqlMemory, nil)
+}
+
+// Release pins the software delivered by a configuration reset. Flatcar's OS
+// payload is staged separately; database format upgrades remain unsupported.
+type Release struct {
+	K3s, Tailscale, Cockroach, HelperCommit string
+}
+
+// ReprovisionRelease prepares a retained-state reset for one joining server.
+func ReprovisionRelease(previous []byte, release Release) ([]byte, error) {
+	return reprovision(previous, "768MiB", "256MiB", &release)
+}
+
+func reprovision(previous []byte, goMemory, sqlMemory string, release *Release) ([]byte, error) {
 	doc, report, err := config.Parse(previous)
 	if err != nil || report.IsFatal() {
 		return nil, fmt.Errorf("invalid source Ignition profile")
 	}
-	if len(doc.Storage.Disks)+len(doc.Storage.Raid)+len(doc.Storage.Filesystems) != 0 {
+	if len(doc.Storage.Disks)+len(doc.Storage.Raid)+len(doc.Storage.Filesystems)+len(doc.Storage.Luks) != 0 {
 		return nil, fmt.Errorf("reprovisioning must not partition or format disks")
 	}
 	var cfg nodebootstrap.Config
@@ -65,6 +80,11 @@ func ReprovisionMemory(previous []byte, goMemory, sqlMemory string) ([]byte, err
 	}
 	if configIndex < 0 || !cfg.Cluster.DiscoverPeers || cfg.Cluster.Tailscale == nil || cfg.ScaleSet != nil {
 		return nil, fmt.Errorf("memory reprovisioning requires an independently enrolled QEMU node")
+	}
+	if release != nil {
+		cfg.Cluster.K3sExtensionVersion = release.K3s
+		cfg.Cluster.Tailscale.Version = release.Tailscale
+		cfg.Cluster.CockroachImage = release.Cockroach
 	}
 	cfg.Cluster.CockroachGoMemory = goMemory
 	cfg.Cluster.CockroachSQLMemory = sqlMemory
@@ -92,6 +112,22 @@ func ReprovisionMemory(previous []byte, goMemory, sqlMemory string) ([]byte, err
 		}
 	}
 	doc.Storage.Files = files
+	if release != nil {
+		kept := doc.Storage.Files[:0]
+		for _, file := range doc.Storage.Files {
+			if file.Path == "/opt/infestation/build-helper" {
+				continue
+			}
+			if file.Path == "/etc/extensions/k3s.raw" {
+				file.Contents.Source = ptr(fmt.Sprintf("https://extensions.flatcar.org/extensions/k3s-%s-%s.raw", release.K3s, cfg.Cluster.Architecture))
+			}
+			if file.Path == "/etc/extensions/tailscale.raw" {
+				file.Contents.Source = ptr(fmt.Sprintf("https://extensions.flatcar.org/extensions/tailscale-%s-%s.raw", release.Tailscale, cfg.Cluster.Architecture))
+			}
+			kept = append(kept, file)
+		}
+		doc.Storage.Files = kept
+	}
 	for _, link := range doc.Storage.Links {
 		if reprovisionRetains(link.Path) {
 			return nil, fmt.Errorf("profile link would replace retained state")
@@ -99,12 +135,12 @@ func ReprovisionMemory(previous []byte, goMemory, sqlMemory string) ([]byte, err
 	}
 	var units []types.Unit
 	for _, unit := range doc.Systemd.Units {
-		if unit.Name == "infestation-retained-state.service" {
+		if unit.Name == "infestation-retained-state.service" || (release != nil && unit.Name == "infestation-helper-build.service") {
 			continue
 		}
 		var dropins []types.Dropin
 		for _, dropin := range unit.Dropins {
-			if dropin.Name != "05-retained-state.conf" {
+			if dropin.Name != "05-retained-state.conf" && !(release != nil && dropin.Name == "10-helper-build.conf") {
 				dropins = append(dropins, dropin)
 			}
 		}
@@ -150,6 +186,16 @@ done
 	dependency := "[Unit]\nRequires=infestation-retained-state.service\nAfter=infestation-retained-state.service\n"
 	if !foundTailscale {
 		doc.Systemd.Units = append(doc.Systemd.Units, types.Unit{Name: "tailscaled.service", Dropins: []types.Dropin{{Name: "05-retained-state.conf", Contents: &dependency}}})
+	}
+	if release != nil {
+		if err := helperBuildProfile(&doc, Bootstrap{HelperSourceCommit: release.HelperCommit}); err != nil {
+			return nil, err
+		}
+		for i := range doc.Systemd.Units {
+			if doc.Systemd.Units[i].Name == "infestation-helper-build.service" {
+				doc.Systemd.Units[i].Dropins = append(doc.Systemd.Units[i].Dropins, types.Dropin{Name: "05-retained-state.conf", Contents: &dependency})
+			}
+		}
 	}
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

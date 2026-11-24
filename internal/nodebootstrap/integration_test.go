@@ -2,6 +2,7 @@ package nodebootstrap
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -93,7 +94,7 @@ func TestPinnedSQLBootstrap(t *testing.T) {
 			t.Errorf("test container cleanup failed: %s", r.Stderr)
 		}
 	}()
-	r := run("run", "--detach", "--pull", "never", "--name", name, "--network", "none", "--add-host", "api-0.test.westus2.internal:127.0.0.1", "--memory", "2g", "--cpus", "1", "--entrypoint", "/cockroach/cockroach", "--mount", "type=bind,src="+filepath.Join(root, "pki", "kube-0")+",dst=/cockroach/certs,readonly", "--mount", "type=bind,src="+w.RuntimeCredentialDir+",dst=/run/infestation,readonly", c.CockroachImage, "start", "--certs-dir=/cockroach/certs", "--join=127.0.0.1:26257", "--listen-addr=127.0.0.1:26257", "--http-addr=127.0.0.1:8080", "--store=type=mem,size=1GiB", "--cache=64MiB", "--max-sql-memory=64MiB")
+	r := run("run", "--detach", "--pull", "never", "--name", name, "--network", "none", "--add-host", "api-0.test.westus2.internal:127.0.0.1", "--memory", "2g", "--cpus", "1", "--entrypoint", "/cockroach/cockroach", "--mount", "type=bind,src="+filepath.Join(root, "pki", "kube-0")+",dst=/cockroach/certs,readonly", "--mount", "type=bind,src="+w.RuntimeCredentialDir+",dst=/run/infestation,readonly", "--mount", "type=bind,src="+filepath.Join(root, "pki", "admin")+",dst=/run/test-admin,readonly", c.CockroachImage, "start", "--certs-dir=/cockroach/certs", "--join=127.0.0.1:26257", "--listen-addr=127.0.0.1:26257", "--http-addr=127.0.0.1:8080", "--store=type=mem,size=1GiB", "--cache=64MiB", "--max-sql-memory=64MiB")
 	if err := r.Err("start isolated test database"); err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +124,28 @@ func TestPinnedSQLBootstrap(t *testing.T) {
 	again, err := w.Database(ctx)
 	if err != nil || again != id {
 		t.Fatalf("normal Kine credentials cannot resume after credential cleanup: %v", err)
+	}
+	// Exercise the real SQL parser and configured zones, including an idempotent replay.
+	r = run("exec", "--user", "0", name, "/cockroach/cockroach", "sql", "--url=postgresql://root@127.0.0.1:26257/defaultdb?sslmode=verify-full&sslrootcert=/run/test-admin/ca.crt&sslcert=/run/test-admin/client.root.crt&sslkey=/run/test-admin/client.root.key", "--format=csv", "--execute", bootstrap.BootstrapSQL+"\nSHOW ZONE CONFIGURATIONS;")
+	if err := r.Err("verify three-voter bootstrap zones"); err != nil {
+		t.Fatal(err)
+	}
+	reader := csv.NewReader(strings.NewReader(r.Stdout))
+	reader.FieldsPerRecord = -1 // SQL command tags precede the two-column result.
+	rows, err := reader.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"RANGE default", "DATABASE system", "RANGE meta", "RANGE system", "RANGE liveness", "RANGE timeseries"} {
+		found := false
+		for _, row := range rows {
+			if len(row) == 2 && row[0] == target {
+				found = strings.Contains(row[1], "num_replicas = 3") && strings.Contains(row[1], "num_voters = 3")
+			}
+		}
+		if !found {
+			t.Fatalf("zone %s did not retain three replicas and three voters", target)
+		}
 	}
 	t.Log("Initialized a fresh secure Cockroach store, created Kine access, removed temporary credentials, and resumed using Kine.")
 }

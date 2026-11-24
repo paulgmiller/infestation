@@ -1,5 +1,13 @@
 -- Shared test license supplied for the prototype; replace this default for real deployments.
 SET CLUSTER SETTING enterprise.license = 'crl-0-ELWog+YGGAMyEKAq1OlLJEcLu7r0Zufaq9M6EJWSCcMaZUAgiNbpHrAYa+0';
+-- Keep application and critical system data on the same three-voter baseline.
+-- CockroachDB otherwise defaults several system zones to five replicas.
+ALTER RANGE default CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
+ALTER DATABASE system CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
+ALTER RANGE meta CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
+ALTER RANGE system CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
+ALTER RANGE liveness CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
+ALTER RANGE timeseries CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
 CREATE DATABASE IF NOT EXISTS kubernetes;
 CREATE USER IF NOT EXISTS kine;
 -- Kine requires sequential revisions. CockroachDB's default unique_rowid()

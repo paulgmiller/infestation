@@ -26,7 +26,7 @@ import (
 	"github.com/paulgmiller/infestation/internal/tailnet"
 )
 
-const FlatcarVersion = "4757.2.2"
+const FlatcarVersion = "4757.2.4"
 const TailscaleVersion = "v1.104.2"
 
 type Options struct {
@@ -317,6 +317,11 @@ func Start(ctx context.Context, o Options, out io.Writer) error {
 		return fmt.Errorf("another start may be in progress: %w", err)
 	}
 	defer lock.Close()
+	return startQEMULocked(ctx, o, dir, m, out)
+}
+
+func startQEMULocked(ctx context.Context, o Options, dir string, m machine, out io.Writer) error {
+	var err error
 	if o.resumeOnly {
 		state, err := readAutostart(dir)
 		if err != nil {
