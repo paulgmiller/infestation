@@ -60,6 +60,7 @@ type dbRunner struct {
 	target                string
 	failSQL               bool
 	failLabels            bool
+	setupCalls            int
 }
 
 func (r *dbRunner) Run(_ context.Context, name string, args ...string) executil.Result {
@@ -99,6 +100,12 @@ func (r *dbRunner) Run(_ context.Context, name string, args ...string) executil.
 			return executil.Result{Code: 1}
 		}
 		return executil.Result{Stdout: "cluster_id\n" + identity + "\n"}
+	}
+	if args[len(args)-1] == bootstrap.BootstrapSQL {
+		r.setupCalls++
+		if !strings.Contains(joined, "postgresql://root@") || !strings.Contains(bootstrap.BootstrapSQL, "SET CLUSTER SETTING enterprise.license = 'crl-0-") {
+			r.t.Fatal("initial SQL setup must install the test license with temporary root access")
+		}
 	}
 	if r.failSQL {
 		return executil.Result{Code: 1}
@@ -186,6 +193,9 @@ func TestSQLSetupRetriesThenRemovesTemporaryCredentials(t *testing.T) {
 	}
 	if _, err := w.Database(context.Background()); err != nil {
 		t.Fatalf("startup should use Kine after temporary credential deletion: %v", err)
+	}
+	if r.setupCalls != 2 {
+		t.Fatal("completed bootstrap must not reinstall the test license on restart")
 	}
 }
 

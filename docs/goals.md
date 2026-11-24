@@ -67,9 +67,14 @@ that all behavior is implemented or proven. Outstanding work is in [TODO.md](../
 
 - Creator workstations must be disposable once provisioning and credential
   handoff complete. Cluster operation, enrollment, credential renewal, safe
-  decommissioning and disaster recovery must not depend on their continued
-  availability or retained local files. Durable credential custody and recovery
+  decommissioning, upgrades, database administration and disaster recovery must
+  not depend on their continued availability or retained local files. Durable
+  credential custody and recovery
   access must exist elsewhere, including when the cluster itself is unavailable.
+  Every enrolled node must have authorized access to the files and credentials
+  needed for upgrades and database changes, including configuration/version
+  inputs and licensing. Losing all creator-workstation files must not strand
+  cluster maintenance.
   Recoverable provider ownership records must allow another authorized operator
   to manage cloud resources. Local QEMU compute still depends on its physical
   host; losing a creator workstation is distinct from losing a VM host and disks.

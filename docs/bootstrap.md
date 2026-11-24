@@ -115,6 +115,16 @@ for the manually recovered cluster and remaining live verification.
 
 ## Temporary SQL credential
 
+Initial SQL setup installs the shared prototype test license embedded in
+`internal/bootstrap/bootstrap.sql` before creating Kine access. This default is
+for the disposable test cluster; user-supplied licensing and renewal remain in
+[TODO](../TODO.md). Completed SQL setup is not replayed on restart, so this source
+change does not install a license on an already bootstrapped cluster. Apply it
+once using existing workstation SQL administrator credentials. CockroachDB's
+[v26.2 licensing guidance](https://docs.cockroachlabs.com/docs/v26.2/licensing-faqs)
+describes installation, telemetry and throttling; Kubernetes Ready alone does
+not establish that the database is licensed or free of throttling.
+
 A separate root client certificate/key has a one-hour lifetime and is delivered
 only to the initializer's private profile. The CA signing key and long-lived
 administrator key remain on the workstation. The node validates the temporary

@@ -7,6 +7,13 @@ provider boundary and current implementation.
 
 ## Current priorities
 
+- [ ] Design user-facing CockroachDB licensing setup to replace the shared test
+  license default: explain eligibility, obtaining and privately supplying a key,
+  telemetry requirements, renewal and expiry. Preserve an installed operator
+  license, expose actionable license/throttling health before K3s startup, and
+  test operation beyond the initial seven-day unlicensed grace period. See
+  [CockroachDB v26.2 licensing](https://docs.cockroachlabs.com/docs/v26.2/licensing-faqs).
+
 - [ ] Tune VM RAM and CockroachDB `--max-sql-memory` / `--max-go-memory`
   together under representative Kine and Kubernetes workload. Measure GC CPU,
   collection rate, query memory failures and latency, total database RSS and
@@ -52,8 +59,14 @@ provider boundary and current implementation.
   automatic recovery of canceled dependency jobs and stuck K3s startup/shutdown
   without manual service commands; fix any remaining gaps.
 - [ ] Design durable cluster credential custody independent of creator
-  workstations and disposable provider-group state. Choose an off-workstation
-  authoritative store and independent encrypted recovery copy for CockroachDB
+  workstations and disposable provider-group state. Every enrolled node must be
+  able to obtain the authorized files and credentials needed for upgrades and
+  database administration, including license changes, without access to the
+  original client workstation. Include desired configuration, version pins,
+  Ignition regeneration inputs and provider ownership records as well as secrets;
+  locating an old workstation state directory must not be an operational step.
+  Choose an off-workstation authoritative store and independent encrypted
+  recovery copy for CockroachDB
   CA/signing keys, admin credentials, K3s token and cluster trust/settings. Define
   authorized operator access from a replacement workstation, encryption/key
   custody, availability during cluster outages, rotation and recovery. Never make
@@ -64,9 +77,12 @@ provider boundary and current implementation.
   selected; do not distribute signing/admin keys through ordinary node profiles.
   Define recovery/discovery of provider ownership metadata so loss of the creator
   workstation does not strand cloud lifecycle operations. Test permanent loss of
-  that workstation, enrollment, decommissioning and recovery from another operator
-  machine. Credentials alone cannot restore database/Kine data after store loss;
-  coordinate with the separate data backup/restore work.
+  the creator workstation and all its local files: from each surviving node,
+  obtain the required material, perform an authorized database/license change,
+  and prepare/apply a rolling upgrade. Also verify enrollment, decommissioning
+  and recovery from another operator machine. Credentials alone cannot restore
+  database/Kine data after store loss; coordinate with the separate data
+  backup/restore work.
 - [ ] Model contributors as failure boundaries across providers/sites. Issue each
   contributor a distinct Tailscale auth key carrying `tag:roach` plus exactly one
   administrator-controlled `tag:contributor-<id>` tag. Derive a leading
@@ -259,7 +275,13 @@ provider boundary and current implementation.
   recovery separately, including a range with no surviving replica; verify database
   health and K3s/Kine behavior before resuming workloads. Document the tested
   version-specific procedure and evidence in a recovery runbook.
-- [ ] Coordinate Flatcar, K3s and Cockroach updates, drains, rollback and rejoin.
+- [ ] Implement and test immutable Flatcar, K3s and Cockroach upgrades with
+  regenerated Ignition, coordinated drains, rollback and rejoin. Choose and
+  validate reprovisioning with explicit retained paths or separate persistent
+  data disks; preserve database stores, tailnet/K3s identity, credentials and
+  bootstrap markers. Test configuration-only and supported version transitions
+  on a three-node cluster, one member at a time, with recovery/health gates.
+  See the [upgrade design notes](docs/cockroach-memory-rollout.md).
 - [ ] Investigate Kine/Cockroach maintenance-status incompatibilities, including
   the rejected `pg_total_relation_size()` query, and watch timeout logs under
   sustained WAN latency. Verify metrics API discovery after startup converges.
