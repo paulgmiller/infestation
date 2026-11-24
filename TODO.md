@@ -7,6 +7,14 @@ provider boundary and current implementation.
 
 ## Current priorities
 
+- [ ] Add whole-batch, per-range voting-quorum preflight to temporary stop before
+  any power-off. Successful database drains do not establish quorum after the
+  selected batch stops. Check actual voters against live surviving stores,
+  account for already unavailable members and transitional replicas, and refuse
+  unsafe batches without changing replication. Test individually drainable nodes
+  whose combined shutdown loses quorum, preexisting dead voters, partial failures
+  and concurrent membership changes. Keep the explicit outage override separate.
+
 - [ ] Design user-facing CockroachDB licensing setup to replace the shared test
   license default: explain eligibility, obtaining and privately supplying a key,
   telemetry requirements, renewal and expiry. Preserve an installed operator
@@ -196,6 +204,16 @@ provider boundary and current implementation.
   [CockroachDB v26.2 DB Console](https://docs.cockroachlabs.com/docs/v26.2/ui-overview).
 
 ## Data safety and maintenance
+
+- [ ] Separate disposable OS disks from persistent node state across providers.
+  Define the retained layout for CockroachDB stores, Tailscale identity, K3s
+  state/local volumes, leaf credentials and bootstrap/recovery markers. Add an
+  explicit migration for existing single-disk nodes, mount/ownership guards and
+  independent retention/backup policy; never format a retained state disk during
+  OS provisioning. Test replacing only the OS disk with regenerated Ignition,
+  preserving node/store identity and data, missing/wrong state disks, rollback,
+  and interrupted migration. Coordinate with immutable upgrades and credential
+  custody; migration must not depend on the creator workstation surviving.
 
 - [ ] Benchmark nodes before admitting them to CockroachDB membership, especially
   voting-replica placement. Measure durable disk write/fsync latency, CPU capacity,

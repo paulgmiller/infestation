@@ -16,6 +16,20 @@ import (
 
 const stopParallelism = 4
 
+// v26.2.7's RPC CLI ignores --user=node and selects client.root filenames.
+// These temporary aliases present the existing node leaf, which Drain accepts;
+// they do not supply a root credential or alter the certificate's identity.
+// https://github.com/cockroachdb/cockroach/blob/v26.2.7/pkg/cli/rpc_clients.go
+// https://github.com/cockroachdb/cockroach/blob/v26.2.7/pkg/rpc/auth.go
+const drainNodeScript = `set -eu
+drain_certs=$(mktemp -d)
+trap 'rm -rf -- "$drain_certs"' EXIT
+ln -s /cockroach/certs/ca.crt "$drain_certs/ca.crt"
+ln -s /cockroach/certs/node.crt "$drain_certs/client.root.crt"
+ln -s /cockroach/certs/node.key "$drain_certs/client.root.key"
+/cockroach/cockroach node drain --self --host=localhost:26257 --certs-dir="$drain_certs" --drain-wait=90s
+`
+
 type stopTarget struct {
 	name, databaseHost string
 	prepare            func(context.Context) (bool, error) // true when already off
@@ -27,9 +41,8 @@ func drainDatabase(ctx context.Context, runner executil.Runner, host string) err
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	result := runner.Run(ctx, "tailscale", "ssh", "core@"+host, "sudo", "-n",
-		"/usr/bin/docker", "exec", "--user", "0", "cockroachdb", "/cockroach/cockroach",
-		"node", "drain", "--self", "--host=localhost:26257", "--certs-dir=/cockroach/certs",
-		"--user=node", "--drain-wait=90s")
+		"/usr/bin/docker", "exec", "--user", "0", "cockroachdb", "/bin/sh", "-ec",
+		"'"+strings.ReplaceAll(drainNodeScript, "'", "'\\''")+"'")
 	if err := ctx.Err(); err != nil {
 		return err
 	}

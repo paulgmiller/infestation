@@ -133,6 +133,9 @@ is disabled. Intentional stops remain stopped.
 
 Every command has `--help`. Local VM control runs on its QEMU host; Azure control
 requires saved provider state and Azure SDK credentials. See [where commands run](docs/local-state.md#where-lifecycle-commands-run).
+For a joining QEMU server, `infestation reprovision-profile` prepares private
+Ignition for a memory-only configuration reset; it does not apply or reboot it.
+See the [immutable reset procedure and canary evidence](docs/cockroach-memory-rollout.md).
 
 Only one founding node gets initialization authority. It waits for two database
 peers. Other groups only join. Azure defaults to `westus2` and `Standard_B2s`;

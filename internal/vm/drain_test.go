@@ -29,8 +29,7 @@ func TestStopBatchParallelDrainsAndPartialPowerOff(t *testing.T) {
 			bothEntered := make(chan struct{})
 			runner := drainTestRunner(func(ctx context.Context, name string, args ...string) executil.Result {
 				want := []string{"ssh", args[1], "sudo", "-n", "/usr/bin/docker", "exec", "--user", "0",
-					"cockroachdb", "/cockroach/cockroach", "node", "drain", "--self",
-					"--host=localhost:26257", "--certs-dir=/cockroach/certs", "--user=node", "--drain-wait=90s"}
+					"cockroachdb", "/bin/sh", "-ec", "'" + strings.ReplaceAll(drainNodeScript, "'", "'\\''") + "'"}
 				if name != "tailscale" || !reflect.DeepEqual(args, want) {
 					t.Errorf("unexpected drain command: %s %v", name, args)
 				}

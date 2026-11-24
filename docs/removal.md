@@ -114,6 +114,10 @@ access to its guests. Azure runs it from the workstation.
    Use Tailscale SSH as `core` with noninteractive sudo to invoke the local
    container's `cockroach node drain --self` with its existing node certificate
    and a 90-second drain wait. The SSH call has a two-minute deadline.
+   In v26.2.7 the RPC CLI ignores `--user=node`; the command therefore creates
+   temporary client-filename symlinks to the existing node leaf inside the
+   container and removes them afterward. The certificate remains the node
+   identity; no SQL root key is supplied and TLS verification stays enabled.
    The database process stays up during drain. SQL traffic, range leases, and
    leadership move away while replicas remain able to vote.
 3. After the drain attempts finish, power off eligible VMs, up to four in
