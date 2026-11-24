@@ -163,22 +163,6 @@ func TestProviderCapabilitiesDeclareStorageAndEgress(t *testing.T) {
 	}
 }
 
-func TestComputeStopRetainsResourcesUntilWholeGroupDrainExists(t *testing.T) {
-	for _, name := range []string{"qemu", "azure"} {
-		r := preparedProviderFixture(t, name)
-		p, _ := ProviderFor(name)
-		err := p.Stop(context.Background(), Options{Name: r.Name, StateDir: filepath.Dir(r.StateDir)}, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "temporary drain") || !strings.Contains(err.Error(), "retained") {
-			t.Fatal("unsafe temporary stop accepted", err)
-		}
-		for _, n := range r.Nodes {
-			if _, err := os.Stat(n.IgnitionPath); err != nil {
-				t.Fatal("stop altered private state", err)
-			}
-		}
-	}
-}
-
 func TestPreparedAzurePreservesExplicitSubscription(t *testing.T) {
 	o := ClusterOptions{Options: Options{Name: "pool"}, Provider: "azure", Size: 2, AzureSubscription: "explicit-subscription"}
 	c := clusterConfig(o)

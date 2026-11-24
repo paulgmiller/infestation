@@ -163,9 +163,9 @@ Azure authentication uses DefaultAzureCredential. Create selects a subscription
 from `--subscription` or `AZURE_SUBSCRIPTION_ID`; lifecycle operations use the
 saved subscription. See [Azure authentication](azure-vmss.md#authentication).
 The shared Go provider contract is implemented; migration to go-qemu remains
-outstanding. Ordinary stop refuses until its whole-batch quorum and temporary drain
-guards are implemented. The explicit `--allow-outage` option bypasses those
-checks for controlled outage testing. QEMU groups can run through SSH while
+outstanding. Temporary stop drains CockroachDB and powers down eligible VMs in bounded
+parallel phases. The `--allow-outage` option permits power-off after an
+unconfirmed drain. See [temporary stops](removal.md#temporary-stops). QEMU groups can run through SSH while
 shared credential preparation stays on the workstation; see the
 [lifecycle test](vm-lifecycle-test.md). Normal remove gates SDK deletion on verified database
 decommissioning; explicit abandoned-cluster teardown retains ownership checks.

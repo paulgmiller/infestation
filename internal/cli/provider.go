@@ -134,7 +134,7 @@ func (p provider) stop() *cobra.Command {
 		}
 		return p.runAction(ctx, o, "stop", out)
 	})
-	cmd.Flags().BoolVar(&o.AllowOutage, "allow-outage", false, "explicitly permit shutdown without quorum/drain checks, including a full cluster outage")
+	cmd.Flags().BoolVar(&o.AllowOutage, "allow-outage", false, "permit power-off if a database drain cannot be confirmed")
 	if p.name == "vm" {
 		// --all replaces --name for host-local shutdown only.
 		delete(cmd.Flags().Lookup("name").Annotations, cobra.BashCompOneRequiredFlag)

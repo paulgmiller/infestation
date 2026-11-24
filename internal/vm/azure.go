@@ -10,11 +10,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/paulgmiller/infestation/internal/cluster"
+	"github.com/paulgmiller/infestation/internal/executil"
 	"github.com/paulgmiller/infestation/internal/fsutil"
 )
 
@@ -125,7 +128,10 @@ func azureActions(ctx context.Context, o Options, action string, out io.Writer, 
 		}
 		return json.NewEncoder(out).Encode(instances)
 	}
-	if err := client.Power(ctx, set, action); err != nil {
+	if action == "stop" {
+		return stopAzureGroup(ctx, o, set, out, client, executil.OSRunner{})
+	}
+	if err := client.Start(ctx, set); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, set.Name, "Azure VMSS", action, "completed")
@@ -161,4 +167,63 @@ func azureSubscription(explicit string) (string, error) {
 		return "", fmt.Errorf("supply --subscription or AZURE_SUBSCRIPTION_ID")
 	}
 	return explicit, nil
+}
+
+func stopAzureGroup(ctx context.Context, o Options, set azureScaleSet, out io.Writer, client azureAPI, runner executil.Runner) error {
+	_, config, err := loadCluster(o)
+	if err != nil {
+		return err
+	}
+	instances, err := client.Instances(ctx, set)
+	if err != nil {
+		return err
+	}
+	byName := make(map[string]azureInstance, len(instances))
+	for _, instance := range instances {
+		id, err := strconv.Atoi(instance.InstanceID)
+		if err != nil || id < 0 || strconv.Itoa(id) != instance.InstanceID {
+			return fmt.Errorf("invalid Azure instance ID; resources retained")
+		}
+		name := set.Name + "-" + instance.InstanceID
+		if _, exists := byName[name]; exists {
+			return fmt.Errorf("duplicate Azure instance ID; resources retained")
+		}
+		byName[name] = instance
+	}
+	if len(byName) != len(config.Nodes) || len(byName) != set.Capacity {
+		return fmt.Errorf("Azure instance inventory differs from owned targets; resources retained")
+	}
+
+	targets := make([]stopTarget, 0, len(config.Nodes))
+	for _, node := range config.Nodes {
+		instance, ok := byName[node.Name]
+		if !ok {
+			return fmt.Errorf("Azure instance inventory differs from owned targets; resources retained")
+		}
+		delete(byName, node.Name)
+		var host string
+		if node.Database() {
+			host = config.NodeAddress(node)
+		}
+		targets = append(targets, stopTarget{
+			name: node.Name, databaseHost: host,
+			prepare: func(context.Context) (bool, error) {
+				for _, status := range instance.Statuses {
+					switch status.Code {
+					case "PowerState/stopped", "PowerState/deallocated":
+						return true, nil
+					case "PowerState/running":
+						return false, nil
+					}
+				}
+				return false, fmt.Errorf("Azure instance is neither confirmed running nor confirmed stopped")
+			},
+			power: func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+				defer cancel()
+				return client.DeallocateInstance(ctx, set, instance.InstanceID)
+			},
+		})
+	}
+	return runStopBatch(ctx, targets, o.AllowOutage, out, runner)
 }

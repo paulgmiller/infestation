@@ -144,7 +144,7 @@ func resumeLocal(ctx context.Context, o Options, out io.Writer, start func(conte
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
-		dir, _, err := load(machine)
+		dir, _, err := load(machine.Options)
 		if err == nil {
 			var state autostartState
 			state, err = readAutostart(dir)
@@ -154,7 +154,7 @@ func resumeLocal(ctx context.Context, o Options, out io.Writer, start func(conte
 		}
 		if err == nil {
 			machine.resumeOnly = true
-			err = start(ctx, machine, out)
+			err = start(ctx, machine.Options, out)
 		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", machine.Name, err))

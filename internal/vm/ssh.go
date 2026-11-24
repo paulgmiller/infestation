@@ -202,10 +202,13 @@ func ServeSSH(ctx context.Context, input io.Reader, out io.Writer) error {
 	case "netcheck":
 		return GroupNetcheck(ctx, r.Options, out)
 	case "stop":
-		if !r.Options.AllowOutage {
-			return refuseUnsafeStop(r.Options, "qemu")
+		err := stopQEMUGroup(ctx, r.Options, out)
+		if err != nil {
+			// Stop errors omit raw provider/guest command output. Forward
+			// per-VM failures because the SSH client discards stderr.
+			fmt.Fprintln(out, err)
 		}
-		return ClusterAction(ctx, r.Options, "stop", out)
+		return err
 	case "remove":
 		return RemoveGroup(ctx, r.Options, "qemu", r.Removal, out)
 	default:

@@ -277,6 +277,9 @@ func loadCluster(o Options) (string, cluster.Config, error) {
 }
 
 func ClusterAction(ctx context.Context, o Options, action string, out io.Writer) error {
+	if action == "stop" {
+		return stopQEMUGroup(ctx, o, out)
+	}
 	return clusterAction(ctx, o, action, out, Start, Stop)
 }
 

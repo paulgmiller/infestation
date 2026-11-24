@@ -49,7 +49,7 @@ Every public command has `--help`, for example `infestation vm start --help` or
 For QEMU `start` and `stop`, `--instance INDEX` selects one zero-based instance
 from the saved group inventory, including SSH-backed groups. Omitting it selects
 the whole group. Selection never rewrites the inventory; disks and peer VMs are
-retained. Stop still requires `--allow-outage` until quorum/drain guards exist.
+retained. For database hosts, stop first attempts a CockroachDB drain.
 
 Keep private material protected when moving any state. No state needs sharing
 merely to enroll a friend's node. Azure `start --wait` currently ignores the
@@ -110,9 +110,9 @@ infestation azure remove --name cloud --state-dir state/vms \
 Normal removal first verifies the whole batch's database identities, strict
 CockroachDB decommissioning and healthy survivors. Intentional abandoned-cluster
 teardown requires `--abandon-cluster`; see [removal](removal.md) for prerequisites,
-checkpoint behavior and limitations. Ordinary `stop` refuses until its separate
-whole-batch quorum and temporary-drain guard exists. `--allow-outage` explicitly
-bypasses those checks for controlled shutdown while retaining disks and state.
+checkpoint behavior and limitations. Temporary `stop` drains CockroachDB
+before power-off. `--allow-outage` permits power-off if a drain fails. See
+[temporary stops](removal.md#temporary-stops).
 
 After that gate, QEMU removal terminates each owned emulator through its private QMP monitor,
 waits for the verified process to exit, and removes its socket and PID file.
