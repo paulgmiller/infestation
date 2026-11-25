@@ -129,6 +129,11 @@ for the manually recovered cluster and remaining live verification.
 
 ## Temporary SQL credential
 
+New clusters get a DB Console account named `dashboard` with the shared
+password `roachking`. The account has `NOSQLLOGIN` and can view basic cluster
+health, node status, and metrics. Reach the node's loopback Console through a
+Tailscale SSH local forward to port 8080.
+
 Initial SQL setup installs the shared prototype test license embedded in
 `internal/bootstrap/bootstrap.sql` before creating Kine access. This default is
 for the disposable test cluster; user-supplied licensing and renewal remain in

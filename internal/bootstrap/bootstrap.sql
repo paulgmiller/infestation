@@ -18,3 +18,8 @@ ALTER DATABASE kubernetes SET default_transaction_isolation = 'read committed';
 ALTER ROLE kine SET serial_normalization = 'sql_sequence';
 GRANT ALL ON DATABASE kubernetes TO kine;
 GRANT ALL ON SCHEMA kubernetes.public TO kine;
+
+-- Block SQL login before enabling the shared DB Console password.
+CREATE USER IF NOT EXISTS dashboard;
+GRANT SYSTEM NOSQLLOGIN TO dashboard;
+ALTER USER dashboard WITH PASSWORD 'roachking';
