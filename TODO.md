@@ -74,6 +74,11 @@ provider boundary and current implementation.
   current normal retries require every target identity reachable.
   Coordinate Kubernetes workload drain/API withdrawal and credential custody with
   their separate TODOs. Never lower replication to bypass insufficient capacity.
+- [ ] Reconcile CockroachDB members that have been continuously offline for at
+  least three days. Verify each member's identity and that its disk will never
+  rejoin before decommissioning. Preserve intentionally stopped members. Check
+  quorum and replica placement on the surviving nodes and verify zero remaining
+  replicas on the retired members. See [safe removal](docs/removal.md).
 - [ ] Live-verify typed Azure Go SDK provisioning and lifecycle: credentials and
   subscription selection, VMSS bootstrap, power operations, paginated status,
   canceled/failed creation evidence and retryable owned-group removal. Verify
@@ -219,9 +224,14 @@ provider boundary and current implementation.
   replacement or teardown so they cannot interfere with the tailnet's cluster.
 - [ ] Gate smoke clients on ready endpoints and retain failed-test evidence.
 - [ ] Verify kubeconfig publication across credential renewal.
+- [ ] Add a repeatable workstation `infestation tailnet setup` command to
+  define `svc:k8s-api` and `svc:roach-console` on TCP 443, enable MagicDNS and
+  HTTPS, and merge Service host auto-approvals and client grants while preserving
+  existing policy. Use a tailnet admin API credential on the workstation only.
+  Verify setup and a repeat run on a new tailnet.
 - [ ] Make the CockroachDB DB Console viewable by anyone on the tailnet through
   a stable private HTTPS endpoint, with browser-trusted TLS and no public ingress.
-  Define tailnet access policy and dashboard authentication so tailnet members can
+  Define tailnet access policy so tailnet members can
   inspect locality, node health, replication and network latency without receiving
   SQL admin credentials. Keep CA signing keys and long-lived admin keys on the
   workstation. Verify access from another member's device and endpoint behavior

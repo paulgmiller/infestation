@@ -125,8 +125,8 @@ func TestPinnedSQLBootstrap(t *testing.T) {
 	if err != nil || again != id {
 		t.Fatalf("normal Kine credentials cannot resume after credential cleanup: %v", err)
 	}
-	// Exercise the real SQL parser and configured zones, including an idempotent replay.
-	r = run("exec", "--user", "0", name, "/cockroach/cockroach", "sql", "--url=postgresql://root@127.0.0.1:26257/defaultdb?sslmode=verify-full&sslrootcert=/run/test-admin/ca.crt&sslcert=/run/test-admin/client.root.crt&sslkey=/run/test-admin/client.root.key", "--format=csv", "--execute", bootstrap.BootstrapSQL+"\nSHOW ZONE CONFIGURATIONS;")
+	// Exercise the real SQL parser, configured zones and Console grant after replay.
+	r = run("exec", "--user", "0", name, "/cockroach/cockroach", "sql", "--url=postgresql://root@127.0.0.1:26257/defaultdb?sslmode=verify-full&sslrootcert=/run/test-admin/ca.crt&sslcert=/run/test-admin/client.root.crt&sslkey=/run/test-admin/client.root.key", "--format=csv", "--execute", bootstrap.BootstrapSQL+"\nSHOW ZONE CONFIGURATIONS;\nSHOW SYSTEM GRANTS FOR dashboard;")
 	if err := r.Err("verify three-voter bootstrap zones"); err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +135,15 @@ func TestPinnedSQLBootstrap(t *testing.T) {
 	rows, err := reader.ReadAll()
 	if err != nil {
 		t.Fatal(err)
+	}
+	var dashboardSQLBlocked bool
+	for _, row := range rows {
+		if len(row) == 3 && row[0] == "dashboard" && row[1] == "NOSQLLOGIN" {
+			dashboardSQLBlocked = true
+		}
+	}
+	if !dashboardSQLBlocked {
+		t.Fatal("dashboard account is missing NOSQLLOGIN after bootstrap replay")
 	}
 	for _, target := range []string{"RANGE default", "DATABASE system", "RANGE meta", "RANGE system", "RANGE liveness", "RANGE timeseries"} {
 		found := false
