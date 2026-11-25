@@ -153,3 +153,57 @@ verified retained identities, target versions and Ready status before uncordonin
 Immediate follow-up showed K3s active/running with zero restarts since boot.
 This brief startup check does not establish compaction reliability; the previous
 failure recurred over a longer observation window. CockroachDB stayed at 26.2.7.
+
+### Post-rollout observation, 2026-11-25 UTC
+
+At the operator's request, read-only journal snapshots were collected, separated
+by a ten-minute wait. Snapshot collection/approval time made the comparison
+window 01:23:38–01:36:35 UTC (approximately 13 minutes). All three servers were
+on K3s 1.37.1. Every node had already logged two fatal SQLSTATE 40001 commit
+failures since boot before this window; adjacent failures were about 20 minutes
+apart.
+
+| Node | New fatal commits | Successful compaction batches | Slow-query logs | Longest slow query |
+| --- | ---: | ---: | ---: | ---: |
+| beeback-0 | 1 | 2 | 7 | 5.86 s |
+| basementquiet-0 | 0 | 0 | 2 | 1.07 s |
+| basementquiet-1 | 1 | 1 | 16 | 4.51 s |
+
+The new fatal commits occurred at 01:24:33 and 01:29:58 UTC on beeback-0 and
+basementquiet-1 respectively, each followed by a K3s service restart. Successful
+batches on those nodes preceded their fatal commit errors by less than a second.
+All three K3s services were active at the second snapshot. These observations
+confirm both successful partial compaction and the persistent fatal commit path;
+the 1.37 upgrade did not resolve the crash. Slow-query numbers are log events,
+not a latency distribution for every SQL query or a controlled benchmark.
+Twenty-two of the 25 slow-query log events fell within one minute before or two
+minutes after those new fatal commits. This establishes timing correlation with
+the compaction/restart bursts, not whether compaction or restart-driven reads
+caused the individual slow queries.
+
+
+### Isolated automatic-compaction reproducer, 2026-11-25 UTC
+
+The upstream Kine 0.17.1 adapter normally disables automatic compaction and sets
+minimum retained revisions to zero. Enabling only its timer did not reproduce
+the crash: the existing `TestGuaranteedUpdateWithConflict` passed three baseline
+and ten automatic-compaction runs. A custom 60-second workload through the same
+adapter also passed with zero retention (3,892 baseline writes; 3,781 automatic
+writes), but automatic compaction completed only one batch and then remained at
+`compactRev=2 targetCompactRev=2`. These runs did not exercise sustained compaction.
+
+With 1,000 retained revisions and a 100 ms automatic interval, the same custom
+workload reproduced the fatal commit failure on a disposable **single-node**
+CockroachDB 26.2.7. Four concurrent writers updated 64 keys each. Four compaction
+batches committed before `Transaction commit failed` with `RETRY_SERIALIZABLE`
+and `SQLSTATE 40001`; the test process exited 1. An independent repeat failed on the same error before
+its first successful batch. The baseline had compaction
+disabled and passed. This is a custom workload using upstream's test adapter,
+not a failure of the unmodified compatibility suite. See the
+[reproduction instructions](reproducers/kine-autocompaction/README.md).
+
+The same isolated reproducer was subsequently verified on Kine v0.17.6
+(`996a20703d390919b7eba7317a814817b7c80629`). Its disabled-compaction baseline
+passed with 5,172 writes; two automatic-compaction runs exited 1 on the same
+fatal SQLSTATE 40001 commit error after 14.02 and 13.37 seconds including setup.
+CockroachDB remained v26.2.7; production Kine code was unchanged.

@@ -10,6 +10,9 @@ ALTER RANGE liveness CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
 ALTER RANGE timeseries CONFIGURE ZONE USING num_replicas = 3, num_voters = 3;
 CREATE DATABASE IF NOT EXISTS kubernetes;
 CREATE USER IF NOT EXISTS kine;
+SET CLUSTER SETTING sql.txn.read_committed_isolation.enabled = true;
+ALTER ROLE kine SET default_transaction_isolation = 'read committed';
+ALTER DATABASE kubernetes SET default_transaction_isolation = 'read committed';
 -- Kine requires sequential revisions. CockroachDB's default unique_rowid()
 -- normalization of BIGSERIAL does not provide these.
 ALTER ROLE kine SET serial_normalization = 'sql_sequence';
