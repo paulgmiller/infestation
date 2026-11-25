@@ -23,12 +23,12 @@ import (
 )
 
 func TestUpgradeTransitionRejectsDowngradesAndSkippedMinors(t *testing.T) {
-	for _, version := range []string{"v1.35.8+k3s1", K3sVersion} {
+	for _, version := range []string{"v1.36.5+k3s1", K3sVersion} {
 		if err := upgradeTransition(version); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, version := range []string{"v1.34.12+k3s1", "v1.37.1+k3s1", "v1.36.6+k3s1", "v1.35.bad+k3s1", "v1.35.8+k3s1; reboot"} {
+	for _, version := range []string{"v1.35.8+k3s1", "v1.38.0+k3s1", "v1.37.2+k3s1", "v1.36.bad+k3s1", "v1.36.5+k3s1; reboot"} {
 		if err := upgradeTransition(version); err == nil {
 			t.Fatalf("unsafe transition accepted: %s", version)
 		}
@@ -81,7 +81,7 @@ func upgradeFixture(t *testing.T) (Options, string, []byte) {
 	if err := fsutil.WriteFile(upgradeProfilePath(dir, "pool-0"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	c.K3sExtensionVersion = "v1.35.8+k3s1"
+	c.K3sExtensionVersion = "v1.36.5+k3s1"
 	other, err := ignition.Render(c, c.Nodes[1], "", "", ignition.Bootstrap{HelperSourceCommit: strings.Repeat("a", 40), TailscaleAuthKey: "tskey-auth-TEST"})
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +263,7 @@ func TestUpgradeGroupPinsWaitForEveryInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.K3sExtensionVersion = "v1.35.8+k3s1"
+	config.K3sExtensionVersion = "v1.36.5+k3s1"
 	if err := fsutil.WriteJSON(inventoryPath(dir), config); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestUpgradeGroupPinsWaitForEveryInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, config, err = loadCluster(o)
-	if err != nil || config.K3sExtensionVersion != "v1.35.8+k3s1" {
+	if err != nil || config.K3sExtensionVersion != "v1.36.5+k3s1" {
 		t.Fatal("partial rollout changed group pins", err)
 	}
 	cfg, err := profileNode(current)
@@ -406,7 +406,7 @@ func TestKubernetesDrainReportsGuestErrorWithoutSSHDiagnostics(t *testing.T) {
 
 func TestKubernetesDrainShellPreservesCommandFailure(t *testing.T) {
 	stub := filepath.Join(t.TempDir(), "mock-k3s")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf 'pod/example eviction failed\\n'\nprintf 'error: disruption budget blocked eviction\\n' >&2\nexit 7\n"), 0755); err != nil {
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\ncase \" $* \" in *\" --delete-emptydir-data \"*) ;; *) exit 98;; esac\nprintf 'pod/example eviction failed\\n'\nprintf 'error: disruption budget blocked eviction\\n' >&2\nexit 7\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	script := strings.ReplaceAll(kubernetesDrainScript("mock"), "/usr/local/bin/k3s", shellQuote(stub))

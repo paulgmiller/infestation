@@ -35,12 +35,10 @@ data and every named system range, including the system database. This overrides
 Adaptive increases remain outstanding in [TODO.md](../TODO.md). Bootstrap runs
 once; changing its SQL does not update already initialized clusters.
 
-New profiles currently pin K3s to `v1.36.5+k3s1`, the intermediate target for
-our 1.35 → 1.36 → 1.37 rollout, using the
-[published Flatcar extension](https://github.com/flatcar/sysext-bakery/releases/tag/k3s-v1.36.5%2Bk3s1).
-Changing this default does not upgrade existing machines. Complete the 1.36
-upgrade across existing servers before moving to 1.37, following the
-[K3s upgrade requirements](https://docs.k3s.io/upgrades/manual).
+New profiles currently pin K3s to `v1.37.1+k3s1`, using the
+[published Flatcar extension](https://github.com/flatcar/sysext-bakery/releases/tag/k3s-v1.37.1%2Bk3s1).
+Complete the 1.36 upgrade across existing servers before moving to 1.37,
+following the [K3s upgrade requirements](https://docs.k3s.io/upgrades/manual).
 The [one-instance QEMU upgrade command](upgrading.md) applies this target through
 a retained-state reset. Cluster-wide coordination and other providers remain
 outstanding.

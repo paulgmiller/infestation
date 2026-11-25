@@ -7,6 +7,15 @@ provider boundary and current implementation.
 
 ## Current priorities
 
+- [ ] Replace the upgrade command's `kubectl` subprocess drain with direct
+  Kubernetes API calls through a typed Go client. Cordon only the selected node,
+  evict pods through the eviction API while respecting disruption budgets, and
+  wait for deletion with bounded retries, cancellation and actionable pod-level
+  errors. Preserve the current policies: ignore DaemonSet-managed pods, refuse
+  unmanaged pods, and permit `emptyDir` data deletion. Keep a failed upgrade
+  cordoned until recovery is verified; never log kubeconfig credentials. Test
+  eviction refusal/throttling, timeouts, interrupted drains and safe retries.
+
 - [ ] Fix Kine/CockroachDB compaction reliability: handle serialization failures
   by retrying the complete transaction without exiting K3s. Verify the pinned
   Kine implementation's explicit serializable compaction and fatal commit path;

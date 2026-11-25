@@ -25,7 +25,7 @@ import (
 	"github.com/paulgmiller/infestation/internal/nodebootstrap"
 )
 
-const K3sVersion = "v1.36.5+k3s1"
+const K3sVersion = "v1.37.1+k3s1"
 const CockroachImage = "cockroachdb/cockroach:v26.2.7"
 
 type upgradeRecord struct {
@@ -91,8 +91,8 @@ func upgradeTransition(current string) error {
 	if current == K3sVersion {
 		return nil
 	}
-	if !regexp.MustCompile(`^v1\.35\.[0-9]+\+k3s1$`).MatchString(current) {
-		return fmt.Errorf("this binary upgrades K3s 1.35 to %s only; refusing unsupported transition", K3sVersion)
+	if !regexp.MustCompile(`^v1\.36\.[0-9]+\+k3s1$`).MatchString(current) {
+		return fmt.Errorf("this binary upgrades K3s 1.36 to %s only; refusing unsupported transition", K3sVersion)
 	}
 	return nil
 }
@@ -748,7 +748,7 @@ func updateUpgradeInventory(dir string) error {
 const kubernetesDrainMarker = "__INFESTATION_DRAIN_STATUS__="
 
 func kubernetesDrainScript(name string) string {
-	return "if /usr/local/bin/k3s kubectl drain " + shellQuote(name) + " --ignore-daemonsets --timeout=2m 2>&1; then status=0; else status=$?; fi\nprintf '\\n" + kubernetesDrainMarker + "%s\\n' \"$status\""
+	return "if /usr/local/bin/k3s kubectl drain " + shellQuote(name) + " --ignore-daemonsets --delete-emptydir-data --timeout=2m 2>&1; then status=0; else status=$?; fi\nprintf '\\n" + kubernetesDrainMarker + "%s\\n' \"$status\""
 }
 
 func drainKubernetes(ctx context.Context, host, name string, out io.Writer) error {

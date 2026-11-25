@@ -1,6 +1,6 @@
 {
   "cockroach_image": "cockroachdb/cockroach:v26.2.7",
-  "k3s_extension_version": "v1.36.5+k3s1",
+  "k3s_extension_version": "v1.37.1+k3s1",
   "architecture": "x86-64",
   "nodes": [
     {
